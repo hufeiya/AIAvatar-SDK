@@ -1,6 +1,7 @@
 material {
-    name : VrmLit,
+    name : VrmMToon,
     shadingModel : lit,
+    customSurfaceShading : true,
     blending : masked,
     maskThreshold : 0.5,
     doubleSided : true,
@@ -9,6 +10,9 @@ material {
         { type : float4, name : shadeColor },
         { type : float,  name : shadingToony },
         { type : float,  name : shadingShift },
+        { type : float3, name : rimColor },
+        { type : float,  name : rimPower },
+        { type : float,  name : rimLift },
         { type : sampler2d, name : mainTexture },
         { type : bool, name : flipV }
     ],
@@ -18,23 +22,79 @@ material {
 }
 
 fragment {
-    void material(inout MaterialInputs material) {
-        prepareMaterial(material);
-        
-        // Get UV with flip
+    // Helper to get flipped UV
+    vec2 getFlippedUV() {
         vec2 uv = getUV0();
         if (materialParams.flipV) {
             uv.y = 1.0 - uv.y;
         }
+        return uv;
+    }
+    
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
         
-        // Sample texture
+        // Sample main texture with flipped UV
+        vec2 uv = getFlippedUV();
         vec4 texColor = texture(materialParams_mainTexture, uv);
         
         // Apply base color and texture
         material.baseColor = texColor * materialParams.baseColor;
         
-        // Set material properties for better toon-like appearance
-        material.roughness = 1.0;  // No specular highlights
-        material.metallic = 0.0;   // Non-metallic for flat look
+        // Important: Set roughness high to avoid specular highlights
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+
+    // MToon custom surface shading - this is where the toon effect happens
+    vec3 surfaceShading(
+        const MaterialInputs materialInputs,
+        const ShadingData shadingData,
+        const LightData lightData
+    ) {
+        // Get the diffuse color (texture * baseColor)
+        vec3 litColor = shadingData.diffuseColor;
+        
+        // Calculate shade color (darker version for shadow areas)
+        vec3 shadeColor = litColor * materialParams.shadeColor.rgb;
+        
+        // MToon shading calculation
+        // NdotL determines if the surface faces the light
+        float NdotL = lightData.NdotL;
+        
+        // Apply shading shift (moves the boundary between lit and shade)
+        float shading = NdotL + materialParams.shadingShift;
+        
+        // Toon shading step function with toony control
+        // Higher toony = sharper edge, lower = softer gradient
+        float toonyFactor = materialParams.shadingToony;
+        float shadeValue = smoothstep(0.0, 1.0 - toonyFactor + 0.001, shading);
+        
+        // Mix between shade and lit color based on shading
+        vec3 finalColor = mix(shadeColor, litColor, shadeValue);
+        
+        // Rim lighting (fresnel-based edge glow)
+        vec3 viewDir = getWorldViewVector();
+        vec3 normal = getWorldNormalVector();
+        float NdotV = saturate(dot(viewDir, normal));
+        
+        // Rim is stronger at edges (where NdotV is low)
+        float rim = 1.0 - NdotV;
+        rim = pow(rim, materialParams.rimPower);
+        rim = smoothstep(materialParams.rimLift, 1.0, rim);
+        
+        // Add rim color
+        finalColor += materialParams.rimColor * rim * 0.5;
+        
+        // Apply light color and visibility
+        // Note: We don't multiply by full intensity to keep the toon look
+        vec3 lightColor = lightData.colorIntensity.rgb;
+        float lightIntensity = lightData.colorIntensity.w;
+        float visibility = lightData.visibility * lightData.attenuation;
+        
+        // Normalize the light contribution to avoid over-bright
+        float normalizedIntensity = min(lightIntensity / 100000.0, 1.0);
+        
+        return finalColor * lightColor * normalizedIntensity * max(visibility, 0.3);
     }
 }

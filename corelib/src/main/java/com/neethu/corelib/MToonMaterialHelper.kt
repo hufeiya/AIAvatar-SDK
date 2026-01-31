@@ -258,13 +258,17 @@ class MToonMaterialHelper(
                     newInstance.setParameter("mainTexture", tex, sampler)
                 }
                 
-                // Additional parameters for lit material (shadeColor, shadingToony, shadingShift)
+                // Additional parameters for lit material (full MToon-style shader)
                 if (useLit) {
                     // Shade color for toon-like effect (slightly darker than base)
                     newInstance.setParameter("shadeColor", 
                         baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
                     newInstance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
                     newInstance.setParameter("shadingShift", DEFAULT_SHADE_SHIFT)
+                    // Rim lighting for edge highlight
+                    newInstance.setParameter("rimColor", DEFAULT_RIM_COLOR[0], DEFAULT_RIM_COLOR[1], DEFAULT_RIM_COLOR[2])
+                    newInstance.setParameter("rimPower", DEFAULT_RIM_POWER)
+                    newInstance.setParameter("rimLift", DEFAULT_RIM_LIFT)
                 }
                 
                 // Additional parameters for full MToon materials
