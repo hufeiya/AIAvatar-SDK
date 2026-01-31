@@ -1,0 +1,30 @@
+material {
+    name : ToonPostProcess,
+    parameters : [
+        { type : sampler2d, name : colorBuffer },
+        { type : float, name : edgeThreshold, default : 0.3 },
+        { type : float, name : colorSteps, default : 4.0 }
+    ],
+    domain : postProcess,
+    require: [
+        viewSpacePosition
+    ],
+    outputs : [
+        { name : color, target : color, type : float4 }
+    ]
+}
+
+fragment {
+    void postProcess(inout PostProcessInputs postProcess) {
+        // Sample the original color
+        vec2 uv = variable_vertex.xy;
+        vec4 color = textureLod(materialParams_colorBuffer, uv, 0.0);
+        
+        // Quantize colors for cel-shading look
+        float steps = materialParams.colorSteps;
+        color.rgb = floor(color.rgb * steps + 0.5) / steps;
+        
+        // Output final color
+        postProcess.color = color;
+    }
+}

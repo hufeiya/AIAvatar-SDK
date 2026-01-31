@@ -25,19 +25,21 @@ class MToonMaterialHelper(
     companion object {
         private const val TAG = "MToonMaterialHelper"
         
-        // Default MToon parameters matching common VRM settings
+        // Default MToon parameters - tuned for visible toon shading
         private val DEFAULT_BASE_COLOR = floatArrayOf(1.0f, 1.0f, 1.0f, 1.0f)
-        private val DEFAULT_SHADE_COLOR = floatArrayOf(0.7f, 0.7f, 0.8f, 1.0f)
-        private const val DEFAULT_SHADE_TOONY = 0.9f
-        private const val DEFAULT_SHADE_SHIFT = 0.0f
-        private val DEFAULT_RIM_COLOR = floatArrayOf(1.0f, 1.0f, 1.0f)
-        private const val DEFAULT_RIM_POWER = 5.0f
-        private const val DEFAULT_RIM_LIFT = 0.3f
+        private val DEFAULT_SHADE_COLOR = floatArrayOf(0.5f, 0.5f, 0.6f, 1.0f)  // Darker shade
+        private const val DEFAULT_SHADE_TOONY = 0.5f   // Lower = more gradual transition, Higher = sharper
+        private const val DEFAULT_SHADE_SHIFT = -0.1f  // Negative = more shadowed areas
+        private val DEFAULT_RIM_COLOR = floatArrayOf(0.8f, 0.8f, 1.0f)  // Subtle rim
+        private const val DEFAULT_RIM_POWER = 3.0f     // Lower = wider rim
+        private const val DEFAULT_RIM_LIFT = 0.2f
     }
     
     private var mtoonMaterial: Material? = null
     private var simpleToonMaterial: Material? = null
     private var dummyTexture: Texture? = null
+    private var unlitMaterial: Material? = null
+    private var litMaterial: Material? = null  // Simple lit material for VRM
     private val materialInstances = mutableListOf<MaterialInstance>()
     
     /**
@@ -46,7 +48,19 @@ class MToonMaterialHelper(
      */
     fun loadMaterial(): Boolean {
         return try {
-            // Try to load full MToon material first
+            // Load simple lit material (preferred - has lighting but simpler than MToon)
+            loadMaterialFromAsset("materials/vrm_lit.filamat")?.let {
+                litMaterial = it
+                Log.i(TAG, "Loaded VRM lit material")
+            }
+            
+            // Load unlit material as fallback
+            loadMaterialFromAsset("materials/vrm_unlit.filamat")?.let {
+                unlitMaterial = it
+                Log.i(TAG, "Loaded VRM unlit material")
+            }
+            
+            // Try to load full MToon material
             loadMaterialFromAsset("materials/mtoon.filamat")?.let {
                 mtoonMaterial = it
                 Log.i(TAG, "Loaded full MToon material")
@@ -61,7 +75,7 @@ class MToonMaterialHelper(
             // Create a dummy white texture for materials without textures
             createDummyTexture()
             
-            mtoonMaterial != null || simpleToonMaterial != null
+            unlitMaterial != null || mtoonMaterial != null || simpleToonMaterial != null
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load MToon material", e)
             false
@@ -152,57 +166,118 @@ class MToonMaterialHelper(
         
         return instance
     }
-    
     /**
      * Apply MToon material to all renderables in a FilamentAsset
-     * This preserves original textures while applying toon shading
+     * Uses dummy textures - for use when original textures cannot be extracted
      */
     fun applyToAsset(asset: FilamentAsset) {
-        val material = mtoonMaterial ?: simpleToonMaterial ?: run {
-            Log.w(TAG, "No MToon material available, skipping")
+        applyToAssetWithTextures(asset, emptyList(), emptyList(), emptyList())
+    }
+    
+    /**
+     * Apply MToon material to a FilamentAsset with parsed VRM textures
+     * @param asset The FilamentAsset to apply materials to
+     * @param parsedTextures List of Filament Textures extracted from the GLB (indexed by image index)
+     * @param materialInfos Material info list with resolved image indices from VRM (one per glTF material)
+     * @param primitiveInfos Mapping of primitive order to material index
+     */
+    fun applyToAssetWithTextures(
+        asset: FilamentAsset,
+        parsedTextures: List<Texture>,
+        materialInfos: List<VrmGlbParser.MaterialInfo>,
+        primitiveInfos: List<VrmGlbParser.PrimitiveInfo>
+    ) {
+        // Use lit material (preferred - has proper lighting)
+        // Falls back to unlit, then MToon, then simple toon
+        val material = litMaterial ?: unlitMaterial ?: mtoonMaterial ?: simpleToonMaterial ?: run {
+            Log.w(TAG, "No material available, skipping")
             return
         }
-        val isFullMToon = mtoonMaterial != null
+        val useLit = litMaterial != null
+        val useUnlit = !useLit && unlitMaterial != null
+        val isFullMToon = !useLit && !useUnlit && mtoonMaterial != null
+        
+        Log.i(TAG, "Using ${if (useLit) "LIT" else if (useUnlit) "UNLIT" else if (isFullMToon) "MTOON" else "SIMPLE_TOON"} material")
         
         val renderableManager = engine.renderableManager
+        
+        // Use LINEAR filter without mipmaps since we don't have them
+        val sampler = TextureSampler(
+            TextureSampler.MinFilter.LINEAR,
+            TextureSampler.MagFilter.LINEAR,
+            TextureSampler.WrapMode.REPEAT
+        )
+        
         var appliedCount = 0
         
+        // Build a map from material name to MaterialInfo for lookup
+        val materialInfoByName = materialInfos.associateBy { it.name }
+        Log.d(TAG, "Material name map: ${materialInfoByName.keys}")
+        
+        // Apply to each renderable entity
         for (entity in asset.entities) {
             val ri = renderableManager.getInstance(entity)
             if (ri == 0) continue
             
             val primitiveCount = renderableManager.getPrimitiveCount(ri)
             for (primitiveIndex in 0 until primitiveCount) {
-                // Get original material instance to extract texture
+                // Get the ORIGINAL material instance to read its name
                 val originalMi = renderableManager.getMaterialInstanceAt(ri, primitiveIndex)
+                val originalMaterialName = originalMi.name
                 
                 // Create new MToon instance
                 val newInstance = material.createInstance()
                 materialInstances.add(newInstance)
                 
-                // Set default parameters
-                newInstance.setParameter("baseColor", 1f, 1f, 1f, 1f)
-                newInstance.setParameter("shadeColor", 0.75f, 0.75f, 0.8f, 1f)
+                // Default parameters
+                var baseColor = floatArrayOf(1f, 1f, 1f, 1f)
+                var texture: Texture? = dummyTexture
                 
+                // Look up material by NAME matching
+                val matInfo = materialInfoByName[originalMaterialName]
+                if (matInfo != null) {
+                    matInfo.baseColorFactor?.let { baseColor = it }
+                    
+                    val imageIndex = matInfo.baseColorTextureIndex
+                    if (imageIndex != null && imageIndex < parsedTextures.size) {
+                        texture = parsedTextures[imageIndex]
+                        Log.d(TAG, "Matched '$originalMaterialName' -> texture $imageIndex")
+                    }
+                } else {
+                    Log.w(TAG, "No match for material: '$originalMaterialName'")
+                }
+                
+                // Set parameters based on material type
+                newInstance.setParameter("baseColor", baseColor[0], baseColor[1], baseColor[2], baseColor[3])
+                
+                // Flip V coordinate for proper UV handling (all materials support this)
+                newInstance.setParameter("flipV", true)
+                
+                // Set texture
+                texture?.let { tex ->
+                    newInstance.setParameter("mainTexture", tex, sampler)
+                }
+                
+                // Additional parameters for lit material (shadeColor, shadingToony, shadingShift)
+                if (useLit) {
+                    // Shade color for toon-like effect (slightly darker than base)
+                    newInstance.setParameter("shadeColor", 
+                        baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
+                    newInstance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
+                    newInstance.setParameter("shadingShift", DEFAULT_SHADE_SHIFT)
+                }
+                
+                // Additional parameters for full MToon materials
                 if (isFullMToon) {
+                    newInstance.setParameter("shadeColor", 
+                        baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
                     newInstance.setParameter("shadeToony", DEFAULT_SHADE_TOONY)
                     newInstance.setParameter("shadeShift", DEFAULT_SHADE_SHIFT)
                     newInstance.setParameter("rimColor", DEFAULT_RIM_COLOR[0], DEFAULT_RIM_COLOR[1], DEFAULT_RIM_COLOR[2])
                     newInstance.setParameter("rimPower", DEFAULT_RIM_POWER)
                     newInstance.setParameter("rimLift", DEFAULT_RIM_LIFT)
-                }
-                
-                // Try to copy texture from original material
-                val sampler = TextureSampler(
-                    TextureSampler.MinFilter.LINEAR_MIPMAP_LINEAR,
-                    TextureSampler.MagFilter.LINEAR,
-                    TextureSampler.WrapMode.REPEAT
-                )
-                
-                // Set dummy texture as fallback (shader will handle white texture case)
-                dummyTexture?.let { tex ->
-                    newInstance.setParameter("mainTexture", tex, sampler)
-                    if (isFullMToon) {
+                    
+                    texture?.let { tex ->
                         newInstance.setParameter("shadeTexture", tex, sampler)
                     }
                 }
@@ -213,7 +288,7 @@ class MToonMaterialHelper(
             }
         }
         
-        Log.i(TAG, "Applied MToon material to $appliedCount primitives")
+        Log.i(TAG, "Applied material to $appliedCount primitives with ${parsedTextures.size} textures")
     }
     
     /**

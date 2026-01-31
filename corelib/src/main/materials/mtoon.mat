@@ -13,7 +13,8 @@ material {
         { type : float,  name : rimPower },
         { type : float,  name : rimLift },
         { type : sampler2d, name : mainTexture },
-        { type : sampler2d, name : shadeTexture }
+        { type : sampler2d, name : shadeTexture },
+        { type : bool, name : flipV }
     ],
     requires : [
         uv0
@@ -21,12 +22,24 @@ material {
 }
 
 fragment {
+    // Helper to get flipped UV
+    vec2 getFlippedUV() {
+        vec2 uv = getUV0();
+        if (materialParams.flipV) {
+            uv.y = 1.0 - uv.y;
+        }
+        return uv;
+    }
+    
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         
-        // Sample main texture and apply base color tint
-        vec4 texColor = texture(materialParams_mainTexture, getUV0());
-        material.baseColor = texColor * materialParams.baseColor;
+        // Sample main texture with flipped UV
+        vec2 uv = getFlippedUV();
+        vec4 texColor = texture(materialParams_mainTexture, uv);
+        
+        // Apply base color tint but don't multiply texture - use texture color directly
+        material.baseColor = texColor;
         material.baseColor.a = 1.0; // Force opaque
     }
 
@@ -35,44 +48,36 @@ fragment {
         const ShadingData shadingData,
         const LightData lightData
     ) {
-        // Use the diffuse color from material (includes texture * baseColor)
+        // Get the texture color directly (already in linear space from baseColor)
         vec3 litColor = shadingData.diffuseColor;
         
-        // MToon-style toon shading calculation
-        float shadeGrade = lightData.NdotL;
+        // Very simple toon shading - just slightly darken shadows
+        float NdotL = max(lightData.NdotL, 0.0);
         
-        // Toon shading step function
+        // Toon shading step
         float halfWidth = materialParams.shadeToony * 0.5 + 0.001;
         float shadeValue = smoothstep(
             materialParams.shadeShift - halfWidth,
             materialParams.shadeShift + halfWidth,
-            shadeGrade
+            NdotL
         );
         
-        // Sample shade texture and multiply with shade color
-        vec4 shadeTex = texture(materialParams_shadeTexture, getUV0());
-        vec3 shadeColorFinal = shadeTex.rgb * materialParams.shadeColor.rgb;
+        // Simple shade - mix between slightly darker and original
+        vec3 shadeColor = litColor * materialParams.shadeColor.rgb;
+        vec3 finalColor = mix(shadeColor, litColor, shadeValue);
         
-        // If shade texture is white (dummy), use darkened lit color instead
-        if (shadeTex.r > 0.99 && shadeTex.g > 0.99 && shadeTex.b > 0.99) {
-            shadeColorFinal = litColor * materialParams.shadeColor.rgb;
-        }
-        
-        // Interpolate between shade and lit color
-        vec3 finalColor = mix(shadeColorFinal, litColor, shadeValue);
-        
-        // Rim lighting (edge highlight)
+        // Subtle rim lighting
         vec3 viewDir = getWorldViewVector();
         vec3 normal = getWorldNormalVector();
         float rim = 1.0 - saturate(dot(viewDir, normal));
         rim = pow(rim, materialParams.rimPower);
         rim = smoothstep(materialParams.rimLift, 1.0, rim);
-        finalColor += materialParams.rimColor * rim * 0.3; // Reduce rim intensity
+        finalColor += materialParams.rimColor * rim * 0.1;
         
-        // Apply light color and intensity
-        vec3 light = lightData.colorIntensity.rgb * lightData.colorIntensity.w;
-        float lightAtten = max(lightData.visibility * lightData.attenuation, 0.2); // Min 20% ambient
+        // IMPORTANT: Don't multiply by light intensity to avoid overbright
+        // Just use a subtle light influence
+        float lightInfluence = 0.3 + 0.7 * shadeValue;
         
-        return finalColor * light * lightAtten;
+        return finalColor * lightInfluence;
     }
 }

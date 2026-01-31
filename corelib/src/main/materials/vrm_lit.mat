@@ -1,11 +1,14 @@
 material {
-    name : VrmUnlit,
-    shadingModel : unlit,
+    name : VrmLit,
+    shadingModel : lit,
     blending : masked,
     maskThreshold : 0.5,
     doubleSided : true,
     parameters : [
         { type : float4, name : baseColor },
+        { type : float4, name : shadeColor },
+        { type : float,  name : shadingToony },
+        { type : float,  name : shadingShift },
         { type : sampler2d, name : mainTexture },
         { type : bool, name : flipV }
     ],
@@ -18,19 +21,20 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         
-        // Get UV coordinates
+        // Get UV with flip
         vec2 uv = getUV0();
-        
-        // Flip V coordinate if needed (common issue with glTF textures)
         if (materialParams.flipV) {
             uv.y = 1.0 - uv.y;
         }
         
-        // Sample texture and multiply by baseColor
+        // Sample texture
         vec4 texColor = texture(materialParams_mainTexture, uv);
+        
+        // Apply base color and texture
         material.baseColor = texColor * materialParams.baseColor;
         
-        // Keep original alpha for masking (don't force to 1.0)
-        // Alpha below maskThreshold will be discarded
+        // Set material properties for better toon-like appearance
+        material.roughness = 1.0;  // No specular highlights
+        material.metallic = 0.0;   // Non-metallic for flat look
     }
 }

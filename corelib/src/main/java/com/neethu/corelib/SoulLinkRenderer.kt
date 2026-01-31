@@ -93,11 +93,11 @@ class SoulLinkRenderer(
             .build(engine)
         modelViewer.scene.skybox = skybox
         
-        // 2. Add directional sunlight - REQUIRED for toon shading to work
+        // 2. Add directional sunlight - soft lighting for VRM characters
         val sunEntity = entityManager.create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .color(1.0f, 0.98f, 0.95f)  // Warm white
-            .intensity(100_000f)         // Bright sunlight
+            .intensity(90_000f)          // Balanced main light
             .direction(-0.5f, -1.0f, -0.5f)  // From upper-front-left
             .castShadows(true)
             .build(engine, sunEntity)
@@ -107,7 +107,7 @@ class SoulLinkRenderer(
         val fillEntity = entityManager.create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .color(0.8f, 0.85f, 1.0f)   // Cool white (slight blue)
-            .intensity(30_000f)          // Softer than main light
+            .intensity(30_000f)          // Softer fill light
             .direction(0.5f, -0.5f, 0.5f)  // From lower-back-right
             .castShadows(false)
             .build(engine, fillEntity)
@@ -120,25 +120,61 @@ class SoulLinkRenderer(
             assets.open(assetsPath).use { input ->
                 val bytes = input.readBytes()
                 val buffer = ByteBuffer.wrap(bytes)
+                
+                // Parse VRM/GLB first to extract textures (before loadModelGlb consumes buffer)
+                var parsedVrm: VrmGlbParser.ParsedVrm? = null
+                var materialInfos: List<VrmGlbParser.MaterialInfo> = emptyList()
+                var primitiveInfos: List<VrmGlbParser.PrimitiveInfo> = emptyList()
+                
+                if (useMToonMaterial) {
+                    try {
+                        val parser = VrmGlbParser(modelViewer.engine)
+                        val parseBuffer = ByteBuffer.wrap(bytes) // Fresh buffer for parsing
+                        parsedVrm = parser.parse(parseBuffer)
+                        parsedVrm?.let { vrm ->
+                            materialInfos = parser.getMaterialInfos(vrm.json)
+                            primitiveInfos = parser.getPrimitiveMaterialMapping(vrm.json)
+                            android.util.Log.i("SoulLinkRenderer", 
+                                "Parsed VRM: ${vrm.textures.size} textures, ${materialInfos.size} materials, ${primitiveInfos.size} primitives")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("SoulLinkRenderer", "VRM parsing failed, using default", e)
+                    }
+                }
+                
+                // Load model into Filament
+                buffer.rewind()
                 modelViewer.loadModelGlb(buffer)
                 modelViewer.transformToUnitCube()
+                
                 // 【新增】获取动画控制器
                 // 注意：每次加载新模型，animator 都会变，需要重新获取
                 animator = modelViewer.animator
 
-                // 【新增】如果有动画，默认开始播放第 0 个 (通常就是你从 Mixamo 下载的那个)
+                // 【新增】如果有动画，默认开始播放第 0 个
                 if (animator?.animationCount ?: 0 > 0) {
-                    // playAnimation(index) 方法等会儿在下面定义
-                    // 这里仅仅是重置动画时间，真正的播放靠 doFrame
                     startTime = System.nanoTime()
                 }
                 
-                // 应用 MToon 材质以支持 VRM 卡通渲染
-                if (useMToonMaterial) {
+                // 应用自定义 MToon 材质
+                // testFilamentDefault = true 时使用 Filament 默认渲染（用于测试）
+                val testFilamentDefault = false  // 设为 true 测试 Filament 默认渲染
+                
+                if (useMToonMaterial && !testFilamentDefault) {
                     modelViewer.asset?.let { asset ->
-                        mtoonHelper?.applyToAsset(asset)
-                        android.util.Log.i("SoulLinkRenderer", "Applied MToon material to VRM model")
+                        if (parsedVrm != null && parsedVrm.textures.isNotEmpty()) {
+                            // Use extracted textures with proper primitive mapping
+                            mtoonHelper?.applyToAssetWithTextures(asset, parsedVrm.textures, materialInfos, primitiveInfos)
+                            android.util.Log.i("SoulLinkRenderer", 
+                                "Applied MToon with ${parsedVrm.textures.size} textures, ${primitiveInfos.size} primitive mappings")
+                        } else {
+                            // Fallback to dummy textures
+                            mtoonHelper?.applyToAsset(asset)
+                            android.util.Log.i("SoulLinkRenderer", "Applied MToon with default textures")
+                        }
                     }
+                } else {
+                    android.util.Log.i("SoulLinkRenderer", "Using Filament default PBR rendering (test mode)")
                 }
             }
         } catch (e: Exception) {
@@ -158,7 +194,7 @@ class SoulLinkRenderer(
                 val iblBundle = KTX1Loader.createIndirectLight(engine, buffer)
                 val ibl = iblBundle.indirectLight
                 if (ibl != null) {
-                    ibl.intensity = 30000f
+                    ibl.intensity = 5000f  // Reduced from 30000f to fix overbright
                     modelViewer.scene.indirectLight = ibl
                 }
             }

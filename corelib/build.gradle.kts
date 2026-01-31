@@ -67,6 +67,9 @@ dependencies {
     implementation("com.google.android.filament:filament-android:1.68.3")
     implementation("com.google.android.filament:gltfio-android:1.68.3")
     implementation("com.google.android.filament:filament-utils-android:1.68.3")
+    
+    // JSON parsing for VRM/glTF
+    implementation("com.google.code.gson:gson:2.10.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
