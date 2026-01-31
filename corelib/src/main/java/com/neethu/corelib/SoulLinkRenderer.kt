@@ -24,6 +24,10 @@ class SoulLinkRenderer(
     private var animator: com.google.android.filament.gltfio.Animator? = null
     // 在 SoulLinkRenderer 类中添加变量用于计算时间
     private var startTime = System.nanoTime()
+    
+    // MToon material helper for VRM toon shading
+    private var mtoonHelper: MToonMaterialHelper? = null
+    private var useMToonMaterial: Boolean = true
 
     companion object {
         init {
@@ -57,10 +61,25 @@ class SoulLinkRenderer(
 
     init {
         setupLighting()
+        setupMToonMaterial()
         // allow users to rotate the model
         surfaceView.setOnTouchListener { _, event ->
             modelViewer.onTouchEvent(event)
             true
+        }
+    }
+    
+    private fun setupMToonMaterial() {
+        mtoonHelper = MToonMaterialHelper(modelViewer.engine, surfaceView.context)
+        try {
+            val loaded = mtoonHelper?.loadMaterial() ?: false
+            if (!loaded) {
+                android.util.Log.w("SoulLinkRenderer", "MToon material not found, using default PBR")
+                useMToonMaterial = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("SoulLinkRenderer", "Failed to load MToon material", e)
+            useMToonMaterial = false
         }
     }
 
@@ -68,12 +87,31 @@ class SoulLinkRenderer(
         val engine = modelViewer.engine
         val entityManager = EntityManager.get()
 
-        // 1. Skybox - Keep it gray to see silhouette
+        // 1. Skybox - Light gray background
         val skybox = Skybox.Builder()
-            .color(0.1f, 0.1f, 0.1f, 1.0f)
+            .color(0.2f, 0.2f, 0.25f, 1.0f)
             .build(engine)
         modelViewer.scene.skybox = skybox
-
+        
+        // 2. Add directional sunlight - REQUIRED for toon shading to work
+        val sunEntity = entityManager.create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .color(1.0f, 0.98f, 0.95f)  // Warm white
+            .intensity(100_000f)         // Bright sunlight
+            .direction(-0.5f, -1.0f, -0.5f)  // From upper-front-left
+            .castShadows(true)
+            .build(engine, sunEntity)
+        modelViewer.scene.addEntity(sunEntity)
+        
+        // 3. Add fill light from opposite direction
+        val fillEntity = entityManager.create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .color(0.8f, 0.85f, 1.0f)   // Cool white (slight blue)
+            .intensity(30_000f)          // Softer than main light
+            .direction(0.5f, -0.5f, 0.5f)  // From lower-back-right
+            .castShadows(false)
+            .build(engine, fillEntity)
+        modelViewer.scene.addEntity(fillEntity)
     }
 
     fun loadModel(assetsPath: String) {
@@ -93,6 +131,14 @@ class SoulLinkRenderer(
                     // playAnimation(index) 方法等会儿在下面定义
                     // 这里仅仅是重置动画时间，真正的播放靠 doFrame
                     startTime = System.nanoTime()
+                }
+                
+                // 应用 MToon 材质以支持 VRM 卡通渲染
+                if (useMToonMaterial) {
+                    modelViewer.asset?.let { asset ->
+                        mtoonHelper?.applyToAsset(asset)
+                        android.util.Log.i("SoulLinkRenderer", "Applied MToon material to VRM model")
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -157,6 +203,21 @@ class SoulLinkRenderer(
     
     override fun onDestroy(owner: LifecycleOwner) {
         stopRendering()
+        mtoonHelper?.destroy()
+        mtoonHelper = null
         // modelViewer.destroy() // Unresolved in this version
     }
+    
+    /**
+     * Enable or disable MToon material for VRM models.
+     * When disabled, default PBR rendering will be used.
+     */
+    fun setUseMToonMaterial(enabled: Boolean) {
+        useMToonMaterial = enabled
+    }
+    
+    /**
+     * Check if MToon material is currently available and enabled
+     */
+    fun isMToonMaterialEnabled(): Boolean = useMToonMaterial && (mtoonHelper?.isAvailable() ?: false)
 }

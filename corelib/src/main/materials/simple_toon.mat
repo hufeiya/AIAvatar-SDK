@@ -1,0 +1,55 @@
+material {
+    name : SimpleToon,
+    shadingModel : lit,
+    customSurfaceShading : true,
+    blending : opaque,
+    doubleSided : true,
+    parameters : [
+        { type : float4, name : baseColor },
+        { type : float4, name : shadeColor },
+        { type : sampler2d, name : mainTexture }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        
+        vec4 texColor = texture(materialParams_mainTexture, getUV0());
+        material.baseColor = texColor * materialParams.baseColor;
+        material.baseColor.a = 1.0; // Force opaque
+    }
+
+    vec3 surfaceShading(
+        const MaterialInputs materialInputs,
+        const ShadingData shadingData,
+        const LightData lightData
+    ) {
+        // Simple toon shading with 3 levels
+        const float shades = 3.0;
+        
+        // Get lit color from material
+        vec3 litColor = shadingData.diffuseColor;
+        
+        // Calculate toon step value
+        float toon = ceil(lightData.NdotL * shades) / shades;
+        toon = max(toon, 0.3); // Minimum 30% brightness
+        
+        // Apply shadowing and attenuation
+        float atten = max(lightData.visibility * lightData.attenuation, 0.2);
+        toon *= atten;
+        
+        // Light color and intensity
+        vec3 light = lightData.colorIntensity.rgb * lightData.colorIntensity.w;
+        
+        // Mix between shade and lit color based on toon value
+        vec3 shadeColor = litColor * materialParams.shadeColor.rgb;
+        vec3 finalColor = mix(shadeColor, litColor, toon);
+        
+        return finalColor * light;
+    }
+}
+

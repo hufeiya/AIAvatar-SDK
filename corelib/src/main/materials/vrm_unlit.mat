@@ -1,0 +1,24 @@
+material {
+    name : VrmUnlit,
+    shadingModel : unlit,
+    blending : opaque,
+    doubleSided : true,
+    parameters : [
+        { type : float4, name : tintColor },
+        { type : sampler2d, name : baseColorMap }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        
+        // Sample texture and apply tint
+        vec4 texColor = texture(materialParams_baseColorMap, getUV0());
+        material.baseColor = texColor * materialParams.tintColor;
+        material.baseColor.a = 1.0;
+    }
+}
