@@ -16,8 +16,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -46,6 +47,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Which panel is currently shown */
+private enum class PanelType { NONE, MODELS, ANIMATIONS }
+
 @Composable
 private fun DemoScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -64,8 +68,21 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    // List all .vrma files under assets/animations/
+    val animationFiles = remember {
+        try {
+            context.assets.list("animations")
+                ?.filter { it.endsWith(".vrma") }
+                ?.sorted()
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     var selectedModel by remember { mutableStateOf("model.glb") }
-    var showList by remember { mutableStateOf(false) }
+    var selectedAnimation by remember { mutableStateOf<String?>(null) }
+    var activePanel by remember { mutableStateOf(PanelType.NONE) }
 
     // Load the selected model whenever it changes
     LaunchedEffect(selectedModel) {
@@ -80,24 +97,52 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             config = AvatarConfig(iblPath = "default_env.ktx")
         )
 
-        // Toggle FAB
-        SmallFloatingActionButton(
-            onClick = { showList = !showList },
-            shape = CircleShape,
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
+        // Row of FABs at bottom-end
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(16.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.End
         ) {
-            Icon(
-                imageVector = if (showList) Icons.Default.Close else Icons.Default.List,
-                contentDescription = if (showList) "Hide models" else "Show models"
-            )
+            // Animation FAB
+            SmallFloatingActionButton(
+                onClick = {
+                    activePanel = if (activePanel == PanelType.ANIMATIONS) PanelType.NONE else PanelType.ANIMATIONS
+                },
+                shape = CircleShape,
+                containerColor = if (activePanel == PanelType.ANIMATIONS)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (activePanel == PanelType.ANIMATIONS) Icons.Default.Close else Icons.Default.PlayArrow,
+                    contentDescription = if (activePanel == PanelType.ANIMATIONS) "Hide animations" else "Show animations"
+                )
+            }
+
+            // Model FAB
+            SmallFloatingActionButton(
+                onClick = {
+                    activePanel = if (activePanel == PanelType.MODELS) PanelType.NONE else PanelType.MODELS
+                },
+                shape = CircleShape,
+                containerColor = if (activePanel == PanelType.MODELS)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (activePanel == PanelType.MODELS) Icons.Default.Close else Icons.Default.List,
+                    contentDescription = if (activePanel == PanelType.MODELS) "Hide models" else "Show models"
+                )
+            }
         }
 
         // Model selector overlay at the bottom
         AnimatedVisibility(
-            visible = showList,
+            visible = activePanel == PanelType.MODELS,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
             modifier = Modifier
@@ -105,58 +150,102 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                tonalElevation = 4.dp,
-                shadowElevation = 8.dp,
-                modifier = Modifier.fillMaxWidth()
+            ListPanel(
+                title = "Models",
+                items = modelFiles,
+                selectedItem = selectedModel,
+                onItemClick = { fileName ->
+                    selectedModel = fileName
+                    selectedAnimation = null // reset animation on model switch
+                    activePanel = PanelType.NONE
+                }
+            )
+        }
+
+        // Animation selector overlay at the bottom
+        AnimatedVisibility(
+            visible = activePanel == PanelType.ANIMATIONS,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
+        ) {
+            ListPanel(
+                title = "Animations",
+                items = animationFiles,
+                selectedItem = selectedAnimation,
+                displayName = { it.removeSuffix(".vrma") },
+                onItemClick = { fileName ->
+                    selectedAnimation = fileName
+                    controller.loadVrmaAnimation("animations/$fileName")
+                    controller.playVrmaAnimation(loop = true)
+                    activePanel = PanelType.NONE
+                }
+            )
+        }
+    }
+}
+
+/**
+ * Reusable list panel component for models and animations.
+ */
+@Composable
+private fun ListPanel(
+    title: String,
+    items: List<String>,
+    selectedItem: String?,
+    displayName: (String) -> String = { it },
+    onItemClick: (String) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        tonalElevation = 4.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
+            )
+
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 200.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Models",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
+                items(items) { fileName ->
+                    val isSelected = fileName == selectedItem
+                    val bgColor by animateColorAsState(
+                        targetValue = if (isSelected)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surface,
+                        label = "itemBg"
                     )
 
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 200.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(bgColor)
+                            .clickable { onItemClick(fileName) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        items(modelFiles) { fileName ->
-                            val isSelected = fileName == selectedModel
-                            val bgColor by animateColorAsState(
-                                targetValue = if (isSelected)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else
-                                    MaterialTheme.colorScheme.surface,
-                                label = "itemBg"
-                            )
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(bgColor)
-                                    .clickable {
-                                        selectedModel = fileName
-                                        showList = false
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = fileName,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (isSelected)
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    else
-                                        MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
+                        Text(
+                            text = displayName(fileName),
+                            fontSize = 14.sp,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSelected)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }

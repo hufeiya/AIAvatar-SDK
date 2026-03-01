@@ -37,9 +37,15 @@ internal class SoulLinkRenderer(
     private var mtoonHelper: MToonMaterialHelper? = null
     private var useMToonMaterial: Boolean = config.enableMToon
 
-    // Animation state
+    // Built-in animation state
     private var currentAnimationIndex: Int = -1
     private var isAnimationLooping: Boolean = true
+
+    // VRMA animation support
+    private var vrmaParser: VrmaParser = VrmaParser()
+    private var vrmaEngine: VrmaAnimationEngine? = null
+    private var vrmaStartTime: Long = 0L
+    private var currentModelGlbBytes: ByteArray? = null
 
     companion object {
         init {
@@ -49,19 +55,27 @@ internal class SoulLinkRenderer(
 
     private val choreoCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            animator?.let { anim ->
-                if (currentAnimationIndex >= 0 && currentAnimationIndex < anim.animationCount) {
-                    val elapsedTimeSeconds = (frameTimeNanos - startTime).toDouble() / 1_000_000_000.0
-                    val animDuration = anim.getAnimationDuration(currentAnimationIndex)
+            // VRMA animation takes priority over built-in animations
+            val vrma = vrmaEngine
+            if (vrma != null && vrma.isActive()) {
+                val elapsed = (frameTimeNanos - vrmaStartTime).toDouble() / 1_000_000_000.0
+                vrma.update(elapsed.toFloat())
+                animator?.updateBoneMatrices()
+            } else {
+                animator?.let { anim ->
+                    if (currentAnimationIndex >= 0 && currentAnimationIndex < anim.animationCount) {
+                        val elapsedTimeSeconds = (frameTimeNanos - startTime).toDouble() / 1_000_000_000.0
+                        val animDuration = anim.getAnimationDuration(currentAnimationIndex)
 
-                    val time = if (isAnimationLooping) {
-                        (elapsedTimeSeconds % animDuration).toFloat()
-                    } else {
-                        elapsedTimeSeconds.toFloat().coerceAtMost(animDuration)
+                        val time = if (isAnimationLooping) {
+                            (elapsedTimeSeconds % animDuration).toFloat()
+                        } else {
+                            elapsedTimeSeconds.toFloat().coerceAtMost(animDuration)
+                        }
+
+                        anim.applyAnimation(currentAnimationIndex, time)
+                        anim.updateBoneMatrices()
                     }
-
-                    anim.applyAnimation(currentAnimationIndex, time)
-                    anim.updateBoneMatrices()
                 }
             }
 
@@ -141,6 +155,9 @@ internal class SoulLinkRenderer(
             val bytes = input.readBytes()
             val buffer = ByteBuffer.wrap(bytes)
 
+            // Store raw bytes for VRMA bone mapping later
+            currentModelGlbBytes = bytes
+
             // Parse VRM/GLB to extract textures for MToon
             var parsedVrm: VrmGlbParser.ParsedVrm? = null
             var materialInfos: List<VrmGlbParser.MaterialInfo> = emptyList()
@@ -176,6 +193,45 @@ internal class SoulLinkRenderer(
             // Default: play first animation if available
             if ((animator?.animationCount ?: 0) > 0) {
                 playAnimation(0, loop = true)
+            }
+
+            // Initialize VRMA engine and bind to model
+            vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
+            modelViewer.asset?.let { asset ->
+                vrmaEngine?.bindToModel(asset, bytes)
+
+                // VRM 0.x models face the opposite direction from VRM 1.0.
+                // Apply a 180° Y rotation to the root so the character faces the camera.
+                if (vrmaEngine?.getVrmMetaVersion() == "0") {
+                    val rootEntity = asset.root
+                    val tm = modelViewer.engine.transformManager
+                    val rootInstance = tm.getInstance(rootEntity)
+                    if (rootInstance != 0) {
+                        val rootMat = FloatArray(16)
+                        tm.getTransform(rootInstance, rootMat)
+                        // 180° Y rotation matrix (cos180=-1, sin180=0):
+                        //   [-1  0  0]     flips X and Z
+                        //   [ 0  1  0]
+                        //   [ 0  0 -1]
+                        val rot180 = floatArrayOf(
+                            -1f, 0f, 0f, 0f,
+                             0f, 1f, 0f, 0f,
+                             0f, 0f,-1f, 0f,
+                             0f, 0f, 0f, 1f
+                        )
+                        // Multiply: newTransform = rootMat * rot180
+                        val result = FloatArray(16)
+                        for (row in 0..3) {
+                            for (col in 0..3) {
+                                var sum = 0f
+                                for (k in 0..3) sum += rootMat[row + k * 4] * rot180[k + col * 4]
+                                result[row + col * 4] = sum
+                            }
+                        }
+                        tm.setTransform(rootInstance, result)
+                        android.util.Log.i("SoulLinkRenderer", "Applied 180° Y rotation for VRM 0.x model")
+                    }
+                }
             }
 
             // Apply custom MToon material
@@ -249,6 +305,55 @@ internal class SoulLinkRenderer(
      * @return the number of animations in the current model, or 0 if no model is loaded.
      */
     fun getAnimationCount(): Int = animator?.animationCount ?: 0
+
+    // ── VRMA Animation API ───────────────────────────────────────────────
+
+    /**
+     * Load a VRMA animation from assets.
+     * @param assetsPath Path to the .vrma file in assets.
+     * @return true if loaded successfully.
+     */
+    fun loadVrmaAnimation(assetsPath: String): Boolean {
+        return try {
+            val assets = surfaceView.context.assets
+            assets.open(assetsPath).use { input ->
+                val bytes = input.readBytes()
+                val buffer = ByteBuffer.wrap(bytes)
+                val animation = vrmaParser.parse(buffer)
+                if (animation != null) {
+                    vrmaEngine?.setAnimation(animation)
+                    android.util.Log.i("SoulLinkRenderer",
+                        "Loaded VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
+                    true
+                } else {
+                    android.util.Log.e("SoulLinkRenderer", "Failed to parse VRMA: $assetsPath")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Failed to load VRMA: $assetsPath", e)
+            false
+        }
+    }
+
+    /**
+     * Start playing the loaded VRMA animation.
+     * Stops any built-in animation that's playing.
+     */
+    fun playVrmaAnimation(loop: Boolean = true) {
+        // Stop built-in animation
+        currentAnimationIndex = -1
+        // Start VRMA
+        vrmaStartTime = System.nanoTime()
+        vrmaEngine?.play(loop)
+    }
+
+    /**
+     * Stop the VRMA animation.
+     */
+    fun stopVrmaAnimation() {
+        vrmaEngine?.stop()
+    }
 
     // ── Lifecycle ────────────────────────────────────────────────────────
 

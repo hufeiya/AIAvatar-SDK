@@ -153,6 +153,35 @@ class AvatarController {
     fun stopAnimation() {
         renderer?.stopAnimation()
     }
+
+    // ── Public API: VRMA Animation ───────────────────────────────────────
+
+    /**
+     * Load a VRMA animation file from the app's `assets/` directory.
+     *
+     * @param assetPath Relative path inside `assets/`, e.g. `"animations/Angry.vrma"`.
+     * @return `true` if the animation was loaded successfully.
+     */
+    fun loadVrmaAnimation(assetPath: String): Boolean {
+        return renderer?.loadVrmaAnimation(assetPath) ?: false
+    }
+
+    /**
+     * Start playing the previously loaded VRMA animation.
+     * This stops any built-in animation that is currently playing.
+     *
+     * @param loop Whether the animation should loop. Defaults to `true`.
+     */
+    fun playVrmaAnimation(loop: Boolean = true) {
+        renderer?.playVrmaAnimation(loop)
+    }
+
+    /**
+     * Stop the VRMA animation and restore the model's rest pose.
+     */
+    fun stopVrmaAnimation() {
+        renderer?.stopVrmaAnimation()
+    }
 }
 
 /**
