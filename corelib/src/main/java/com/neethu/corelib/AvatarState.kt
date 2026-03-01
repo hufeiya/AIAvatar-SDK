@@ -29,7 +29,10 @@ sealed class AvatarState {
      * The model has been loaded successfully and is rendering.
      * @param animationCount Number of animations available in the model.
      */
-    data class Ready(val animationCount: Int) : AvatarState()
+    data class Ready(
+        val animationCount: Int,
+        val expressions: List<String> = emptyList()
+    ) : AvatarState()
 
     /** An error occurred during model loading or rendering setup. */
     data class Error(val message: String, val cause: Throwable? = null) : AvatarState()

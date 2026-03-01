@@ -106,7 +106,11 @@ class AvatarController {
         try {
             r.loadModel(assetPath)
             val animCount = r.getAnimationCount()
-            _state.value = AvatarState.Ready(animationCount = animCount)
+            val expressionNames = r.getAvailableExpressions()
+            _state.value = AvatarState.Ready(
+                animationCount = animCount,
+                expressions = expressionNames
+            )
         } catch (e: Exception) {
             _state.value = AvatarState.Error(
                 message = "Failed to load model: ${e.message}",
@@ -152,6 +156,32 @@ class AvatarController {
      */
     fun stopAnimation() {
         renderer?.stopAnimation()
+    }
+
+    // ── Public API: Expression (Blend Shape) ─────────────────────────────
+
+    /**
+     * Set expression weight on the current model.
+     *
+     * @param name Expression name (e.g. "happy", "sad", "blink").
+     * @param weight Weight value 0.0–1.0. Defaults to 1.0 (full expression).
+     */
+    fun setExpression(name: String, weight: Float = 1.0f) {
+        renderer?.setExpression(name, weight)
+    }
+
+    /**
+     * Clear all active expressions, returning the model to a neutral face.
+     */
+    fun clearAllExpressions() {
+        renderer?.clearAllExpressions()
+    }
+
+    /**
+     * Get the list of available expression names from the currently loaded model.
+     */
+    fun getAvailableExpressions(): List<String> {
+        return renderer?.getAvailableExpressions() ?: emptyList()
     }
 
     // ── Public API: VRMA Animation ───────────────────────────────────────

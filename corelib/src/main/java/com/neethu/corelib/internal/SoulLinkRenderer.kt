@@ -47,6 +47,9 @@ internal class SoulLinkRenderer(
     private var vrmaStartTime: Long = 0L
     private var currentModelGlbBytes: ByteArray? = null
 
+    // Expression (morph target / blend shape) support
+    private var expressionManager: VrmExpressionManager? = null
+
     companion object {
         init {
             com.google.android.filament.utils.Utils.init()
@@ -78,6 +81,9 @@ internal class SoulLinkRenderer(
                     }
                 }
             }
+
+            // Update expression morph weights each frame
+            expressionManager?.update()
 
             modelViewer.render(frameTimeNanos)
             Choreographer.getInstance().postFrameCallback(this)
@@ -232,6 +238,12 @@ internal class SoulLinkRenderer(
                         android.util.Log.i("SoulLinkRenderer", "Applied 180° Y rotation for VRM 0.x model")
                     }
                 }
+
+                // Initialize expression (morph target / blend shape) manager
+                expressionManager = VrmExpressionManager(modelViewer.engine).also { exprMgr ->
+                    exprMgr.parseFromGlb(bytes)
+                    exprMgr.bindToAsset(asset, bytes)
+                }
             }
 
             // Apply custom MToon material
@@ -299,6 +311,31 @@ internal class SoulLinkRenderer(
      */
     fun stopAnimation() {
         currentAnimationIndex = -1
+    }
+
+    // ── Expression (Blend Shape / Morph Target) API ──────────────────────
+
+    /**
+     * Set expression weight.
+     * @param name Expression name (e.g. "happy", "sad", "blink")
+     * @param weight Weight value 0.0–1.0
+     */
+    fun setExpression(name: String, weight: Float) {
+        expressionManager?.setExpression(name, weight)
+    }
+
+    /**
+     * Clear all active expressions (return to neutral face).
+     */
+    fun clearAllExpressions() {
+        expressionManager?.clearAllExpressions()
+    }
+
+    /**
+     * Get list of available expression names from the loaded model.
+     */
+    fun getAvailableExpressions(): List<String> {
+        return expressionManager?.getAvailableExpressions() ?: emptyList()
     }
 
     /**

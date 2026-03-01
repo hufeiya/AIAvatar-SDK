@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
+import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
 
@@ -48,7 +50,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Which panel is currently shown */
-private enum class PanelType { NONE, MODELS, ANIMATIONS }
+private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS }
 
 @Composable
 private fun DemoScreen(modifier: Modifier = Modifier) {
@@ -82,10 +84,25 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
 
     var selectedModel by remember { mutableStateOf("model.glb") }
     var selectedAnimation by remember { mutableStateOf<String?>(null) }
+    var selectedExpression by remember { mutableStateOf<String?>(null) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
+
+    // Preset expression names (used as fallback if model has none)
+    val presetExpressions = remember {
+        listOf("happy", "sad", "angry", "surprised", "relaxed", "blink",
+            "blinkLeft", "blinkRight", "aa", "ih", "ou", "ee", "oh", "neutral")
+    }
+
+    // Use model-parsed expressions if available, otherwise use presets
+    val expressionList = remember(state) {
+        val modelExpressions = (state as? AvatarState.Ready)?.expressions ?: emptyList()
+        if (modelExpressions.isNotEmpty()) modelExpressions else presetExpressions
+    }
 
     // Load the selected model whenever it changes
     LaunchedEffect(selectedModel) {
+        selectedExpression = null
+        controller.clearAllExpressions()
         controller.loadModel("vrms/$selectedModel")
     }
 
@@ -105,6 +122,23 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.End
         ) {
+            // Expression FAB (😊 Face icon)
+            SmallFloatingActionButton(
+                onClick = {
+                    activePanel = if (activePanel == PanelType.EXPRESSIONS) PanelType.NONE else PanelType.EXPRESSIONS
+                },
+                shape = CircleShape,
+                containerColor = if (activePanel == PanelType.EXPRESSIONS)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (activePanel == PanelType.EXPRESSIONS) Icons.Default.Close else Icons.Default.Face,
+                    contentDescription = if (activePanel == PanelType.EXPRESSIONS) "Hide expressions" else "Show expressions"
+                )
+            }
+
             // Animation FAB
             SmallFloatingActionButton(
                 onClick = {
@@ -182,6 +216,35 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
                     controller.loadVrmaAnimation("animations/$fileName")
                     controller.playVrmaAnimation(loop = true)
                     activePanel = PanelType.NONE
+                }
+            )
+        }
+
+        // Expression selector overlay at the bottom
+        AnimatedVisibility(
+            visible = activePanel == PanelType.EXPRESSIONS,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
+        ) {
+            ListPanel(
+                title = "Expressions",
+                items = expressionList,
+                selectedItem = selectedExpression,
+                onItemClick = { name ->
+                    if (selectedExpression == name) {
+                        // Toggle off — clear the expression
+                        controller.clearAllExpressions()
+                        selectedExpression = null
+                    } else {
+                        // Apply the new expression at full weight
+                        controller.clearAllExpressions()
+                        controller.setExpression(name, 1.0f)
+                        selectedExpression = name
+                    }
                 }
             )
         }
