@@ -1,4 +1,4 @@
-package com.neethu.corelib
+package com.neethu.corelib.internal
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -15,7 +15,7 @@ import java.nio.ByteOrder
  * GLB is a binary format that embeds both JSON and binary data.
  * VRM models use the VRMC_materials_mtoon extension which references baseColorTexture.
  */
-class VrmGlbParser(private val engine: Engine) {
+internal class VrmGlbParser(private val engine: Engine) {
     
     companion object {
         private const val TAG = "VrmGlbParser"
@@ -163,24 +163,9 @@ class VrmGlbParser(private val engine: Engine) {
                 // Decode to bitmap
                 val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, byteLength)
                 if (bitmap != null) {
-                    // Debug: Save first few textures to verify extraction
-                    if (i < 3) {
-                        try {
-                            val debugFile = java.io.File("/sdcard/Download/vrm_texture_$i.png")
-                            java.io.FileOutputStream(debugFile).use { out ->
-                                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                            }
-                            Log.d(TAG, "Saved debug texture $i to ${debugFile.absolutePath}")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not save debug texture $i", e)
-                        }
-                    }
-                    
                     val texture = createTextureFromBitmap(bitmap)
                     textures.add(texture)
                     Log.d(TAG, "Created texture $i: ${bitmap.width}x${bitmap.height}")
-                    // NOTE: Don't recycle bitmap immediately - Filament's setImage may be async!
-                    // The bitmap will be GC'd when no longer referenced
                 } else {
                     Log.w(TAG, "Failed to decode image $i (mimeType: $mimeType)")
                 }
@@ -194,21 +179,17 @@ class VrmGlbParser(private val engine: Engine) {
     
     /**
      * Create a Filament Texture from a Bitmap
-     * Note: Android Bitmap.copyPixelsToBuffer with ARGB_8888 Config outputs in RGBA order
-     * (the bytes are actually stored as RGBA despite the name)
      */
     private fun createTextureFromBitmap(bitmap: Bitmap): Texture {
         val width = bitmap.width
         val height = bitmap.height
         
-        // Ensure bitmap is in ARGB_8888 format (which outputs RGBA bytes)
         val rgbaBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
             bitmap.copy(Bitmap.Config.ARGB_8888, false)
         } else {
             bitmap
         }
         
-        // Create texture with sRGB format for proper color handling
         val texture = Texture.Builder()
             .width(width)
             .height(height)
@@ -217,20 +198,17 @@ class VrmGlbParser(private val engine: Engine) {
             .sampler(Texture.Sampler.SAMPLER_2D)
             .build(engine)
         
-        // Allocate buffer and copy pixels
         val pixelBuffer = ByteBuffer.allocateDirect(width * height * 4)
         pixelBuffer.order(ByteOrder.nativeOrder())
         rgbaBitmap.copyPixelsToBuffer(pixelBuffer)
         pixelBuffer.flip()
         
-        // Upload to texture
         texture.setImage(engine, 0, Texture.PixelBufferDescriptor(
             pixelBuffer,
             Texture.Format.RGBA,
             Texture.Type.UBYTE
         ))
         
-        // Clean up if we created a copy
         if (rgbaBitmap !== bitmap) {
             rgbaBitmap.recycle()
         }
@@ -250,14 +228,12 @@ class VrmGlbParser(private val engine: Engine) {
             val materialObj = materialsArray[i].asJsonObject
             val name = materialObj.get("name")?.asString
             
-            // Get baseColorTexture from pbrMetallicRoughness
             var imageIndex: Int? = null
             var baseColorFactor: FloatArray? = null
             
             materialObj.getAsJsonObject("pbrMetallicRoughness")?.let { pbr ->
                 pbr.getAsJsonObject("baseColorTexture")?.let { texInfo ->
                     val textureIndex = texInfo.get("index")?.asInt
-                    // Resolve texture index to image index
                     if (textureIndex != null && texturesArray != null && textureIndex < texturesArray.size()) {
                         val textureObj = texturesArray[textureIndex].asJsonObject
                         imageIndex = textureObj.get("source")?.asInt
@@ -270,12 +246,11 @@ class VrmGlbParser(private val engine: Engine) {
                 }
             }
             
-            // If no baseColorFactor, default to white
             if (baseColorFactor == null) {
                 baseColorFactor = floatArrayOf(1f, 1f, 1f, 1f)
             }
             
-            // Parse emissive from glTF root material (not from extension)
+            // Parse emissive
             var emissiveFactor: FloatArray? = null
             var emissiveTextureIndex: Int? = null
             materialObj.getAsJsonArray("emissiveFactor")?.let { factor ->
@@ -317,7 +292,6 @@ class VrmGlbParser(private val engine: Engine) {
                     mtoon.get("shadingToonyFactor")?.asFloat?.let { shadingToonyFactor = it }
                     mtoon.get("giEqualizationFactor")?.asFloat?.let { giEqualizationFactor = it }
                     
-                    // Shade multiply texture
                     mtoon.getAsJsonObject("shadeMultiplyTexture")?.let { texInfo ->
                         val textureIndex = texInfo.get("index")?.asInt
                         if (textureIndex != null && texturesArray != null && textureIndex < texturesArray.size()) {
@@ -326,7 +300,6 @@ class VrmGlbParser(private val engine: Engine) {
                         }
                     }
                     
-                    // Rim lighting parameters
                     mtoon.getAsJsonArray("parametricRimColorFactor")?.let { factor ->
                         parametricRimColorFactor = FloatArray(3) { j ->
                             if (j < factor.size()) factor[j].asFloat else 0f
@@ -364,8 +337,6 @@ class VrmGlbParser(private val engine: Engine) {
     
     /**
      * Parse glTF meshes to get material index for each primitive in order.
-     * This is the key to correct material mapping - each primitive explicitly 
-     * references its material via the "material" property.
      */
     fun getPrimitiveMaterialMapping(json: JsonObject): List<PrimitiveInfo> {
         val primitives = mutableListOf<PrimitiveInfo>()

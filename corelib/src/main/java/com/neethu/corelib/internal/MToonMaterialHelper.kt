@@ -1,4 +1,4 @@
-package com.neethu.corelib
+package com.neethu.corelib.internal
 
 import android.content.Context
 import android.util.Log
@@ -18,7 +18,7 @@ import java.nio.ByteBuffer
  * toon shading. Since Filament doesn't natively support MToon, this class
  * provides a custom implementation using Filament's customSurfaceShading.
  */
-class MToonMaterialHelper(
+internal class MToonMaterialHelper(
     private val engine: Engine,
     private val context: Context
 ) {
@@ -27,11 +27,11 @@ class MToonMaterialHelper(
         
         // Default MToon parameters - tuned for visible toon shading
         private val DEFAULT_BASE_COLOR = floatArrayOf(1.0f, 1.0f, 1.0f, 1.0f)
-        private val DEFAULT_SHADE_COLOR = floatArrayOf(0.5f, 0.5f, 0.6f, 1.0f)  // Darker shade
-        private const val DEFAULT_SHADE_TOONY = 0.5f   // Lower = more gradual transition, Higher = sharper
-        private const val DEFAULT_SHADE_SHIFT = -0.1f  // Negative = more shadowed areas
-        private val DEFAULT_RIM_COLOR = floatArrayOf(0.8f, 0.8f, 1.0f)  // Subtle rim
-        private const val DEFAULT_RIM_POWER = 3.0f     // Lower = wider rim
+        private val DEFAULT_SHADE_COLOR = floatArrayOf(0.5f, 0.5f, 0.6f, 1.0f)
+        private const val DEFAULT_SHADE_TOONY = 0.5f
+        private const val DEFAULT_SHADE_SHIFT = -0.1f
+        private val DEFAULT_RIM_COLOR = floatArrayOf(0.8f, 0.8f, 1.0f)
+        private const val DEFAULT_RIM_POWER = 3.0f
         private const val DEFAULT_RIM_LIFT = 0.2f
     }
     
@@ -39,7 +39,7 @@ class MToonMaterialHelper(
     private var simpleToonMaterial: Material? = null
     private var dummyTexture: Texture? = null
     private var unlitMaterial: Material? = null
-    private var litMaterial: Material? = null  // Simple lit material for VRM
+    private var litMaterial: Material? = null
     private val materialInstances = mutableListOf<MaterialInstance>()
     
     /**
@@ -48,31 +48,26 @@ class MToonMaterialHelper(
      */
     fun loadMaterial(): Boolean {
         return try {
-            // Load simple lit material (preferred - has lighting but simpler than MToon)
             loadMaterialFromAsset("materials/vrm_lit.filamat")?.let {
                 litMaterial = it
                 Log.i(TAG, "Loaded VRM lit material")
             }
             
-            // Load unlit material as fallback
             loadMaterialFromAsset("materials/vrm_unlit.filamat")?.let {
                 unlitMaterial = it
                 Log.i(TAG, "Loaded VRM unlit material")
             }
             
-            // Try to load full MToon material
             loadMaterialFromAsset("materials/mtoon.filamat")?.let {
                 mtoonMaterial = it
                 Log.i(TAG, "Loaded full MToon material")
             }
             
-            // Also load simple toon as fallback
             loadMaterialFromAsset("materials/simple_toon.filamat")?.let {
                 simpleToonMaterial = it
                 Log.i(TAG, "Loaded simple toon material")
             }
             
-            // Create a dummy white texture for materials without textures
             createDummyTexture()
             
             unlitMaterial != null || mtoonMaterial != null || simpleToonMaterial != null
@@ -101,7 +96,6 @@ class MToonMaterialHelper(
     }
     
     private fun createDummyTexture() {
-        // Create a 1x1 white texture
         dummyTexture = Texture.Builder()
             .width(1)
             .height(1)
@@ -111,10 +105,10 @@ class MToonMaterialHelper(
             .build(engine)
         
         val whitePixel = ByteBuffer.allocateDirect(4)
-        whitePixel.put(0xFF.toByte()) // R
-        whitePixel.put(0xFF.toByte()) // G
-        whitePixel.put(0xFF.toByte()) // B
-        whitePixel.put(0xFF.toByte()) // A
+        whitePixel.put(0xFF.toByte())
+        whitePixel.put(0xFF.toByte())
+        whitePixel.put(0xFF.toByte())
+        whitePixel.put(0xFF.toByte())
         whitePixel.flip()
         
         dummyTexture?.setImage(engine, 0, Texture.PixelBufferDescriptor(
@@ -142,12 +136,10 @@ class MToonMaterialHelper(
         val instance = material.createInstance()
         materialInstances.add(instance)
         
-        // Set base parameters
         instance.setParameter("baseColor", baseColor[0], baseColor[1], baseColor[2], baseColor[3])
         instance.setParameter("shadeColor", shadeColor[0], shadeColor[1], shadeColor[2], shadeColor[3])
         
         if (isFullMToon) {
-            // Full MToon parameters
             instance.setParameter("shadeToony", shadeToony)
             instance.setParameter("shadeShift", shadeShift)
             instance.setParameter("rimColor", rimColor[0], rimColor[1], rimColor[2])
@@ -155,7 +147,6 @@ class MToonMaterialHelper(
             instance.setParameter("rimLift", rimLift)
         }
         
-        // Set dummy textures
         dummyTexture?.let { tex ->
             val sampler = TextureSampler()
             instance.setParameter("mainTexture", tex, sampler)
@@ -166,9 +157,9 @@ class MToonMaterialHelper(
         
         return instance
     }
+
     /**
      * Apply MToon material to all renderables in a FilamentAsset
-     * Uses dummy textures - for use when original textures cannot be extracted
      */
     fun applyToAsset(asset: FilamentAsset) {
         applyToAssetWithTextures(asset, emptyList(), emptyList(), emptyList())
@@ -176,10 +167,6 @@ class MToonMaterialHelper(
     
     /**
      * Apply MToon material to a FilamentAsset with parsed VRM textures
-     * @param asset The FilamentAsset to apply materials to
-     * @param parsedTextures List of Filament Textures extracted from the GLB (indexed by image index)
-     * @param materialInfos Material info list with resolved image indices from VRM (one per glTF material)
-     * @param primitiveInfos Mapping of primitive order to material index
      */
     fun applyToAssetWithTextures(
         asset: FilamentAsset,
@@ -187,8 +174,6 @@ class MToonMaterialHelper(
         materialInfos: List<VrmGlbParser.MaterialInfo>,
         primitiveInfos: List<VrmGlbParser.PrimitiveInfo>
     ) {
-        // Use lit material (preferred - has proper lighting)
-        // Falls back to unlit, then MToon, then simple toon
         val material = litMaterial ?: unlitMaterial ?: mtoonMaterial ?: simpleToonMaterial ?: run {
             Log.w(TAG, "No material available, skipping")
             return
@@ -201,7 +186,6 @@ class MToonMaterialHelper(
         
         val renderableManager = engine.renderableManager
         
-        // Use LINEAR filter without mipmaps since we don't have them
         val sampler = TextureSampler(
             TextureSampler.MinFilter.LINEAR,
             TextureSampler.MagFilter.LINEAR,
@@ -209,31 +193,23 @@ class MToonMaterialHelper(
         )
         
         var appliedCount = 0
-        
-        // Build a map from material name to MaterialInfo for lookup
         val materialInfoByName = materialInfos.associateBy { it.name }
-        Log.d(TAG, "Material name map: ${materialInfoByName.keys}")
         
-        // Apply to each renderable entity
         for (entity in asset.entities) {
             val ri = renderableManager.getInstance(entity)
             if (ri == 0) continue
             
             val primitiveCount = renderableManager.getPrimitiveCount(ri)
             for (primitiveIndex in 0 until primitiveCount) {
-                // Get the ORIGINAL material instance to read its name
                 val originalMi = renderableManager.getMaterialInstanceAt(ri, primitiveIndex)
                 val originalMaterialName = originalMi.name
                 
-                // Create new MToon instance
                 val newInstance = material.createInstance()
                 materialInstances.add(newInstance)
                 
-                // Default parameters
                 var baseColor = floatArrayOf(1f, 1f, 1f, 1f)
                 var texture: Texture? = dummyTexture
                 
-                // Look up material by NAME matching
                 val matInfo = materialInfoByName[originalMaterialName]
                 if (matInfo != null) {
                     matInfo.baseColorFactor?.let { baseColor = it }
@@ -247,44 +223,32 @@ class MToonMaterialHelper(
                     Log.w(TAG, "No match for material: '$originalMaterialName'")
                 }
                 
-                // Set base parameters (all material types)
                 newInstance.setParameter("baseColor", baseColor[0], baseColor[1], baseColor[2], baseColor[3])
-                
-                // Flip V coordinate for proper UV handling
                 newInstance.setParameter("flipV", true)
                 
-                // Set main texture
                 texture?.let { tex ->
                     newInstance.setParameter("mainTexture", tex, sampler)
                 }
                 
-                // MToon-style parameters for lit material
                 if (useLit) {
-                    // Use MToon extension values if available, otherwise fall back to defaults
                     if (matInfo?.isMToon == true) {
-                        // Shade color from VRM extension
                         val shade = matInfo.shadeColorFactor ?: floatArrayOf(
                             baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.7f
                         )
                         newInstance.setParameter("shadeColor", shade[0], shade[1], shade[2], 1f)
-                        
-                        // Shading parameters from VRM extension
                         newInstance.setParameter("shadingToony", matInfo.shadingToonyFactor)
                         newInstance.setParameter("shadingShift", matInfo.shadingShiftFactor)
                         newInstance.setParameter("giEqualization", matInfo.giEqualizationFactor)
                         
-                        // Rim lighting from VRM extension
                         val rim = matInfo.parametricRimColorFactor ?: floatArrayOf(0f, 0f, 0f)
                         newInstance.setParameter("rimColor", rim[0], rim[1], rim[2])
                         newInstance.setParameter("rimPower", matInfo.parametricRimFresnelPowerFactor)
                         newInstance.setParameter("rimLift", matInfo.parametricRimLiftFactor)
                         newInstance.setParameter("rimLightingMix", matInfo.rimLightingMixFactor)
                         
-                        // Emissive from glTF material
                         val emissive = matInfo.emissiveFactor ?: floatArrayOf(0f, 0f, 0f)
                         newInstance.setParameter("emissiveColor", emissive[0], emissive[1], emissive[2])
                         
-                        // Shade texture (from VRMC_materials_mtoon shadeMultiplyTexture)
                         val shadeTexIdx = matInfo.shadeMultiplyTextureIndex
                         if (shadeTexIdx != null && shadeTexIdx < parsedTextures.size) {
                             newInstance.setParameter("shadeTexture", parsedTextures[shadeTexIdx], sampler)
@@ -294,7 +258,6 @@ class MToonMaterialHelper(
                             newInstance.setParameter("hasShadeTexture", false)
                         }
                         
-                        // Emissive texture
                         val emissiveTexIdx = matInfo.emissiveTextureIndex
                         if (emissiveTexIdx != null && emissiveTexIdx < parsedTextures.size) {
                             newInstance.setParameter("emissiveTexture", parsedTextures[emissiveTexIdx], sampler)
@@ -303,12 +266,7 @@ class MToonMaterialHelper(
                             dummyTexture?.let { newInstance.setParameter("emissiveTexture", it, sampler) }
                             newInstance.setParameter("hasEmissiveTexture", false)
                         }
-                        
-                        Log.d(TAG, "Applied MToon params for '$originalMaterialName': " +
-                            "shade=${shade.contentToString()}, toony=${matInfo.shadingToonyFactor}, " +
-                            "shift=${matInfo.shadingShiftFactor}")
                     } else {
-                        // Non-MToon material: use sensible defaults
                         newInstance.setParameter("shadeColor", 
                             baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
                         newInstance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
@@ -328,7 +286,6 @@ class MToonMaterialHelper(
                     }
                 }
                 
-                // Additional parameters for old full MToon materials (legacy path)
                 if (isFullMToon) {
                     val shade = matInfo?.shadeColorFactor ?: floatArrayOf(
                         baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.7f
@@ -345,7 +302,6 @@ class MToonMaterialHelper(
                     }
                 }
                 
-                // Apply the new material
                 renderableManager.setMaterialInstanceAt(ri, primitiveIndex, newInstance)
                 appliedCount++
             }
@@ -355,7 +311,7 @@ class MToonMaterialHelper(
     }
     
     /**
-     * Apply MToon material with specific colors (useful for skin, hair, clothes separately)
+     * Apply MToon material with specific colors
      */
     fun applyToAssetWithColors(
         asset: FilamentAsset,
