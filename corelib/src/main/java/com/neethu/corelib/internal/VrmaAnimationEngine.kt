@@ -163,13 +163,23 @@ internal class VrmaAnimationEngine(
                     val animHipsY = anim.restHipsPosition[1]
                     val scale = if (animHipsY > 0.01f) targetHipsY / animHipsY else 1.0f
 
-                    // VRM 0.x: negate x and z (three-vrm: i % 3 !== 1 ? -v : v)
+                    // Compute DELTA from animation's rest hips position, then add
+                    // to the model's actual rest local translation. This keeps the
+                    // character centered and only applies relative movement.
+                    val animRest = anim.restHipsPosition
+                    val restMat = boneRestTransforms[track.boneName]
+                    val restTx = restMat?.get(12) ?: 0f
+                    val restTy = restMat?.get(13) ?: 0f
+                    val restTz = restMat?.get(14) ?: 0f
+
                     if (vrmMetaVersion == "0") {
-                        pos[0] = -pos[0] * scale
-                        pos[1] = pos[1] * scale
-                        pos[2] = -pos[2] * scale
+                        pos[0] = restTx + -(pos[0] - animRest[0]) * scale
+                        pos[1] = restTy +  (pos[1] - animRest[1]) * scale
+                        pos[2] = restTz + -(pos[2] - animRest[2]) * scale
                     } else {
-                        pos[0] *= scale; pos[1] *= scale; pos[2] *= scale
+                        pos[0] = restTx + (pos[0] - animRest[0]) * scale
+                        pos[1] = restTy + (pos[1] - animRest[1]) * scale
+                        pos[2] = restTz + (pos[2] - animRest[2]) * scale
                     }
 
                     applyTranslation(tm, instance, pos)
