@@ -162,9 +162,12 @@ internal class SoulLinkRenderer(
                 }
             }
 
-            // Load model into Filament
+            // Pre-process: cull unused bones to stay within Filament's 256 bone limit
             buffer.rewind()
-            modelViewer.loadModelGlb(buffer)
+            val loadBuffer = GlbBoneCuller.cullUnusedBones(buffer) ?: buffer.also { it.rewind() }
+
+            // Load model into Filament
+            modelViewer.loadModelGlb(loadBuffer)
             modelViewer.transformToUnitCube()
 
             // Get animation controller

@@ -29,7 +29,6 @@ internal class VrmGlbParser(private val engine: Engine) {
     
     data class ParsedVrm(
         val json: JsonObject,
-        val binaryBuffer: ByteBuffer?,
         val textures: List<Texture>
     )
     
@@ -124,8 +123,14 @@ internal class VrmGlbParser(private val engine: Engine) {
         
         // Extract textures
         val textures = extractTextures(json, binaryBuffer)
-        
-        return ParsedVrm(json, binaryBuffer, textures)
+        // check bones number
+        val skins = json.getAsJsonArray("skins")
+        skins?.forEach { skinElement ->
+            val joints = skinElement.asJsonObject.getAsJsonArray("joints")
+            Log.i("VrmParser", "Skin has ${joints?.size()} joints/bones")
+        }
+
+        return ParsedVrm(json, textures)
     }
     
     /**
