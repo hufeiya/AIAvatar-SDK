@@ -36,7 +36,20 @@ class VrmGlbParser(private val engine: Engine) {
     data class MaterialInfo(
         val name: String?,
         val baseColorTextureIndex: Int?,  // Image index (resolved from texture index)
-        val baseColorFactor: FloatArray? = null
+        val baseColorFactor: FloatArray? = null,
+        // MToon extension (VRMC_materials_mtoon) properties
+        val shadeColorFactor: FloatArray? = null,       // RGB shade color
+        val shadingShiftFactor: Float = 0.0f,
+        val shadingToonyFactor: Float = 0.9f,
+        val shadeMultiplyTextureIndex: Int? = null,     // Image index for shade texture
+        val emissiveFactor: FloatArray? = null,          // RGB emissive color
+        val emissiveTextureIndex: Int? = null,           // Image index for emissive texture
+        val parametricRimColorFactor: FloatArray? = null, // RGB rim color
+        val parametricRimFresnelPowerFactor: Float = 5.0f,
+        val parametricRimLiftFactor: Float = 0.0f,
+        val rimLightingMixFactor: Float = 1.0f,
+        val giEqualizationFactor: Float = 0.9f,
+        val isMToon: Boolean = false                     // Whether material has MToon extension
     )
     
     /**
@@ -262,8 +275,88 @@ class VrmGlbParser(private val engine: Engine) {
                 baseColorFactor = floatArrayOf(1f, 1f, 1f, 1f)
             }
             
-            materials.add(MaterialInfo(name, imageIndex, baseColorFactor))
-            Log.d(TAG, "Material $i '$name': imageIndex=$imageIndex, factor=${baseColorFactor?.contentToString()}")
+            // Parse emissive from glTF root material (not from extension)
+            var emissiveFactor: FloatArray? = null
+            var emissiveTextureIndex: Int? = null
+            materialObj.getAsJsonArray("emissiveFactor")?.let { factor ->
+                emissiveFactor = FloatArray(3) { j ->
+                    if (j < factor.size()) factor[j].asFloat else 0f
+                }
+            }
+            materialObj.getAsJsonObject("emissiveTexture")?.let { texInfo ->
+                val textureIndex = texInfo.get("index")?.asInt
+                if (textureIndex != null && texturesArray != null && textureIndex < texturesArray.size()) {
+                    val textureObj = texturesArray[textureIndex].asJsonObject
+                    emissiveTextureIndex = textureObj.get("source")?.asInt
+                }
+            }
+            
+            // Parse VRMC_materials_mtoon extension
+            var shadeColorFactor: FloatArray? = null
+            var shadingShiftFactor = 0.0f
+            var shadingToonyFactor = 0.9f
+            var shadeMultiplyTextureIndex: Int? = null
+            var parametricRimColorFactor: FloatArray? = null
+            var parametricRimFresnelPowerFactor = 5.0f
+            var parametricRimLiftFactor = 0.0f
+            var rimLightingMixFactor = 1.0f
+            var giEqualizationFactor = 0.9f
+            var isMToon = false
+            
+            materialObj.getAsJsonObject("extensions")
+                ?.getAsJsonObject("VRMC_materials_mtoon")?.let { mtoon ->
+                    isMToon = true
+                    
+                    mtoon.getAsJsonArray("shadeColorFactor")?.let { factor ->
+                        shadeColorFactor = FloatArray(3) { j ->
+                            if (j < factor.size()) factor[j].asFloat else 0f
+                        }
+                    }
+                    
+                    mtoon.get("shadingShiftFactor")?.asFloat?.let { shadingShiftFactor = it }
+                    mtoon.get("shadingToonyFactor")?.asFloat?.let { shadingToonyFactor = it }
+                    mtoon.get("giEqualizationFactor")?.asFloat?.let { giEqualizationFactor = it }
+                    
+                    // Shade multiply texture
+                    mtoon.getAsJsonObject("shadeMultiplyTexture")?.let { texInfo ->
+                        val textureIndex = texInfo.get("index")?.asInt
+                        if (textureIndex != null && texturesArray != null && textureIndex < texturesArray.size()) {
+                            val textureObj = texturesArray[textureIndex].asJsonObject
+                            shadeMultiplyTextureIndex = textureObj.get("source")?.asInt
+                        }
+                    }
+                    
+                    // Rim lighting parameters
+                    mtoon.getAsJsonArray("parametricRimColorFactor")?.let { factor ->
+                        parametricRimColorFactor = FloatArray(3) { j ->
+                            if (j < factor.size()) factor[j].asFloat else 0f
+                        }
+                    }
+                    mtoon.get("parametricRimFresnelPowerFactor")?.asFloat?.let { parametricRimFresnelPowerFactor = it }
+                    mtoon.get("parametricRimLiftFactor")?.asFloat?.let { parametricRimLiftFactor = it }
+                    mtoon.get("rimLightingMixFactor")?.asFloat?.let { rimLightingMixFactor = it }
+                    
+                    Log.d(TAG, "MToon ext for '$name': shade=${shadeColorFactor?.contentToString()}, shift=$shadingShiftFactor, toony=$shadingToonyFactor")
+                }
+            
+            materials.add(MaterialInfo(
+                name = name,
+                baseColorTextureIndex = imageIndex,
+                baseColorFactor = baseColorFactor,
+                shadeColorFactor = shadeColorFactor,
+                shadingShiftFactor = shadingShiftFactor,
+                shadingToonyFactor = shadingToonyFactor,
+                shadeMultiplyTextureIndex = shadeMultiplyTextureIndex,
+                emissiveFactor = emissiveFactor,
+                emissiveTextureIndex = emissiveTextureIndex,
+                parametricRimColorFactor = parametricRimColorFactor,
+                parametricRimFresnelPowerFactor = parametricRimFresnelPowerFactor,
+                parametricRimLiftFactor = parametricRimLiftFactor,
+                rimLightingMixFactor = rimLightingMixFactor,
+                giEqualizationFactor = giEqualizationFactor,
+                isMToon = isMToon
+            ))
+            Log.d(TAG, "Material $i '$name': imageIndex=$imageIndex, factor=${baseColorFactor?.contentToString()}, isMToon=$isMToon")
         }
         
         return materials

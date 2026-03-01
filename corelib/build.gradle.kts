@@ -152,8 +152,58 @@ tasks.register<Exec>("compileSimpleToon") {
     isIgnoreExitValue = false
 }
 
+tasks.register<Exec>("compileVrmLit") {
+    group = "filament"
+    description = "Compile VRM lit (MToon-style) material"
+    
+    val materialsDir = file("src/main/materials")
+    val outputDir = file("src/main/assets/materials")
+    
+    inputs.file("$materialsDir/vrm_lit.mat")
+    outputs.file("$outputDir/vrm_lit.filamat")
+    
+    doFirst {
+        outputDir.mkdirs()
+        println("Compiling VRM lit material using matc: $matcPath")
+    }
+    
+    commandLine(matcPath,
+        "-p", "mobile",
+        "-a", "opengl",
+        "-o", "$outputDir/vrm_lit.filamat",
+        "$materialsDir/vrm_lit.mat"
+    )
+    
+    isIgnoreExitValue = false
+}
+
+tasks.register<Exec>("compileVrmUnlit") {
+    group = "filament"
+    description = "Compile VRM unlit material"
+    
+    val materialsDir = file("src/main/materials")
+    val outputDir = file("src/main/assets/materials")
+    
+    inputs.file("$materialsDir/vrm_unlit.mat")
+    outputs.file("$outputDir/vrm_unlit.filamat")
+    
+    doFirst {
+        outputDir.mkdirs()
+        println("Compiling VRM unlit material using matc: $matcPath")
+    }
+    
+    commandLine(matcPath,
+        "-p", "mobile",
+        "-a", "opengl",
+        "-o", "$outputDir/vrm_unlit.filamat",
+        "$materialsDir/vrm_unlit.mat"
+    )
+    
+    isIgnoreExitValue = false
+}
+
 tasks.register("compileMaterials") {
     group = "filament"
     description = "Compile all Filament materials"
-    dependsOn("compileMToon", "compileSimpleToon")
+    dependsOn("compileMToon", "compileSimpleToon", "compileVrmLit", "compileVrmUnlit")
 }

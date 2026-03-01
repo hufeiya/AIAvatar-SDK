@@ -13,8 +13,15 @@ material {
         { type : float3, name : rimColor },
         { type : float,  name : rimPower },
         { type : float,  name : rimLift },
+        { type : float,  name : rimLightingMix },
+        { type : float3, name : emissiveColor },
+        { type : float,  name : giEqualization },
         { type : sampler2d, name : mainTexture },
-        { type : bool, name : flipV }
+        { type : sampler2d, name : shadeTexture },
+        { type : sampler2d, name : emissiveTexture },
+        { type : bool, name : flipV },
+        { type : bool, name : hasShadeTexture },
+        { type : bool, name : hasEmissiveTexture }
     ],
     requires : [
         uv0
@@ -31,6 +38,12 @@ fragment {
         return uv;
     }
     
+    // three-vrm uses linearstep instead of smoothstep for toon shading
+    // This gives a sharper, more anime-like transition
+    float linearstep(float a, float b, float t) {
+        return clamp((t - a) / (b - a + 0.001), 0.0, 1.0);
+    }
+    
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         
@@ -44,55 +57,71 @@ fragment {
         // Important: Set roughness high to avoid specular highlights
         material.roughness = 1.0;
         material.metallic = 0.0;
+        
+        // Emissive goes here (NOT in surfaceShading which is called per-light)
+        vec3 emissive = materialParams.emissiveColor;
+        if (materialParams.hasEmissiveTexture) {
+            emissive *= texture(materialParams_emissiveTexture, uv).rgb;
+        }
+        material.emissive = vec4(emissive, 0.0);
     }
 
-    // MToon custom surface shading - this is where the toon effect happens
+    // MToon custom surface shading - matches three-vrm algorithm
     vec3 surfaceShading(
         const MaterialInputs materialInputs,
         const ShadingData shadingData,
         const LightData lightData
     ) {
-        // Get the diffuse color (texture * baseColor)
+        vec2 uv = getFlippedUV();
+        
+        // Lit color from diffuse (texture * baseColor applied via material.baseColor)
         vec3 litColor = shadingData.diffuseColor;
         
-        // Calculate shade color (darker version for shadow areas)
-        vec3 shadeColor = litColor * materialParams.shadeColor.rgb;
+        // Shade color: use shade texture if available, otherwise use shade color factor
+        vec3 shadeColor = materialParams.shadeColor.rgb;
+        if (materialParams.hasShadeTexture) {
+            shadeColor *= texture(materialParams_shadeTexture, uv).rgb;
+        } else {
+            // Multiply shade color with lit color for consistent shading
+            shadeColor *= litColor;
+        }
         
-        // MToon shading calculation
-        // NdotL determines if the surface faces the light
+        // === Core MToon shading (matching three-vrm getShading function) ===
         float NdotL = lightData.NdotL;
         
-        // Apply shading shift (moves the boundary between lit and shade)
+        // Apply shading shift
         float shading = NdotL + materialParams.shadingShift;
         
-        // Toon shading step function with toony control
-        // Higher toony = sharper edge, lower = softer gradient
-        float toonyFactor = materialParams.shadingToony;
-        float shadeValue = smoothstep(0.0, 1.0 - toonyFactor + 0.001, shading);
+        // linearstep with toony factor controlling transition sharpness
+        // three-vrm uses: linearstep(-1.0 + toony, 1.0 - toony, shading)
+        float toony = materialParams.shadingToony;
+        shading = linearstep(-1.0 + toony, 1.0 - toony, shading);
+        
+        // Apply shadow/visibility (three-vrm: shading *= shadow)
+        float visibility = lightData.visibility * lightData.attenuation;
+        shading *= max(visibility, 0.05);
         
         // Mix between shade and lit color based on shading
-        vec3 finalColor = mix(shadeColor, litColor, shadeValue);
+        vec3 finalColor = mix(shadeColor, litColor, shading);
         
-        // Rim lighting (fresnel-based edge glow)
+        // === Rim lighting (matching three-vrm parametric rim) ===
         vec3 viewDir = getWorldViewVector();
         vec3 normal = getWorldNormalVector();
         float NdotV = saturate(dot(viewDir, normal));
         
-        // Rim is stronger at edges (where NdotV is low)
-        float rim = 1.0 - NdotV;
-        rim = pow(rim, materialParams.rimPower);
-        rim = smoothstep(materialParams.rimLift, 1.0, rim);
+        // Parametric rim: pow(1 - NdotV + lift, power) * rimColor
+        float rim = pow(saturate(1.0 - NdotV + materialParams.rimLift), materialParams.rimPower);
         
-        // Add rim color
-        finalColor += materialParams.rimColor * rim * 0.5;
+        // three-vrm mixes rim with light contribution using rimLightingMixFactor
+        float lightContrib = max(visibility, 0.3);
+        vec3 rimMix = mix(vec3(1.0), vec3(lightContrib), materialParams.rimLightingMix);
+        finalColor += rimMix * materialParams.rimColor * rim;
         
-        // Apply light color and visibility
-        // Note: We don't multiply by full intensity to keep the toon look
+        // === Light application ===
+        // In Filament, lightData.colorIntensity.w is raw intensity in lux (e.g. 90000)
+        // We normalize it to prevent over-brightness while keeping toon look
         vec3 lightColor = lightData.colorIntensity.rgb;
         float lightIntensity = lightData.colorIntensity.w;
-        float visibility = lightData.visibility * lightData.attenuation;
-        
-        // Normalize the light contribution to avoid over-bright
         float normalizedIntensity = min(lightIntensity / 100000.0, 1.0);
         
         return finalColor * lightColor * normalizedIntensity * max(visibility, 0.3);

@@ -247,36 +247,95 @@ class MToonMaterialHelper(
                     Log.w(TAG, "No match for material: '$originalMaterialName'")
                 }
                 
-                // Set parameters based on material type
+                // Set base parameters (all material types)
                 newInstance.setParameter("baseColor", baseColor[0], baseColor[1], baseColor[2], baseColor[3])
                 
-                // Flip V coordinate for proper UV handling (all materials support this)
+                // Flip V coordinate for proper UV handling
                 newInstance.setParameter("flipV", true)
                 
-                // Set texture
+                // Set main texture
                 texture?.let { tex ->
                     newInstance.setParameter("mainTexture", tex, sampler)
                 }
                 
-                // Additional parameters for lit material (full MToon-style shader)
+                // MToon-style parameters for lit material
                 if (useLit) {
-                    // Shade color for toon-like effect (slightly darker than base)
-                    newInstance.setParameter("shadeColor", 
-                        baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
-                    newInstance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
-                    newInstance.setParameter("shadingShift", DEFAULT_SHADE_SHIFT)
-                    // Rim lighting for edge highlight
-                    newInstance.setParameter("rimColor", DEFAULT_RIM_COLOR[0], DEFAULT_RIM_COLOR[1], DEFAULT_RIM_COLOR[2])
-                    newInstance.setParameter("rimPower", DEFAULT_RIM_POWER)
-                    newInstance.setParameter("rimLift", DEFAULT_RIM_LIFT)
+                    // Use MToon extension values if available, otherwise fall back to defaults
+                    if (matInfo?.isMToon == true) {
+                        // Shade color from VRM extension
+                        val shade = matInfo.shadeColorFactor ?: floatArrayOf(
+                            baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.7f
+                        )
+                        newInstance.setParameter("shadeColor", shade[0], shade[1], shade[2], 1f)
+                        
+                        // Shading parameters from VRM extension
+                        newInstance.setParameter("shadingToony", matInfo.shadingToonyFactor)
+                        newInstance.setParameter("shadingShift", matInfo.shadingShiftFactor)
+                        newInstance.setParameter("giEqualization", matInfo.giEqualizationFactor)
+                        
+                        // Rim lighting from VRM extension
+                        val rim = matInfo.parametricRimColorFactor ?: floatArrayOf(0f, 0f, 0f)
+                        newInstance.setParameter("rimColor", rim[0], rim[1], rim[2])
+                        newInstance.setParameter("rimPower", matInfo.parametricRimFresnelPowerFactor)
+                        newInstance.setParameter("rimLift", matInfo.parametricRimLiftFactor)
+                        newInstance.setParameter("rimLightingMix", matInfo.rimLightingMixFactor)
+                        
+                        // Emissive from glTF material
+                        val emissive = matInfo.emissiveFactor ?: floatArrayOf(0f, 0f, 0f)
+                        newInstance.setParameter("emissiveColor", emissive[0], emissive[1], emissive[2])
+                        
+                        // Shade texture (from VRMC_materials_mtoon shadeMultiplyTexture)
+                        val shadeTexIdx = matInfo.shadeMultiplyTextureIndex
+                        if (shadeTexIdx != null && shadeTexIdx < parsedTextures.size) {
+                            newInstance.setParameter("shadeTexture", parsedTextures[shadeTexIdx], sampler)
+                            newInstance.setParameter("hasShadeTexture", true)
+                        } else {
+                            dummyTexture?.let { newInstance.setParameter("shadeTexture", it, sampler) }
+                            newInstance.setParameter("hasShadeTexture", false)
+                        }
+                        
+                        // Emissive texture
+                        val emissiveTexIdx = matInfo.emissiveTextureIndex
+                        if (emissiveTexIdx != null && emissiveTexIdx < parsedTextures.size) {
+                            newInstance.setParameter("emissiveTexture", parsedTextures[emissiveTexIdx], sampler)
+                            newInstance.setParameter("hasEmissiveTexture", true)
+                        } else {
+                            dummyTexture?.let { newInstance.setParameter("emissiveTexture", it, sampler) }
+                            newInstance.setParameter("hasEmissiveTexture", false)
+                        }
+                        
+                        Log.d(TAG, "Applied MToon params for '$originalMaterialName': " +
+                            "shade=${shade.contentToString()}, toony=${matInfo.shadingToonyFactor}, " +
+                            "shift=${matInfo.shadingShiftFactor}")
+                    } else {
+                        // Non-MToon material: use sensible defaults
+                        newInstance.setParameter("shadeColor", 
+                            baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
+                        newInstance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
+                        newInstance.setParameter("shadingShift", DEFAULT_SHADE_SHIFT)
+                        newInstance.setParameter("giEqualization", 0.9f)
+                        newInstance.setParameter("rimColor", DEFAULT_RIM_COLOR[0], DEFAULT_RIM_COLOR[1], DEFAULT_RIM_COLOR[2])
+                        newInstance.setParameter("rimPower", DEFAULT_RIM_POWER)
+                        newInstance.setParameter("rimLift", DEFAULT_RIM_LIFT)
+                        newInstance.setParameter("rimLightingMix", 1.0f)
+                        newInstance.setParameter("emissiveColor", 0f, 0f, 0f)
+                        dummyTexture?.let { 
+                            newInstance.setParameter("shadeTexture", it, sampler)
+                            newInstance.setParameter("emissiveTexture", it, sampler) 
+                        }
+                        newInstance.setParameter("hasShadeTexture", false)
+                        newInstance.setParameter("hasEmissiveTexture", false)
+                    }
                 }
                 
-                // Additional parameters for full MToon materials
+                // Additional parameters for old full MToon materials (legacy path)
                 if (isFullMToon) {
-                    newInstance.setParameter("shadeColor", 
-                        baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
-                    newInstance.setParameter("shadeToony", DEFAULT_SHADE_TOONY)
-                    newInstance.setParameter("shadeShift", DEFAULT_SHADE_SHIFT)
+                    val shade = matInfo?.shadeColorFactor ?: floatArrayOf(
+                        baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.7f
+                    )
+                    newInstance.setParameter("shadeColor", shade[0], shade[1], shade[2], 1f)
+                    newInstance.setParameter("shadeToony", matInfo?.shadingToonyFactor ?: DEFAULT_SHADE_TOONY)
+                    newInstance.setParameter("shadeShift", matInfo?.shadingShiftFactor ?: DEFAULT_SHADE_SHIFT)
                     newInstance.setParameter("rimColor", DEFAULT_RIM_COLOR[0], DEFAULT_RIM_COLOR[1], DEFAULT_RIM_COLOR[2])
                     newInstance.setParameter("rimPower", DEFAULT_RIM_POWER)
                     newInstance.setParameter("rimLift", DEFAULT_RIM_LIFT)
