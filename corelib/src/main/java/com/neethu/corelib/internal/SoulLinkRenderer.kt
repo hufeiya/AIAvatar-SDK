@@ -6,6 +6,10 @@ import android.view.Choreographer
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
 import com.google.android.filament.Skybox
+import com.google.android.filament.gltfio.AssetLoader
+import com.google.android.filament.gltfio.FilamentAsset
+import com.google.android.filament.gltfio.ResourceLoader
+import com.google.android.filament.gltfio.UbershaderProvider
 import com.google.android.filament.utils.KTX1Loader
 import com.google.android.filament.utils.ModelViewer
 import java.nio.ByteBuffer
@@ -50,6 +54,12 @@ internal class SoulLinkRenderer(
     // Expression (morph target / blend shape) support
     private var expressionManager: VrmExpressionManager? = null
 
+    // Scene (environment/background GLB) support
+    private var sceneAsset: FilamentAsset? = null
+    private var sceneAssetLoader: AssetLoader? = null
+    private var sceneResourceLoader: ResourceLoader? = null
+    private val sceneReadyRenderables = IntArray(128)
+
     companion object {
         init {
             com.google.android.filament.utils.Utils.init()
@@ -84,6 +94,9 @@ internal class SoulLinkRenderer(
 
             // Update expression morph weights each frame
             expressionManager?.update()
+
+            // Progressively populate scene entities as textures become ready
+            populateSceneEntities()
 
             modelViewer.render(frameTimeNanos)
             Choreographer.getInstance().postFrameCallback(this)
@@ -392,6 +405,81 @@ internal class SoulLinkRenderer(
         vrmaEngine?.stop()
     }
 
+    // ── Scene (Environment/Background) API ────────────────────────────────
+
+    /**
+     * Load a GLB scene (environment/background) from assets.
+     * The scene is rendered alongside the current model in the same Filament scene.
+     * @param assetsPath Path to the .glb scene file in assets.
+     */
+    fun loadScene(assetsPath: String) {
+        // Remove any existing scene first
+        removeScene()
+
+        val engine = modelViewer.engine
+
+        // Create dedicated loaders for scene if needed
+        if (sceneAssetLoader == null) {
+            val materialProvider = UbershaderProvider(engine)
+            sceneAssetLoader = AssetLoader(engine, materialProvider, EntityManager.get())
+        }
+        if (sceneResourceLoader == null) {
+            sceneResourceLoader = ResourceLoader(engine, true)
+        }
+
+        try {
+            val assets = surfaceView.context.assets
+            assets.open(assetsPath).use { input ->
+                val bytes = input.readBytes()
+                val buffer = ByteBuffer.wrap(bytes)
+
+                val asset = sceneAssetLoader?.createAsset(buffer)
+                if (asset != null) {
+                    sceneResourceLoader?.asyncBeginLoad(asset)
+                    asset.releaseSourceData()
+                    sceneAsset = asset
+                    android.util.Log.i("SoulLinkRenderer",
+                        "Scene loaded: $assetsPath (${asset.entities.size} entities)")
+                } else {
+                    android.util.Log.e("SoulLinkRenderer", "Failed to create scene asset: $assetsPath")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Failed to load scene: $assetsPath", e)
+        }
+    }
+
+    /**
+     * Remove the currently loaded scene from the Filament scene.
+     */
+    fun removeScene() {
+        sceneAsset?.let { asset ->
+            sceneResourceLoader?.asyncCancelLoad()
+            sceneResourceLoader?.evictResourceData()
+            modelViewer.scene.removeEntities(asset.entities)
+            sceneAssetLoader?.destroyAsset(asset)
+            android.util.Log.i("SoulLinkRenderer", "Scene removed")
+        }
+        sceneAsset = null
+    }
+
+    /**
+     * Progressively add scene entity renderables to the Filament scene
+     * as their textures/resources become ready.
+     */
+    private fun populateSceneEntities() {
+        sceneResourceLoader?.asyncUpdateLoad()
+        sceneAsset?.let { asset ->
+            var count: Int
+            do {
+                count = asset.popRenderables(sceneReadyRenderables)
+                if (count > 0) {
+                    modelViewer.scene.addEntities(sceneReadyRenderables.take(count).toIntArray())
+                }
+            } while (count > 0)
+        }
+    }
+
     // ── Lifecycle ────────────────────────────────────────────────────────
 
     private fun startRendering() {
@@ -412,6 +500,11 @@ internal class SoulLinkRenderer(
 
     override fun onDestroy(owner: LifecycleOwner) {
         stopRendering()
+        removeScene()
+        sceneResourceLoader?.destroy()
+        sceneResourceLoader = null
+        sceneAssetLoader?.destroy()
+        sceneAssetLoader = null
         mtoonHelper?.destroy()
         mtoonHelper = null
     }

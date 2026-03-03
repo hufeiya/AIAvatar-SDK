@@ -212,6 +212,39 @@ class AvatarController {
     fun stopVrmaAnimation() {
         renderer?.stopVrmaAnimation()
     }
+
+    // ── Public API: Scene (Environment/Background) ───────────────────────
+
+    /**
+     * Load a GLB scene (environment/background) from the app's `assets/` directory.
+     *
+     * The scene is rendered alongside the current model in the same Filament scene.
+     * Loading a new scene automatically removes the previously loaded scene.
+     *
+     * @param assetPath Relative path inside `assets/`, e.g. `"scene/living_room.glb"`.
+     */
+    fun loadScene(assetPath: String) {
+        val r = renderer ?: return
+        r.loadScene(assetPath)
+        // Update state to include scene path
+        val current = _state.value
+        if (current is AvatarState.Ready) {
+            _state.value = current.copy(scenePath = assetPath)
+        }
+    }
+
+    /**
+     * Remove the currently loaded scene (environment/background).
+     */
+    fun removeScene() {
+        val r = renderer ?: return
+        r.removeScene()
+        // Update state to clear scene path
+        val current = _state.value
+        if (current is AvatarState.Ready) {
+            _state.value = current.copy(scenePath = null)
+        }
+    }
 }
 
 /**

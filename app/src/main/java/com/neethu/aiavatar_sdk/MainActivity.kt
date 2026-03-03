@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -50,7 +51,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Which panel is currently shown */
-private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS }
+private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES }
 
 @Composable
 private fun DemoScreen(modifier: Modifier = Modifier) {
@@ -82,9 +83,22 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    // List all .glb files under assets/scene/
+    val sceneFiles = remember {
+        try {
+            context.assets.list("scene")
+                ?.filter { it.endsWith(".glb") }
+                ?.sorted()
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     var selectedModel by remember { mutableStateOf("model.glb") }
     var selectedAnimation by remember { mutableStateOf<String?>(null) }
     var selectedExpression by remember { mutableStateOf<String?>(null) }
+    var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
 
     // Preset expression names (used as fallback if model has none)
@@ -106,6 +120,13 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         controller.loadModel("vrms/$selectedModel")
     }
 
+    // Load the selected scene whenever it changes
+    LaunchedEffect(selectedScene) {
+        selectedScene?.let { scene ->
+            controller.loadScene("scene/$scene")
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         // 3D Avatar (full-screen background)
         AvatarView(
@@ -122,6 +143,23 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.End
         ) {
+            // Scene FAB (🏠 Home icon)
+            SmallFloatingActionButton(
+                onClick = {
+                    activePanel = if (activePanel == PanelType.SCENES) PanelType.NONE else PanelType.SCENES
+                },
+                shape = CircleShape,
+                containerColor = if (activePanel == PanelType.SCENES)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (activePanel == PanelType.SCENES) Icons.Default.Close else Icons.Default.Home,
+                    contentDescription = if (activePanel == PanelType.SCENES) "Hide scenes" else "Show scenes"
+                )
+            }
+
             // Expression FAB (😊 Face icon)
             SmallFloatingActionButton(
                 onClick = {
@@ -245,6 +283,28 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
                         controller.setExpression(name, 1.0f)
                         selectedExpression = name
                     }
+                }
+            )
+        }
+
+        // Scene selector overlay at the bottom
+        AnimatedVisibility(
+            visible = activePanel == PanelType.SCENES,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
+        ) {
+            ListPanel(
+                title = "Scenes",
+                items = sceneFiles,
+                selectedItem = selectedScene,
+                displayName = { it.removeSuffix(".glb").replace("_", " ") },
+                onItemClick = { fileName ->
+                    selectedScene = fileName
+                    activePanel = PanelType.NONE
                 }
             )
         }

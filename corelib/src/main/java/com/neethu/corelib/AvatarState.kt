@@ -31,7 +31,8 @@ sealed class AvatarState {
      */
     data class Ready(
         val animationCount: Int,
-        val expressions: List<String> = emptyList()
+        val expressions: List<String> = emptyList(),
+        val scenePath: String? = null
     ) : AvatarState()
 
     /** An error occurred during model loading or rendering setup. */
