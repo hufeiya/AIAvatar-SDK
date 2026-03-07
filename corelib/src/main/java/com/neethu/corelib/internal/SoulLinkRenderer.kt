@@ -218,6 +218,16 @@ internal class SoulLinkRenderer(
             buffer.rewind()
             val loadBuffer = GlbBoneCuller.cullUnusedBones(buffer) ?: buffer.also { it.rewind() }
 
+            // Clear old physics and animation state before loading the new model.
+            // This prevents the Choreographer from trying to access destroyed entities
+            // if the ensuing initialization crashes or throws an exception.
+            stopAnimation()
+            stopVrmaAnimation()
+            vrmaEngine = null
+            expressionManager = null
+            springBoneManager = null
+            animator = null
+
             // Load model into Filament
             modelViewer.loadModelGlb(loadBuffer)
             modelViewer.transformToUnitCube()
