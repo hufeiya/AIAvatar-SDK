@@ -92,8 +92,8 @@ internal class SoulLinkRenderer(
                 }
             }
 
-            // Update expression morph weights each frame
-            expressionManager?.update()
+            // Update expression morph weights each frame (with smooth transitions)
+            expressionManager?.update(frameTimeNanos)
 
             // Progressively populate scene entities as textures become ready
             populateSceneEntities()
@@ -349,6 +349,14 @@ internal class SoulLinkRenderer(
      */
     fun getAvailableExpressions(): List<String> {
         return expressionManager?.getAvailableExpressions() ?: emptyList()
+    }
+
+    /**
+     * Set the duration for expression transitions.
+     * @param durationMs Transition duration in milliseconds. Use 0 for instant.
+     */
+    fun setExpressionTransitionDuration(durationMs: Long) {
+        expressionManager?.setTransitionDuration(durationMs)
     }
 
     /**

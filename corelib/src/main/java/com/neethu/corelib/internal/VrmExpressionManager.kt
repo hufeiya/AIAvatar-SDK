@@ -54,8 +54,17 @@ internal class VrmExpressionManager(
     /** All parsed expressions keyed by name */
     private var expressions: Map<String, VrmExpression> = emptyMap()
 
-    /** Currently active expression weights: name → weight (0.0–1.0) */
-    private val activeWeights = mutableMapOf<String, Float>()
+    /** Target expression weights (what we want to reach): name → weight (0.0–1.0) */
+    private val targetWeights = mutableMapOf<String, Float>()
+
+    /** Current (interpolated) expression weights actually applied this frame */
+    private val currentWeights = mutableMapOf<String, Float>()
+
+    /** Transition duration in milliseconds (how long to blend from current to target) */
+    private var transitionDurationMs: Long = 300L
+
+    /** Last frame timestamp in nanoseconds for delta time computation */
+    private var lastUpdateTimeNs: Long = 0L
 
     /** Filament entity for each mesh index */
     private var meshEntities: Map<Int, Int> = emptyMap()
@@ -234,27 +243,37 @@ internal class VrmExpressionManager(
 
     /**
      * Set expression weight. Use weight=1.0 for full expression, 0.0 to clear.
+     * The transition to this weight will be smoothly interpolated over [transitionDurationMs].
      */
     fun setExpression(name: String, weight: Float) {
         if (weight <= 0f) {
-            activeWeights.remove(name)
+            targetWeights.remove(name)
         } else {
-            activeWeights[name] = weight.coerceIn(0f, 1f)
+            targetWeights[name] = weight.coerceIn(0f, 1f)
         }
     }
 
     /**
-     * Clear a specific expression.
+     * Clear a specific expression (smoothly fades out).
      */
     fun clearExpression(name: String) {
-        activeWeights.remove(name)
+        targetWeights.remove(name)
     }
 
     /**
-     * Clear all active expressions (return to neutral).
+     * Clear all active expressions (smoothly return to neutral).
      */
     fun clearAllExpressions() {
-        activeWeights.clear()
+        targetWeights.clear()
+    }
+
+    /**
+     * Set the duration of expression transitions in milliseconds.
+     * Use 0 for instant transitions (no interpolation).
+     * @param durationMs Transition duration in milliseconds. Default is 300ms.
+     */
+    fun setTransitionDuration(durationMs: Long) {
+        transitionDurationMs = durationMs.coerceAtLeast(0L)
     }
 
     /**
@@ -267,14 +286,54 @@ internal class VrmExpressionManager(
     /**
      * Update morph weights on the Filament renderables.
      * Call this once per frame from the choreographer callback.
+     *
+     * Smoothly interpolates current weights toward target weights each frame.
+     *
+     * @param frameTimeNanos Current frame timestamp in nanoseconds (from Choreographer).
      */
-    fun update() {
-        if (activeWeights.isEmpty() && expressions.isEmpty()) return
+    fun update(frameTimeNanos: Long) {
+        // Skip if nothing to do: no targets, no current weights fading out, no expressions parsed
+        if (targetWeights.isEmpty() && currentWeights.isEmpty() && expressions.isEmpty()) return
 
+        // ── Interpolate current weights toward targets ────────────────────
+        val deltaNs = if (lastUpdateTimeNs > 0L) frameTimeNanos - lastUpdateTimeNs else 0L
+        lastUpdateTimeNs = frameTimeNanos
+
+        if (transitionDurationMs <= 0L || deltaNs <= 0L) {
+            // Instant mode: snap current weights to match targets
+            currentWeights.clear()
+            currentWeights.putAll(targetWeights)
+        } else {
+            val deltaSeconds = deltaNs.toFloat() / 1_000_000_000f
+            val transitionSeconds = transitionDurationMs.toFloat() / 1000f
+            // Compute smoothing factor: how far to move toward target this frame
+            // Using a simple lerp rate: alpha = deltaTime / transitionDuration, clamped to [0,1]
+            val alpha = (deltaSeconds / transitionSeconds).coerceIn(0f, 1f)
+
+            // Lerp existing current weights toward their targets (or toward 0 if no target)
+            val toRemove = mutableListOf<String>()
+            for ((name, current) in currentWeights) {
+                val target = targetWeights[name] ?: 0f
+                val newValue = current + (target - current) * alpha
+                if (newValue < 0.001f && target <= 0f) {
+                    toRemove.add(name)
+                } else {
+                    currentWeights[name] = newValue
+                }
+            }
+            toRemove.forEach { currentWeights.remove(it) }
+
+            // Add any new target expressions not yet in current weights
+            for ((name, target) in targetWeights) {
+                if (name !in currentWeights) {
+                    // Start from 0 and lerp toward target
+                    currentWeights[name] = target * alpha
+                }
+            }
+        }
+
+        // ── Build accumulated morph weights per entity ────────────────────
         val rm = engine.renderableManager
-
-        // Build accumulated weights per entity
-        // Start with base weights, then layer on active expressions
         val entityWeights = mutableMapOf<Int, FloatArray>()
 
         // Initialize all bound entities with base weights
@@ -284,8 +343,8 @@ internal class VrmExpressionManager(
             entityWeights[entity] = weights
         }
 
-        // Accumulate active expression weights
-        for ((name, expressionWeight) in activeWeights) {
+        // Accumulate interpolated expression weights
+        for ((name, expressionWeight) in currentWeights) {
             val expression = expressions[name] ?: continue
             for (bind in expression.binds) {
                 val entity = meshEntities[bind.meshIndex] ?: continue
@@ -293,7 +352,6 @@ internal class VrmExpressionManager(
                 val count = entityMorphTargetCount[entity] ?: continue
 
                 if (bind.morphTargetIndex < count) {
-                    // Blend: add the expression's contribution scaled by expression weight
                     weights[bind.morphTargetIndex] =
                         (weights[bind.morphTargetIndex] + bind.weight * expressionWeight)
                             .coerceIn(0f, 1f)

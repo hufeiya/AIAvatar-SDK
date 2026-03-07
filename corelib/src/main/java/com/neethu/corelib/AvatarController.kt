@@ -184,6 +184,18 @@ class AvatarController {
         return renderer?.getAvailableExpressions() ?: emptyList()
     }
 
+    /**
+     * Set the transition duration for expression blending.
+     *
+     * When switching expressions, the morph weights will smoothly interpolate
+     * over this duration instead of changing instantly.
+     *
+     * @param durationMs Duration in milliseconds. Default is 300ms. Use 0 for instant.
+     */
+    fun setExpressionTransitionDuration(durationMs: Long) {
+        renderer?.setExpressionTransitionDuration(durationMs)
+    }
+
     // ── Public API: VRMA Animation ───────────────────────────────────────
 
     /**
