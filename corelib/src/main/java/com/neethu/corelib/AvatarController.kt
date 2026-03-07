@@ -225,6 +225,18 @@ class AvatarController {
         renderer?.stopVrmaAnimation()
     }
 
+    // ── Public API: Spring Bone ──────────────────────────────────────────
+
+    /**
+     * Enable or disable spring bone physics simulation.
+     * When disabled, hair and clothing will remain static.
+     *
+     * @param enabled `true` to enable spring bone simulation, `false` to disable.
+     */
+    fun setSpringBoneEnabled(enabled: Boolean) {
+        renderer?.setSpringBoneEnabled(enabled)
+    }
+
     // ── Public API: Scene (Environment/Background) ───────────────────────
 
     /**

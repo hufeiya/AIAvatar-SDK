@@ -54,6 +54,10 @@ internal class SoulLinkRenderer(
     // Expression (morph target / blend shape) support
     private var expressionManager: VrmExpressionManager? = null
 
+    // Spring bone physics support
+    private var springBoneManager: VrmSpringBoneManager? = null
+    private var lastFrameTimeNanos: Long = 0L
+
     // Scene (environment/background GLB) support
     private var sceneAsset: FilamentAsset? = null
     private var sceneAssetLoader: AssetLoader? = null
@@ -94,6 +98,18 @@ internal class SoulLinkRenderer(
 
             // Update expression morph weights each frame (with smooth transitions)
             expressionManager?.update(frameTimeNanos)
+
+            // Spring bone physics — runs after animation, before render
+            if (lastFrameTimeNanos > 0L) {
+                val dt = ((frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000.0f)
+                    .coerceIn(0.001f, 0.05f)
+                springBoneManager?.update(dt)
+                // Re-propagate bone matrices after spring bone modifies transforms
+                if (springBoneManager != null) {
+                    animator?.updateBoneMatrices()
+                }
+            }
+            lastFrameTimeNanos = frameTimeNanos
 
             // Progressively populate scene entities as textures become ready
             populateSceneEntities()
@@ -256,6 +272,15 @@ internal class SoulLinkRenderer(
                 expressionManager = VrmExpressionManager(modelViewer.engine).also { exprMgr ->
                     exprMgr.parseFromGlb(bytes)
                     exprMgr.bindToAsset(asset, bytes)
+                }
+
+                // Initialize spring bone physics manager
+                if (config.enableSpringBone) {
+                    springBoneManager = VrmSpringBoneManager(modelViewer.engine).also { mgr ->
+                        mgr.parseFromGlb(bytes)
+                        mgr.expandVrm0Chains(asset)
+                        mgr.bindToAsset(asset, bytes)
+                    }
                 }
             }
 
@@ -515,5 +540,12 @@ internal class SoulLinkRenderer(
         sceneAssetLoader = null
         mtoonHelper?.destroy()
         mtoonHelper = null
+        springBoneManager = null
+    }
+
+    // ── Spring Bone API ──────────────────────────────────────────────────
+
+    fun setSpringBoneEnabled(enabled: Boolean) {
+        springBoneManager?.setEnabled(enabled)
     }
 }
