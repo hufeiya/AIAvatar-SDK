@@ -269,6 +269,16 @@ class AvatarController {
             _state.value = current.copy(scenePath = null)
         }
     }
+
+    // ── Public API: Interaction ──────────────────────────────────────────
+
+    /**
+     * Enable or disable drag mode. When enabled, touching the screen translates
+     * the avatar in world space instead of rotating the camera.
+     */
+    fun setDragMode(enabled: Boolean) {
+        renderer?.isDragMode = enabled
+    }
 }
 
 /**

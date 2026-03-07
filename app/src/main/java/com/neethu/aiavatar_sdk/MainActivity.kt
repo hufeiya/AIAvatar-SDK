@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -100,6 +101,7 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     var selectedExpression by remember { mutableStateOf<String?>(null) }
     var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
+    var isDragMode by remember { mutableStateOf(false) }
 
     // Preset expression names (used as fallback if model has none)
     val presetExpressions = remember {
@@ -134,6 +136,28 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             controller = controller,
             config = AvatarConfig(iblPath = "default_env.ktx")
         )
+
+        LaunchedEffect(isDragMode) {
+            controller.setDragMode(isDragMode)
+        }
+
+        // Drag mode FAB at bottom-start
+        SmallFloatingActionButton(
+            onClick = { isDragMode = !isDragMode },
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(16.dp),
+            shape = CircleShape,
+            containerColor = if (isDragMode)
+                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+            else
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+        ) {
+            Icon(
+                imageVector = if (isDragMode) Icons.Default.Close else Icons.Default.Build,
+                contentDescription = if (isDragMode) "Exit drag mode" else "Enter drag mode"
+            )
+        }
 
         // Row of FABs at bottom-end
         Column(

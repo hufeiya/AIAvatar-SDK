@@ -64,6 +64,11 @@ internal class SoulLinkRenderer(
     private var sceneResourceLoader: ResourceLoader? = null
     private val sceneReadyRenderables = IntArray(128)
 
+    // Drag mode support
+    var isDragMode: Boolean = false
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+
     companion object {
         init {
             com.google.android.filament.utils.Utils.init()
@@ -126,8 +131,35 @@ internal class SoulLinkRenderer(
         }
         if (config.enableTouch) {
             surfaceView.setOnTouchListener { _, event ->
-                modelViewer.onTouchEvent(event)
-                true
+                if (isDragMode) {
+                    when (event.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN -> {
+                            lastTouchX = event.x
+                            lastTouchY = event.y
+                        }
+                        android.view.MotionEvent.ACTION_MOVE -> {
+                            val dx = event.x - lastTouchX
+                            val dy = event.y - lastTouchY
+                            lastTouchX = event.x
+                            lastTouchY = event.y
+                            modelViewer.asset?.let { asset ->
+                                val tm = modelViewer.engine.transformManager
+                                val instance = tm.getInstance(asset.root)
+                                if (instance != 0) {
+                                    val mat = FloatArray(16)
+                                    tm.getTransform(instance, mat)
+                                    mat[12] += dx * 0.005f
+                                    mat[13] -= dy * 0.005f
+                                    tm.setTransform(instance, mat)
+                                }
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    modelViewer.onTouchEvent(event)
+                    true
+                }
             }
         }
     }
