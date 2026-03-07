@@ -591,13 +591,13 @@ internal class VrmSpringBoneManager(
             val capsule = shape.getAsJsonObject("capsule")
 
             if (sphere != null) {
-                val offset = parseVec3(sphere.getAsJsonArray("offset"))
+                val offset = parseVec3(sphere.get("offset"))
                 val radius = sphere.get("radius")?.asFloat ?: 0f
                 parsedColliders.add(SpringCollider(nodeIdx, offset, radius, null))
             } else if (capsule != null) {
-                val offset = parseVec3(capsule.getAsJsonArray("offset"))
+                val offset = parseVec3(capsule.get("offset"))
                 val radius = capsule.get("radius")?.asFloat ?: 0f
-                val tail = parseVec3(capsule.getAsJsonArray("tail"))
+                val tail = parseVec3(capsule.get("tail"))
                 parsedColliders.add(SpringCollider(nodeIdx, offset, radius, tail))
             }
         }
@@ -630,7 +630,7 @@ internal class VrmSpringBoneManager(
                     nodeIndex = nodeIdx,
                     stiffness = jObj.get("stiffness")?.asFloat ?: 1.0f,
                     gravityPower = jObj.get("gravityPower")?.asFloat ?: 0f,
-                    gravityDir = parseVec3(jObj.getAsJsonArray("gravityDir"), default = floatArrayOf(0f, -1f, 0f)),
+                    gravityDir = parseVec3(jObj.get("gravityDir"), default = floatArrayOf(0f, -1f, 0f)),
                     dragForce = jObj.get("dragForce")?.asFloat ?: 0.5f,
                     hitRadius = jObj.get("hitRadius")?.asFloat ?: 0f
                 ))
@@ -667,7 +667,7 @@ internal class VrmSpringBoneManager(
 
             obj.getAsJsonArray("colliders")?.forEach { cEl ->
                 val cObj = cEl.asJsonObject
-                val offset = parseVec3(cObj.getAsJsonArray("offset"))
+                val offset = parseVec3(cObj.get("offset"))
                 val radius = cObj.get("radius")?.asFloat ?: 0f
                 indices.add(parsedColliders.size)
                 parsedColliders.add(SpringCollider(nodeIdx, offset, radius, null))
@@ -687,7 +687,7 @@ internal class VrmSpringBoneManager(
             val comment = obj.get("comment")?.asString
             val stiffness = obj.get("stiffiness")?.asFloat ?: obj.get("stiffness")?.asFloat ?: 1.0f
             val gravityPower = obj.get("gravityPower")?.asFloat ?: 0f
-            val gravityDir = parseVec3(obj.getAsJsonArray("gravityDir"), default = floatArrayOf(0f, -1f, 0f))
+            val gravityDir = parseVec3(obj.get("gravityDir"), default = floatArrayOf(0f, -1f, 0f))
             val dragForce = obj.get("dragForce")?.asFloat ?: 0.5f
             val hitRadius = obj.get("hitRadius")?.asFloat ?: 0f
 
@@ -895,9 +895,21 @@ internal class VrmSpringBoneManager(
 
     // ── GLB JSON Parsing ─────────────────────────────────────────────────
 
-    private fun parseVec3(arr: com.google.gson.JsonArray?, default: FloatArray = floatArrayOf(0f, 0f, 0f)): FloatArray {
-        if (arr == null || arr.size() < 3) return default
-        return floatArrayOf(arr[0].asFloat, arr[1].asFloat, arr[2].asFloat)
+    private fun parseVec3(element: com.google.gson.JsonElement?, default: FloatArray = floatArrayOf(0f, 0f, 0f)): FloatArray {
+        if (element == null) return default
+        if (element.isJsonArray) {
+            val arr = element.asJsonArray
+            if (arr.size() < 3) return default
+            return floatArrayOf(arr[0].asFloat, arr[1].asFloat, arr[2].asFloat)
+        } else if (element.isJsonObject) {
+            val obj = element.asJsonObject
+            return floatArrayOf(
+                obj.get("x")?.asFloat ?: default[0],
+                obj.get("y")?.asFloat ?: default[1],
+                obj.get("z")?.asFloat ?: default[2]
+            )
+        }
+        return default
     }
 
     private fun parseGlbJson(glbBytes: ByteArray): JsonObject? {
