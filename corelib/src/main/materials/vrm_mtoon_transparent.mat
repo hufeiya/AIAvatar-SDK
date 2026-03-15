@@ -1,9 +1,8 @@
 material {
-    name : VrmMToon,
+    name : VrmMToonTransparent,
     shadingModel : lit,
     customSurfaceShading : true,
-    blending : masked,
-    maskThreshold : 0.5,
+    blending : transparent,
     doubleSided : true,
     parameters : [
         { type : float4, name : baseColor },

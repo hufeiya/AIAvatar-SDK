@@ -102,76 +102,76 @@ val matcPath: String = run {
     "matc"
 }
 
-tasks.register<Exec>("compileMToon") {
+tasks.register<Exec>("compileVrmMtoonOpaque") {
     group = "filament"
-    description = "Compile MToon material for VRM toon shading"
+    description = "Compile VRM MToon opaque material"
     
     val materialsDir = file("src/main/materials")
     val outputDir = file("src/main/assets/materials")
     
-    inputs.file("$materialsDir/mtoon.mat")
-    outputs.file("$outputDir/mtoon.filamat")
+    inputs.file("$materialsDir/vrm_mtoon_opaque.mat")
+    outputs.file("$outputDir/vrm_mtoon_opaque.filamat")
     
     doFirst {
         outputDir.mkdirs()
-        println("Compiling MToon material using matc: $matcPath")
+        println("Compiling VRM MToon opaque material using matc: $matcPath")
     }
     
     commandLine(matcPath,
         "-p", "mobile",
         "-a", "opengl",
-        "-o", "$outputDir/mtoon.filamat",
-        "$materialsDir/mtoon.mat"
+        "-o", "$outputDir/vrm_mtoon_opaque.filamat",
+        "$materialsDir/vrm_mtoon_opaque.mat"
     )
     
     isIgnoreExitValue = false
 }
 
-tasks.register<Exec>("compileSimpleToon") {
+tasks.register<Exec>("compileVrmMtoonMasked") {
     group = "filament"
-    description = "Compile simple toon material"
+    description = "Compile VRM MToon masked (alpha-test) material"
     
     val materialsDir = file("src/main/materials")
     val outputDir = file("src/main/assets/materials")
     
-    inputs.file("$materialsDir/simple_toon.mat")
-    outputs.file("$outputDir/simple_toon.filamat")
+    inputs.file("$materialsDir/vrm_mtoon_masked.mat")
+    outputs.file("$outputDir/vrm_mtoon_masked.filamat")
     
     doFirst {
         outputDir.mkdirs()
-        println("Compiling simple toon material using matc: $matcPath")
+        println("Compiling VRM MToon masked material using matc: $matcPath")
     }
     
     commandLine(matcPath,
         "-p", "mobile",
         "-a", "opengl",
-        "-o", "$outputDir/simple_toon.filamat",
-        "$materialsDir/simple_toon.mat"
+        "-o", "$outputDir/vrm_mtoon_masked.filamat",
+        "$materialsDir/vrm_mtoon_masked.mat"
     )
     
     isIgnoreExitValue = false
 }
 
-tasks.register<Exec>("compileVrmLit") {
+tasks.register<Exec>("compileVrmMtoonTransparent") {
     group = "filament"
-    description = "Compile VRM lit (MToon-style) material"
+    description = "Compile VRM MToon transparent (alpha-blend) material"
     
     val materialsDir = file("src/main/materials")
     val outputDir = file("src/main/assets/materials")
     
-    inputs.file("$materialsDir/vrm_lit.mat")
-    outputs.file("$outputDir/vrm_lit.filamat")
+    inputs.file("$materialsDir/vrm_mtoon_transparent.mat")
+    outputs.file("$outputDir/vrm_mtoon_transparent.filamat")
     
     doFirst {
         outputDir.mkdirs()
-        println("Compiling VRM lit material using matc: $matcPath")
+        println("Compiling VRM MToon transparent material using matc: $matcPath")
     }
     
     commandLine(matcPath,
         "-p", "mobile",
         "-a", "opengl",
-        "-o", "$outputDir/vrm_lit.filamat",
-        "$materialsDir/vrm_lit.mat"
+        "-o", "$outputDir/vrm_mtoon_transparent.filamat",
+        "$materialsDir/vrm_mtoon_transparent.mat"
     )
     
     isIgnoreExitValue = false
@@ -205,5 +205,5 @@ tasks.register<Exec>("compileVrmUnlit") {
 tasks.register("compileMaterials") {
     group = "filament"
     description = "Compile all Filament materials"
-    dependsOn("compileMToon", "compileSimpleToon", "compileVrmLit", "compileVrmUnlit")
+    dependsOn("compileVrmMtoonOpaque", "compileVrmMtoonMasked", "compileVrmMtoonTransparent", "compileVrmUnlit")
 }
