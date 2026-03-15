@@ -150,7 +150,7 @@ internal class MToonMaterialHelper(
      * Apply MToon material to all renderables in a FilamentAsset (no textures).
      */
     fun applyToAsset(asset: FilamentAsset) {
-        applyToAssetWithTextures(asset, emptyList(), emptyList(), emptyList())
+        applyToAssetWithTextures(asset, emptyList(), emptyList(), emptyList(), false)
     }
     
     /**
@@ -161,7 +161,8 @@ internal class MToonMaterialHelper(
         asset: FilamentAsset,
         parsedTextures: List<Texture>,
         materialInfos: List<VrmGlbParser.MaterialInfo>,
-        primitiveInfos: List<VrmGlbParser.PrimitiveInfo>
+        primitiveInfos: List<VrmGlbParser.PrimitiveInfo>,
+        isV0Compat: Boolean = false
     ) {
         val renderableManager = engine.renderableManager
         
@@ -230,7 +231,7 @@ internal class MToonMaterialHelper(
                 
                 // --- MToon-specific parameters (skip for unlit) ---
                 if (targetMaterial !== unlitMaterial) {
-                    applyMtoonParameters(newInstance, matInfo, baseColor, parsedTextures, sampler)
+                    applyMtoonParameters(newInstance, matInfo, baseColor, parsedTextures, sampler, isV0Compat)
                 }
                 
                 renderableManager.setMaterialInstanceAt(ri, primitiveIndex, newInstance)
@@ -249,8 +250,12 @@ internal class MToonMaterialHelper(
         matInfo: VrmGlbParser.MaterialInfo?,
         baseColor: FloatArray,
         parsedTextures: List<Texture>,
-        sampler: TextureSampler
+        sampler: TextureSampler,
+        isV0Compat: Boolean = false
     ) {
+        // VRM 0.x compatibility: clamp shaded color to prevent overbright
+        instance.setParameter("v0CompatShade", isV0Compat)
+        
         if (matInfo?.isMToon == true) {
             // Use parsed MToon extension values
             val shade = matInfo.shadeColorFactor ?: floatArrayOf(
@@ -291,8 +296,10 @@ internal class MToonMaterialHelper(
             }
         } else {
             // Non-MToon but still using lit material — apply sensible defaults
+            // Note: shade color should NOT be multiplied by baseColor here;
+            // it represents a separate darker tint, and the shader mixes lit↔shade
             instance.setParameter("shadeColor",
-                baseColor[0] * 0.7f, baseColor[1] * 0.7f, baseColor[2] * 0.75f, 1f)
+                DEFAULT_SHADE_COLOR[0], DEFAULT_SHADE_COLOR[1], DEFAULT_SHADE_COLOR[2], 1f)
             instance.setParameter("shadingToony", DEFAULT_SHADE_TOONY)
             instance.setParameter("shadingShift", DEFAULT_SHADE_SHIFT)
             instance.setParameter("giEqualization", 0.9f)

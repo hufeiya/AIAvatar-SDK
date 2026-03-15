@@ -329,8 +329,10 @@ internal class SoulLinkRenderer(
             // Apply custom MToon material
             if (useMToonMaterial) {
                 modelViewer.asset?.let { asset ->
+                    // VRM 0.x models need shade clamping to prevent overbright
+                    val isV0 = vrmaEngine?.getVrmMetaVersion() == "0"
                     if (parsedVrm != null && parsedVrm.textures.isNotEmpty()) {
-                        mtoonHelper?.applyToAssetWithTextures(asset, parsedVrm.textures, materialInfos, primitiveInfos)
+                        mtoonHelper?.applyToAssetWithTextures(asset, parsedVrm.textures, materialInfos, primitiveInfos, isV0)
                     } else {
                         mtoonHelper?.applyToAsset(asset)
                     }

@@ -20,7 +20,8 @@ material {
         { type : sampler2d, name : emissiveTexture },
         { type : bool, name : flipV },
         { type : bool, name : hasShadeTexture },
-        { type : bool, name : hasEmissiveTexture }
+        { type : bool, name : hasEmissiveTexture },
+        { type : bool, name : v0CompatShade }
     ],
     requires : [
         uv0
@@ -37,27 +38,24 @@ fragment {
         return uv;
     }
     
-    // three-vrm uses linearstep instead of smoothstep for toon shading
-    // This gives a sharper, more anime-like transition
+    // Matching three-vrm: linearstep for sharp toon transitions
     float linearstep(float a, float b, float t) {
-        return clamp((t - a) / (b - a + 0.001), 0.0, 1.0);
+        return clamp((t - a) / (b - a + 0.00001), 0.0, 1.0);
     }
     
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         
-        // Sample main texture with flipped UV
         vec2 uv = getFlippedUV();
         vec4 texColor = texture(materialParams_mainTexture, uv);
         
-        // Apply base color and texture
         material.baseColor = texColor * materialParams.baseColor;
         
-        // Important: Set roughness high to avoid specular highlights
+        // No specular highlights for toon shading
         material.roughness = 1.0;
         material.metallic = 0.0;
         
-        // Emissive goes here (NOT in surfaceShading which is called per-light)
+        // Emissive (set here, NOT in surfaceShading which is per-light)
         vec3 emissive = materialParams.emissiveColor;
         if (materialParams.hasEmissiveTexture) {
             emissive *= texture(materialParams_emissiveTexture, uv).rgb;
@@ -65,7 +63,20 @@ fragment {
         material.emissive = vec4(emissive, 0.0);
     }
 
-    // MToon custom surface shading - matches three-vrm algorithm
+    // ====================================================================
+    // MToon custom surface shading — faithful port of three-vrm algorithm
+    // ====================================================================
+    //
+    // Reference: three-vrm mtoon.frag  RE_Direct_MToon / getDiffuse / getShading
+    //
+    // Key differences from the previous implementation:
+    //   1. Use 1/PI (BRDF_Lambert) for physically correct diffuse normalization
+    //   2. Apply shadow/visibility ONLY ONCE through getShading()
+    //   3. Shade color is NOT multiplied by litColor
+    //   4. GI equalization contributes ambient
+    //   5. VRM 0.x compat: clamp result to diffuseColor
+    // ====================================================================
+    
     vec3 surfaceShading(
         const MaterialInputs materialInputs,
         const ShadingData shadingData,
@@ -73,56 +84,67 @@ fragment {
     ) {
         vec2 uv = getFlippedUV();
         
-        // Lit color from diffuse (texture * baseColor applied via material.baseColor)
+        // == Lit color (diffuseColor = baseColor * texture, already set via material.baseColor) ==
         vec3 litColor = shadingData.diffuseColor;
         
-        // Shade color: use shade texture if available, otherwise use shade color factor
+        // == Shade color: shadeColorFactor * shadeTexture (NOT multiplied by litColor) ==
+        // Three-vrm: material.shadeColor = shadeColorFactor * texture(shadeMultiplyTexture)
         vec3 shadeColor = materialParams.shadeColor.rgb;
         if (materialParams.hasShadeTexture) {
             shadeColor *= texture(materialParams_shadeTexture, uv).rgb;
-        } else {
-            // Multiply shade color with lit color for consistent shading
-            shadeColor *= litColor;
         }
         
-        // === Core MToon shading (matching three-vrm getShading function) ===
-        float NdotL = lightData.NdotL;
+        // == Core MToon shading (three-vrm getShading function) ==
+        float dotNL = lightData.NdotL;
         
-        // Apply shading shift
-        float shading = NdotL + materialParams.shadingShift;
+        // shading = dotNL + shadingShift
+        float shading = dotNL + materialParams.shadingShift;
         
-        // linearstep with toony factor controlling transition sharpness
-        // three-vrm uses: linearstep(-1.0 + toony, 1.0 - toony, shading)
+        // linearstep with toony factor: linearstep(-1+toony, 1-toony, shading)
         float toony = materialParams.shadingToony;
         shading = linearstep(-1.0 + toony, 1.0 - toony, shading);
         
-        // Apply shadow/visibility (three-vrm: shading *= shadow)
-        float visibility = lightData.visibility * lightData.attenuation;
-        shading *= max(visibility, 0.05);
+        // Apply shadow/visibility ONCE (three-vrm: shading *= shadow)
+        float shadow = lightData.visibility * lightData.attenuation;
+        shading *= shadow;
         
-        // Mix between shade and lit color based on shading
-        vec3 finalColor = mix(shadeColor, litColor, shading);
+        // == getDiffuse: mix shade ↔ lit, then apply light color with BRDF_Lambert ==
+        // Three-vrm: lightColor * BRDF_Lambert(mix(shadeColor, diffuseColor, shading))
+        // BRDF_Lambert(c) = c / PI — this is the physically correct normalization
+        // for diffuse lighting in a physically-based pipeline
+        vec3 lightColor = lightData.colorIntensity.rgb * lightData.colorIntensity.w;
+        vec3 mixedColor = mix(shadeColor, litColor, shading);
+        vec3 diffuse = lightColor * (mixedColor / PI);
         
-        // === Rim lighting (matching three-vrm parametric rim) ===
+        // VRM 0.x compatibility: clamp to prevent overbright
+        // Three-vrm: col = min(col, material.diffuseColor)
+        if (materialParams.v0CompatShade) {
+            diffuse = min(diffuse, litColor);
+        }
+        
+        // == Rim lighting ==
+        // Three-vrm computes rim ONCE after all lights using accumulated directSpecular.
+        // In Filament's per-light model, we approximate by using the light contribution.
         vec3 viewDir = getWorldViewVector();
         vec3 normal = getWorldNormalVector();
         float NdotV = saturate(dot(viewDir, normal));
         
-        // Parametric rim: pow(1 - NdotV + lift, power) * rimColor
         float rim = pow(saturate(1.0 - NdotV + materialParams.rimLift), materialParams.rimPower);
         
-        // three-vrm mixes rim with light contribution using rimLightingMixFactor
-        float lightContrib = max(visibility, 0.3);
-        vec3 rimMix = mix(vec3(1.0), vec3(lightContrib), materialParams.rimLightingMix);
-        finalColor += rimMix * materialParams.rimColor * rim;
+        // rimMix = mix(1.0, lightContribution, rimLightingMixFactor)
+        // Three-vrm uses accumulated irradiance; we use this light's color as a proxy
+        vec3 rimLightContrib = lightColor / PI;
+        vec3 rimMix = mix(vec3(1.0), rimLightContrib, materialParams.rimLightingMix);
+        diffuse += rimMix * materialParams.rimColor * rim;
         
-        // === Light application ===
-        // In Filament, lightData.colorIntensity.w is raw intensity in lux (e.g. 90000)
-        // We normalize it to prevent over-brightness while keeping toon look
-        vec3 lightColor = lightData.colorIntensity.rgb;
-        float lightIntensity = lightData.colorIntensity.w;
-        float normalizedIntensity = min(lightIntensity / 100000.0, 1.0);
+        // == GI equalization: blend indirect light contribution ==
+        // Three-vrm: indirectDiffuse = irradiance * BRDF_Lambert(diffuseColor)
+        // Then giEqualization mixes between shaded and unshaded indirect
+        // In Filament's surfaceShading we can approximate ambient contribution 
+        // using a scaled term based on NdotL
+        float ambientContrib = (1.0 - shadow) * materialParams.giEqualization;
+        diffuse += litColor * ambientContrib * 0.1;
         
-        return finalColor * lightColor * normalizedIntensity * max(visibility, 0.3);
+        return diffuse;
     }
 }
