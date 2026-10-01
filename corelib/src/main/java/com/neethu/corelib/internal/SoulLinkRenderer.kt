@@ -3,9 +3,12 @@ package com.neethu.corelib.internal
 import android.content.Context
 import android.view.SurfaceView
 import android.view.Choreographer
+import com.google.android.filament.ColorGrading
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
 import com.google.android.filament.Skybox
+import com.google.android.filament.ToneMapper
+import com.google.android.filament.View
 import com.google.android.filament.gltfio.AssetLoader
 import com.google.android.filament.gltfio.FilamentAsset
 import com.google.android.filament.gltfio.ResourceLoader
@@ -13,11 +16,19 @@ import com.google.android.filament.gltfio.UbershaderProvider
 import com.google.android.filament.utils.KTX1Loader
 import com.google.android.filament.utils.ModelViewer
 import java.nio.ByteBuffer
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 
+import com.neethu.corelib.AmbientOcclusionQuality
+import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarConfig
+import com.neethu.corelib.AvatarRenderSettings
+import com.neethu.corelib.LightingRig
+import com.neethu.corelib.ToneMappingMode
 
 /**
  * Internal rendering engine backed by Filament [ModelViewer].
@@ -64,16 +75,53 @@ internal class SoulLinkRenderer(
     private var lastTouchX = 0f
     private var lastTouchY = 0f
 
+    // Hot-swappable PBR render settings, driven by applyRenderSettings()
+    private var renderSettings: AvatarRenderSettings = config.renderSettings
+    private var colorGrading: ColorGrading? = null
+    private var appliedToneMapping: ToneMappingMode? = null
+
+    // Studio light rig entities (0 = not built)
+    private var keyLightEntity: Int = 0
+    private var fillLightEntity: Int = 0
+    private var rimLightEntity: Int = 0
+    private var lightRigSignature: LightRigSignature? = null
+
+    // FPS measurement (reported via onFpsUpdated every FPS_WINDOW_NANOS)
+    var onFpsUpdated: ((Int) -> Unit)? = null
+    private var fpsFrameCount = 0
+    private var fpsWindowStartNanos = 0L
+
     companion object {
         init {
             com.google.android.filament.utils.Utils.init()
         }
 
-        // Scene directional light rig.
-        private val SUN_COLOR = floatArrayOf(1.0f, 0.98f, 0.95f)
-        private const val SUN_LUX = 90_000f
+        // Camera side of the scene: ModelViewer places the model at MODEL_CENTER
+        // and the default orbit manipulator looks at it from +Z.
+        private val MODEL_CENTER = floatArrayOf(0f, 0f, -4f)
+
+        // Three-point studio rig. Direction = the way the light travels:
+        // key and fill come from above the camera side (+Z), the rim sits
+        // behind and above the model (source at -Z) to outline hair/shoulders.
+        private val KEY_COLOR = floatArrayOf(1.0f, 0.98f, 0.95f)
+        private const val KEY_LUX = 90_000f
+        private val KEY_DIRECTION = floatArrayOf(-0.5f, -1.0f, -0.5f)
         private val FILL_COLOR = floatArrayOf(0.8f, 0.85f, 1.0f)
         private const val FILL_LUX = 30_000f
+        private val FILL_DIRECTION = floatArrayOf(0.5f, -0.4f, -0.5f)
+        private val RIM_COLOR = floatArrayOf(0.95f, 0.97f, 1.0f)
+        private const val RIM_LUX = 120_000f
+        private val RIM_DIRECTION = floatArrayOf(0.0f, -0.6f, 0.8f)
+
+        private const val CONTACT_SHADOW_STEPS = 8
+        private const val AO_RADIUS = 0.15f
+
+        private const val FPS_WINDOW_NANOS = 500_000_000L
+
+        // Material name hints for applyMaterialEnhancements (VRM/glTF conventions)
+        private val EYE_NAME_HINTS = listOf("eye", "目", "瞳")
+        private val SKIN_NAME_HINTS = listOf("skin", "face", "body", "顔", "脸", "肌")
+        private val HAIR_NAME_HINTS = listOf("hair", "髪", "发")
     }
 
     private val choreoCallback = object : Choreographer.FrameCallback {
@@ -117,6 +165,8 @@ internal class SoulLinkRenderer(
             }
             lastFrameTimeNanos = frameTimeNanos
 
+            updateFps(frameTimeNanos)
+
             // Progressively populate scene entities as textures become ready
             populateSceneEntities()
 
@@ -125,8 +175,23 @@ internal class SoulLinkRenderer(
         }
     }
 
+    private fun updateFps(frameTimeNanos: Long) {
+        if (fpsWindowStartNanos == 0L) {
+            fpsWindowStartNanos = frameTimeNanos
+            fpsFrameCount = 0
+        }
+        fpsFrameCount++
+        val elapsed = frameTimeNanos - fpsWindowStartNanos
+        if (elapsed >= FPS_WINDOW_NANOS) {
+            onFpsUpdated?.invoke(((fpsFrameCount * 1_000_000_000L) / elapsed).toInt())
+            fpsFrameCount = 0
+            fpsWindowStartNanos = frameTimeNanos
+        }
+    }
+
     init {
-        setupLighting()
+        setupSkybox()
+        applyRenderSettings(config.renderSettings)
         if (config.enableTouch) {
             surfaceView.setOnTouchListener { _, event ->
                 if (isDragMode) {
@@ -162,36 +227,242 @@ internal class SoulLinkRenderer(
         }
     }
 
-    private fun setupLighting() {
+    // ── Render Settings API ──────────────────────────────────────────────
+
+    /**
+     * Apply a full set of PBR render settings. Every part is hot-swappable;
+     * safe to call repeatedly with unchanged values (light entities are only
+     * rebuilt when the rig or shadow options actually change).
+     */
+    fun applyRenderSettings(settings: AvatarRenderSettings) {
+        renderSettings = settings
+        applyLighting()
+        applyIblSettings()
+        applyViewSettings()
+        applyMaterialEnhancements()
+    }
+
+    /** Identity of everything that requires rebuilding the light entities. */
+    private data class LightRigSignature(
+        val rig: LightingRig,
+        val shadowMapSize: Int,
+        val contactShadows: Boolean,
+    )
+
+    private fun applyLighting() {
+        val signature = LightRigSignature(
+            rig = renderSettings.lightingRig,
+            shadowMapSize = renderSettings.shadowMapSize,
+            contactShadows = renderSettings.contactShadows,
+        )
+        if (signature == lightRigSignature && keyLightEntity != 0) return
+        lightRigSignature = signature
+
         val engine = modelViewer.engine
+        val scene = modelViewer.scene
         val entityManager = EntityManager.get()
 
-        // Skybox
+        listOf(keyLightEntity, fillLightEntity, rimLightEntity)
+            .filter { it != 0 }
+            .forEach { entity ->
+                scene.removeEntity(entity)
+                engine.destroyEntity(entity)
+            }
+        keyLightEntity = 0
+        fillLightEntity = 0
+        rimLightEntity = 0
+
+        // Key light — the only shadow caster of the rig
+        keyLightEntity = entityManager.create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .color(KEY_COLOR[0], KEY_COLOR[1], KEY_COLOR[2])
+            .intensity(KEY_LUX)
+            .direction(KEY_DIRECTION[0], KEY_DIRECTION[1], KEY_DIRECTION[2])
+            .castShadows(true)
+            .shadowOptions(
+                LightManager.ShadowOptions().apply {
+                    mapSize = renderSettings.shadowMapSize
+                    screenSpaceContactShadows = renderSettings.contactShadows
+                    stepCount = CONTACT_SHADOW_STEPS
+                }
+            )
+            .build(engine, keyLightEntity)
+        scene.addEntity(keyLightEntity)
+
+        if (renderSettings.lightingRig != LightingRig.KEY_ONLY) {
+            fillLightEntity = entityManager.create()
+            LightManager.Builder(LightManager.Type.DIRECTIONAL)
+                .color(FILL_COLOR[0], FILL_COLOR[1], FILL_COLOR[2])
+                .intensity(FILL_LUX)
+                .direction(FILL_DIRECTION[0], FILL_DIRECTION[1], FILL_DIRECTION[2])
+                .castShadows(false)
+                .build(engine, fillLightEntity)
+            scene.addEntity(fillLightEntity)
+        }
+
+        if (renderSettings.lightingRig == LightingRig.STUDIO) {
+            rimLightEntity = entityManager.create()
+            LightManager.Builder(LightManager.Type.DIRECTIONAL)
+                .color(RIM_COLOR[0], RIM_COLOR[1], RIM_COLOR[2])
+                .intensity(RIM_LUX)
+                .direction(RIM_DIRECTION[0], RIM_DIRECTION[1], RIM_DIRECTION[2])
+                .castShadows(false)
+                .build(engine, rimLightEntity)
+            scene.addEntity(rimLightEntity)
+        }
+    }
+
+    private fun applyIblSettings() {
+        val ibl = modelViewer.scene.indirectLight ?: return
+        ibl.setIntensity(renderSettings.iblIntensity)
+        val radians = Math.toRadians(renderSettings.iblRotationDegrees.toDouble())
+        val c = cos(radians).toFloat()
+        val s = sin(radians).toFloat()
+        ibl.setRotation(floatArrayOf(c, 0f, -s, 0f, 1f, 0f, s, 0f, c))
+    }
+
+    private fun applyViewSettings() {
+        val view = modelViewer.view
+        val settings = renderSettings
+
+        // Ambient occlusion
+        view.setAmbientOcclusionOptions(
+            View.AmbientOcclusionOptions().apply {
+                enabled = settings.ambientOcclusion != AmbientOcclusionQuality.OFF
+                aoType = if (settings.ambientOcclusion == AmbientOcclusionQuality.STANDARD) {
+                    View.AmbientOcclusionOptions.AmbientOcclusionType.SAO
+                } else {
+                    View.AmbientOcclusionOptions.AmbientOcclusionType.GTAO
+                }
+                quality = if (settings.ambientOcclusion == AmbientOcclusionQuality.HIGH) {
+                    View.QualityLevel.HIGH
+                } else {
+                    View.QualityLevel.MEDIUM
+                }
+                radius = AO_RADIUS
+            }
+        )
+
+        // Bloom
+        view.setBloomOptions(
+            View.BloomOptions().apply {
+                enabled = settings.bloomEnabled
+                strength = settings.bloomStrength.coerceIn(0f, 0.5f)
+                quality = View.QualityLevel.MEDIUM
+            }
+        )
+
+        // Anti-aliasing (the three strategies are mutually exclusive)
+        val msaa = View.MultiSampleAntiAliasingOptions()
+        val taa = View.TemporalAntiAliasingOptions()
+        when (settings.antiAliasing) {
+            AntiAliasingMode.NONE -> view.antiAliasing = View.AntiAliasing.NONE
+            AntiAliasingMode.FXAA -> view.antiAliasing = View.AntiAliasing.FXAA
+            AntiAliasingMode.MSAA_4X -> {
+                view.antiAliasing = View.AntiAliasing.NONE
+                msaa.enabled = true
+                msaa.sampleCount = 4
+            }
+            AntiAliasingMode.TAA -> {
+                view.antiAliasing = View.AntiAliasing.NONE
+                taa.enabled = true
+                taa.sharpness = 0.25f
+            }
+        }
+        view.setMultiSampleAntiAliasingOptions(msaa)
+        view.setTemporalAntiAliasingOptions(taa)
+
+        // Shadow look (map size / contact shadows live on the key light entity)
+        view.setShadowType(if (settings.softShadows) View.ShadowType.PCSS else View.ShadowType.PCF)
+
+        // Depth of field, focused on the model
+        view.setDepthOfFieldOptions(
+            View.DepthOfFieldOptions().apply {
+                enabled = settings.depthOfFieldEnabled
+                maxApertureDiameter = 0.01f
+            }
+        )
+        if (settings.depthOfFieldEnabled) {
+            val eye = FloatArray(3)
+            modelViewer.camera.getPosition(eye)
+            val dx = eye[0] - MODEL_CENTER[0]
+            val dy = eye[1] - MODEL_CENTER[1]
+            val dz = eye[2] - MODEL_CENTER[2]
+            modelViewer.camera.setFocusDistance(sqrt(dx * dx + dy * dy + dz * dz))
+        }
+
+        // HDR color buffer is required for bloom/tone mapping to behave
+        view.renderQuality = view.renderQuality.apply {
+            hdrColorBuffer = View.QualityLevel.HIGH
+        }
+        view.dynamicResolutionOptions = view.dynamicResolutionOptions.apply {
+            enabled = false
+        }
+
+        applyToneMapping(settings.toneMapping)
+    }
+
+    private fun applyToneMapping(mode: ToneMappingMode) {
+        // Building the color grading LUT is not free — skip when unchanged
+        if (mode == appliedToneMapping && colorGrading != null) return
+        appliedToneMapping = mode
+        val engine = modelViewer.engine
+        val toneMapper: ToneMapper = when (mode) {
+            ToneMappingMode.LINEAR -> ToneMapper.Linear()
+            ToneMappingMode.FILMIC -> ToneMapper.Filmic()
+            ToneMappingMode.ACES -> ToneMapper.ACES()
+        }
+        val grading = ColorGrading.Builder()
+            .quality(ColorGrading.QualityLevel.HIGH)
+            .toneMapper(toneMapper)
+            .build(engine)
+        modelViewer.view.setColorGrading(grading)
+        colorGrading?.let { engine.destroyColorGrading(it) }
+        colorGrading = grading
+    }
+
+    /**
+     * Best-effort material upgrades applied to the loaded model:
+     * clear coat on eye-named materials, lower roughness on skin/hair-named
+     * materials. Only parameters actually declared by the model's material
+     * are touched, so unsupported models are left untouched.
+     */
+    private fun applyMaterialEnhancements() {
+        if (!renderSettings.enhanceMaterials) return
+        val asset: FilamentAsset = modelViewer.asset ?: return
+        val instances = asset.getInstance()?.materialInstances ?: return
+        instances.forEach { instance ->
+            val name = instance.name?.lowercase() ?: return@forEach
+            val material = instance.material
+            when {
+                EYE_NAME_HINTS.any { name.contains(it) } -> {
+                    if (material.hasParameter("clearCoat")) {
+                        instance.setParameter("clearCoat", 1.0f)
+                        if (material.hasParameter("clearCoatRoughness")) {
+                            instance.setParameter("clearCoatRoughness", 0.08f)
+                        }
+                    }
+                }
+                SKIN_NAME_HINTS.any { name.contains(it) } -> {
+                    if (material.hasParameter("roughnessFactor")) {
+                        instance.setParameter("roughnessFactor", 0.5f)
+                    }
+                }
+                HAIR_NAME_HINTS.any { name.contains(it) } -> {
+                    if (material.hasParameter("roughnessFactor")) {
+                        instance.setParameter("roughnessFactor", 0.4f)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun setupSkybox() {
         val bg = config.backgroundColor
         val skybox = Skybox.Builder()
             .color(bg[0], bg[1], bg[2], bg.getOrElse(3) { 1.0f })
-            .build(engine)
+            .build(modelViewer.engine)
         modelViewer.scene.skybox = skybox
-
-        // Main directional light
-        val sunEntity = entityManager.create()
-        LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .color(SUN_COLOR[0], SUN_COLOR[1], SUN_COLOR[2])
-            .intensity(SUN_LUX)
-            .direction(-0.5f, -1.0f, -0.5f)
-            .castShadows(true)
-            .build(engine, sunEntity)
-        modelViewer.scene.addEntity(sunEntity)
-
-        // Fill light
-        val fillEntity = entityManager.create()
-        LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .color(FILL_COLOR[0], FILL_COLOR[1], FILL_COLOR[2])
-            .intensity(FILL_LUX)
-            .direction(0.5f, -0.5f, 0.5f)
-            .castShadows(false)
-            .build(engine, fillEntity)
-        modelViewer.scene.addEntity(fillEntity)
     }
 
     // ── Public API (for AvatarController only, internal) ─────────────────
@@ -297,6 +568,8 @@ internal class SoulLinkRenderer(
         config.iblPath?.let { iblPath ->
             loadEnvironment(iblPath)
         }
+
+        applyMaterialEnhancements()
     }
 
     fun loadEnvironment(iblPath: String) {
@@ -310,26 +583,14 @@ internal class SoulLinkRenderer(
                 val iblBundle = KTX1Loader.createIndirectLight(engine, buffer)
                 val ibl = iblBundle.indirectLight
                 if (ibl != null) {
-                    ibl.intensity = 5000f
                     modelViewer.scene.indirectLight = ibl
                 }
             }
         } catch (e: Exception) {
             android.util.Log.e("SoulLinkRenderer", "Failed to load IBL from $iblPath", e)
         }
-
-        try {
-            val view = modelViewer.view
-            view.renderQuality = view.renderQuality.apply {
-                hdrColorBuffer = com.google.android.filament.View.QualityLevel.HIGH
-            }
-            view.dynamicResolutionOptions = view.dynamicResolutionOptions.apply {
-                enabled = false
-            }
-            view.toneMapping = com.google.android.filament.View.ToneMapping.ACES
-        } catch (e: Exception) {
-            android.util.Log.e("SoulLinkRenderer", "Failed to apply view settings", e)
-        }
+        applyIblSettings()
+        applyViewSettings()
     }
 
     /**
@@ -536,6 +797,21 @@ internal class SoulLinkRenderer(
         sceneAssetLoader?.destroy()
         sceneAssetLoader = null
         springBoneManager = null
+
+        val engine = modelViewer.engine
+        listOf(keyLightEntity, fillLightEntity, rimLightEntity)
+            .filter { it != 0 }
+            .forEach { entity ->
+                modelViewer.scene.removeEntity(entity)
+                engine.destroyEntity(entity)
+            }
+        keyLightEntity = 0
+        fillLightEntity = 0
+        rimLightEntity = 0
+        lightRigSignature = null
+        colorGrading?.let { engine.destroyColorGrading(it) }
+        colorGrading = null
+        appliedToneMapping = null
     }
 
     // ── Spring Bone API ──────────────────────────────────────────────────

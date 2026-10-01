@@ -12,7 +12,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,8 +35,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
+import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
@@ -64,6 +65,7 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val controller = rememberAvatarController()
     val state by controller.state.collectAsState()
+    val fps by controller.fps.collectAsState()
 
     // List all files under assets/vrms/
     val modelFiles = remember {
@@ -107,6 +109,7 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
     var isDragMode by remember { mutableStateOf(false) }
+    var renderSettings by remember { mutableStateOf(AvatarRenderSettings()) }
 
     // Preset expression names (used as fallback if model has none)
     val presetExpressions = remember {
@@ -134,16 +137,51 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    // Apply render settings to the controller; material enhancements cannot be
+    // reverted in place (material params have no read-back), so turning them
+    // off reloads the pristine model.
+    val applyRenderSettings: (AvatarRenderSettings) -> Unit = { new ->
+        val materialReverted = renderSettings.enhanceMaterials && !new.enhanceMaterials
+        renderSettings = new
+        controller.updateRenderSettings(new)
+        if (materialReverted) {
+            selectedExpression = null
+            controller.loadModel("vrms/$selectedModel", forceReload = true)
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         // 3D Avatar (full-screen background)
         AvatarView(
             modifier = Modifier.fillMaxSize(),
             controller = controller,
-            config = AvatarConfig(iblPath = "default_env.ktx")
+            config = AvatarConfig(
+                iblPath = "default_env.ktx",
+                renderSettings = renderSettings
+            )
         )
 
         LaunchedEffect(isDragMode) {
             controller.setDragMode(isDragMode)
+        }
+
+        // FPS counter badge (top-right), toggled from the settings screen
+        if (renderSettings.showFps && fps > 0) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.Black.copy(alpha = 0.45f)
+            ) {
+                Text(
+                    text = "$fps FPS",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
         }
 
         // Drag mode FAB at bottom-start
@@ -363,6 +401,8 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxSize()
         ) {
             SettingsScreen(
+                settings = renderSettings,
+                onSettingsChange = applyRenderSettings,
                 onDismiss = { activePanel = PanelType.NONE }
             )
         }
@@ -430,129 +470,5 @@ private fun ListPanel(
                 }
             }
         }
-    }
-}
-
-/**
- * Full settings screen: a dim scrim over the 3D view plus a bottom sheet of
- * options. The sheet is intentionally a separate, scrollable surface so future
- * settings sections can be appended without reworking the layout.
- */
-@Composable
-private fun SettingsScreen(
-    onDismiss: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.32f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss
-            )
-    ) {
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .fillMaxHeight(0.6f)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { /* consume taps inside the sheet so it stays open */ }
-                ),
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
-            shadowElevation = 12.dp
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onDismiss) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close settings")
-                    }
-                }
-
-                HorizontalDivider()
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Future settings sections go here — add a group with
-                    // SettingsSectionHeader + SettingsOptionRow.
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsSectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 4.dp)
-    )
-}
-
-/**
- * A selectable settings entry with title + description and a trailing radio.
- */
-@Composable
-private fun SettingsOptionRow(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val bgColor by animateColorAsState(
-        targetValue = if (selected)
-            MaterialTheme.colorScheme.primaryContainer
-        else
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        label = "settingsOptionBg"
-    )
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 15.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected)
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                else
-                    MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        RadioButton(selected = selected, onClick = null)
     }
 }

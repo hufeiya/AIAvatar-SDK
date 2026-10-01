@@ -52,6 +52,16 @@ class AvatarController {
      */
     val state: StateFlow<AvatarState> = _state.asStateFlow()
 
+    private val _fps = MutableStateFlow(0)
+
+    /**
+     * Live frame rate measured by the renderer, updated twice a second.
+     * `0` while no view is attached or rendering has not started yet.
+     * Whether the UI displays it is controlled by
+     * [AvatarRenderSettings.showFps].
+     */
+    val fps: StateFlow<Int> = _fps.asStateFlow()
+
     // ── Internal Renderer Binding ────────────────────────────────────────
 
     internal var renderer: SoulLinkRenderer? = null
@@ -65,13 +75,16 @@ class AvatarController {
      */
     internal fun attach(renderer: SoulLinkRenderer) {
         this.renderer = renderer
+        renderer.onFpsUpdated = { value -> _fps.value = value }
     }
 
     /**
      * Detach the renderer. Called internally by [AvatarView] during release.
      */
     internal fun detach() {
+        renderer?.onFpsUpdated = null
         this.renderer = null
+        _fps.value = 0
         // Don't reset state — the controller can outlive the view
     }
 
@@ -268,6 +281,24 @@ class AvatarController {
         if (current is AvatarState.Ready) {
             _state.value = current.copy(scenePath = null)
         }
+    }
+
+    // ── Public API: Render Settings ──────────────────────────────────────
+
+    /**
+     * Apply PBR render settings to the avatar view at runtime.
+     *
+     * Every part of [AvatarRenderSettings] is hot-swappable — lighting rig,
+     * shadows, SSAO/GTAO, tone mapping, bloom, anti-aliasing and depth of
+     * field take effect immediately without reloading the model.
+     * [QualityPreset] offers one-click bundles:
+     *
+     * ```kotlin
+     * controller.updateRenderSettings(QualityPreset.ULTRA.toRenderSettings())
+     * ```
+     */
+    fun updateRenderSettings(settings: AvatarRenderSettings) {
+        renderer?.applyRenderSettings(settings)
     }
 
     // ── Public API: Interaction ──────────────────────────────────────────
