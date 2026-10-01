@@ -25,8 +25,9 @@ AIAvatar-SDK/
 │       ├── cpp/                          # 占位 JNI(NativeLib.stringFromJNI),渲染全在 Kotlin
 │       └── java/com/neethu/corelib/
 │           ├── AvatarView.kt             # Compose 入口(AndroidView 包装 SurfaceView)
-│           ├── AvatarController.kt       # 公开 API:loadModel/playAnimation/setExpression...
+│           ├── AvatarController.kt       # 公开 API:loadModel/playAnimation/setRenderMode...
 │           ├── AvatarConfig.kt           # 初始化配置(iblPath/enableMToon/enableSpringBone...)
+│           ├── AvatarRenderMode.kt       # 渲染模式枚举(PBR / MTOON)
 │           ├── AvatarState.kt            # UI 状态流
 │           ├── AvatarBehavior.kt         # 交互行为
 │           └── internal/                 # 内部实现(不对外)
@@ -83,6 +84,18 @@ assets 读字节
   - `FADE`/`TRANSPARENT` → vrm_mtoon_transparent
 
 > **关键事实**:gltfio 把 glTF `alphaMode: BLEND` 映射为 `BlendingMode.FADE`(直通 alpha,见 filament 源码 `libs/gltfio/src/UbershaderProvider.cpp`)。所以 transparent 变体必须用 `blending: fade`;若用 `blending: transparent`(预乘语义)眼睛/眉毛会出现白边光晕。
+
+### 3.1 运行时切换 PBR / MToon
+
+公开 API:`AvatarController.setRenderMode(AvatarRenderMode)` / `getRenderMode()`(枚举在 `AvatarRenderMode.kt`),内部走 `SoulLinkRenderer.setRenderMode()`。切换只换 MaterialInstance,不重载模型,动画/表情/弹簧骨骼全部不受影响。机制:
+
+- **加载时**:`loadModelGlb` 之后立刻 `captureOriginalMaterials()` 把 gltfio 的 PBR ubershader 实例按 (entity, primitiveIndex) 存进 `originalMaterialSlots`;随后若当前模式是 MToon 才 `applyMToonToAsset()`。
+- **切到 MToon**:对当前 asset 重新跑一遍 §3 的 MToon 应用流程(变体选择按原始 ubershader 材质的 blendingMode,恢复后仍有效)。
+- **切到 PBR**:按 slot 恢复原始实例,然后 `MToonMaterialHelper.releaseInstances()` 销毁不再被引用的 MToon 实例(**顺序有语义**:先恢复再销毁,否则下一帧引用已销毁实例会崩)。
+- **VRM 解析是懒加载**(`ensureVrmParsed`):只有第一次真正需要 MToon 时才解码纹理并缓存到 `parsedVrm`,纯 PBR 用法零纹理开销;纹理缓存跨切换复用,**换模型时**(`loadModelGlb` 已销毁旧 asset 与 renderable)先 `releaseInstances()` + `releaseParsedVrm()` 再重建。在 MToon 实例仍被引用时销毁纹理同样会崩,顺序同理。
+- `enableMToon` 配置项语义变为**初始模式**;MToon helper 现在总是创建(若 .filamat 加载失败,`setRenderMode(MTOON)` 返回 false 并保持原模式)。
+
+Demo 的设置入口:右下角 FAB 列最上方的齿轮(约 tap 985 1060,1080×2340),设置界面是带遮罩的底部抽屉,Rendering 区单选 PBR/MToon 即时生效。
 
 ## 4. 着色器设计(three-vrm → Filament 映射)
 

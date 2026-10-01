@@ -405,20 +405,32 @@ internal class MToonMaterialHelper(
     }
     
     /**
+     * Destroy all MaterialInstances created by [applyToAsset] /
+     * [applyToAssetWithTextures], keeping the loaded .filamat materials for reuse.
+     *
+     * Only call this once nothing references the instances anymore — i.e. after
+     * the owning renderables were destroyed (model reload) or after the
+     * renderables were restored to their original materials (render mode switch).
+     * Destroying instances that are still attached to live renderables would
+     * crash the next frame.
+     */
+    fun releaseInstances() {
+        materialInstances.forEach { engine.destroyMaterialInstance(it) }
+        materialInstances.clear()
+    }
+
+    /**
      * Check if at least one MToon material variant is available.
      */
     fun isAvailable(): Boolean =
         mtoonOpaqueMaterial != null || mtoonMaskedMaterial != null || mtoonTransparentMaterial != null
-    
+
     /**
      * Clean up all material resources.
      */
     fun destroy() {
-        materialInstances.forEach { 
-            engine.destroyMaterialInstance(it)
-        }
-        materialInstances.clear()
-        
+        releaseInstances()
+
         mtoonOpaqueMaterial?.let { engine.destroyMaterial(it) }
         mtoonMaskedMaterial?.let { engine.destroyMaterial(it) }
         mtoonTransparentMaterial?.let { engine.destroyMaterial(it) }

@@ -6,10 +6,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,17 +25,20 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
+import com.neethu.corelib.AvatarRenderMode
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
@@ -52,7 +58,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Which panel is currently shown */
-private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES }
+private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, SETTINGS }
 
 @Composable
 private fun DemoScreen(modifier: Modifier = Modifier) {
@@ -102,6 +108,8 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
     var isDragMode by remember { mutableStateOf(false) }
+    // Mirrors the SDK render mode; must match AvatarConfig's enableMToon default below
+    var renderMode by remember { mutableStateOf(AvatarRenderMode.MTOON) }
 
     // Preset expression names (used as fallback if model has none)
     val presetExpressions = remember {
@@ -167,6 +175,23 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.End
         ) {
+            // Settings FAB (⚙️ gear icon) — opens the full settings screen
+            SmallFloatingActionButton(
+                onClick = {
+                    activePanel = if (activePanel == PanelType.SETTINGS) PanelType.NONE else PanelType.SETTINGS
+                },
+                shape = CircleShape,
+                containerColor = if (activePanel == PanelType.SETTINGS)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (activePanel == PanelType.SETTINGS) Icons.Default.Close else Icons.Default.Settings,
+                    contentDescription = if (activePanel == PanelType.SETTINGS) "Hide settings" else "Show settings"
+                )
+            }
+
             // Scene FAB (🏠 Home icon)
             SmallFloatingActionButton(
                 onClick = {
@@ -332,6 +357,24 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
                 }
             )
         }
+
+        // Settings screen overlay: dim scrim + bottom sheet. The 3D view stays
+        // visible above the sheet so render-mode changes can be seen live.
+        AnimatedVisibility(
+            visible = activePanel == PanelType.SETTINGS,
+            enter = fadeIn() + slideInVertically { it },
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            SettingsScreen(
+                renderMode = renderMode,
+                onRenderModeChange = { mode ->
+                    renderMode = mode
+                    controller.setRenderMode(mode)
+                },
+                onDismiss = { activePanel = PanelType.NONE }
+            )
+        }
     }
 }
 
@@ -345,8 +388,7 @@ private fun ListPanel(
     selectedItem: String?,
     displayName: (String) -> String = { it },
     onItemClick: (String) -> Unit
-) {
-    Surface(
+) {    Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
         tonalElevation = 4.dp,
@@ -397,5 +439,149 @@ private fun ListPanel(
                 }
             }
         }
+    }
+}
+
+/**
+ * Full settings screen: a dim scrim over the 3D view plus a bottom sheet of
+ * options. The sheet is intentionally a separate, scrollable surface so future
+ * settings sections can be appended without reworking the layout.
+ *
+ * Options apply immediately — the avatar stays visible behind the scrim so
+ * effects (like render-mode switches) can be previewed live.
+ */
+@Composable
+private fun SettingsScreen(
+    renderMode: AvatarRenderMode,
+    onRenderModeChange: (AvatarRenderMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.32f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss
+            )
+    ) {
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.6f)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { /* consume taps inside the sheet so it stays open */ }
+                ),
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
+            shadowElevation = 12.dp
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Settings",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close settings")
+                    }
+                }
+
+                HorizontalDivider()
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    item { SettingsSectionHeader("Rendering") }
+                    item {
+                        SettingsOptionRow(
+                            title = "PBR",
+                            subtitle = "Physically-based rendering (realistic look)",
+                            selected = renderMode == AvatarRenderMode.PBR,
+                            onClick = { onRenderModeChange(AvatarRenderMode.PBR) }
+                        )
+                    }
+                    item {
+                        SettingsOptionRow(
+                            title = "MToon",
+                            subtitle = "Anime toon shading (VRM standard)",
+                            selected = renderMode == AvatarRenderMode.MTOON,
+                            onClick = { onRenderModeChange(AvatarRenderMode.MTOON) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 4.dp)
+    )
+}
+
+/**
+ * A selectable settings entry with title + description and a trailing radio.
+ */
+@Composable
+private fun SettingsOptionRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val bgColor by animateColorAsState(
+        targetValue = if (selected)
+            MaterialTheme.colorScheme.primaryContainer
+        else
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        label = "settingsOptionBg"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 15.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected)
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                else
+                    MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        RadioButton(selected = selected, onClick = null)
     }
 }

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * - **[loadModel]** — to load a VRM/GLB model from assets.
  * - **[applyBehavior]** — to trigger animations and blend shapes.
  * - **[playAnimation]** / **[stopAnimation]** — convenience animation controls.
+ * - **[setRenderMode]** — to switch between PBR and MToon shading in real time.
  *
  * ## Usage
  * ```kotlin
@@ -268,6 +269,33 @@ class AvatarController {
         if (current is AvatarState.Ready) {
             _state.value = current.copy(scenePath = null)
         }
+    }
+
+    // ── Public API: Render Mode ───────────────────────────────────────────
+
+    /**
+     * Switch the shading pipeline in real time between PBR and MToon.
+     *
+     * The switch swaps material instances in place — the current model, its
+     * animation and its expressions are untouched and no reload happens.
+     * If no model is loaded yet, the mode is remembered and applies to the
+     * next loaded model.
+     *
+     * @param mode [AvatarRenderMode.PBR] for Filament's physically-based
+     *   shading, or [AvatarRenderMode.MTOON] for VRM toon shading.
+     * @return `true` if the mode is now in effect (or was already active).
+     */
+    fun setRenderMode(mode: AvatarRenderMode): Boolean {
+        val r = renderer ?: return false
+        return r.setRenderMode(mode)
+    }
+
+    /**
+     * The render mode currently in effect. If the renderer is not attached
+     * yet, this returns the initial mode ([AvatarConfig.enableMToon] controls it).
+     */
+    fun getRenderMode(): AvatarRenderMode {
+        return renderer?.getRenderMode() ?: AvatarRenderMode.MTOON
     }
 
     // ── Public API: Interaction ──────────────────────────────────────────
