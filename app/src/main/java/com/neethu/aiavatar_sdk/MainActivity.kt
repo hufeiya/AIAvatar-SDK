@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
-import com.neethu.corelib.AvatarRenderMode
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
@@ -108,8 +107,6 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
     var activePanel by remember { mutableStateOf(PanelType.NONE) }
     var isDragMode by remember { mutableStateOf(false) }
-    // Mirrors the SDK render mode; must match AvatarConfig's enableMToon default below
-    var renderMode by remember { mutableStateOf(AvatarRenderMode.MTOON) }
 
     // Preset expression names (used as fallback if model has none)
     val presetExpressions = remember {
@@ -358,8 +355,7 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             )
         }
 
-        // Settings screen overlay: dim scrim + bottom sheet. The 3D view stays
-        // visible above the sheet so render-mode changes can be seen live.
+        // Settings screen overlay: dim scrim + bottom sheet.
         AnimatedVisibility(
             visible = activePanel == PanelType.SETTINGS,
             enter = fadeIn() + slideInVertically { it },
@@ -367,11 +363,6 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxSize()
         ) {
             SettingsScreen(
-                renderMode = renderMode,
-                onRenderModeChange = { mode ->
-                    renderMode = mode
-                    controller.setRenderMode(mode)
-                },
                 onDismiss = { activePanel = PanelType.NONE }
             )
         }
@@ -446,14 +437,9 @@ private fun ListPanel(
  * Full settings screen: a dim scrim over the 3D view plus a bottom sheet of
  * options. The sheet is intentionally a separate, scrollable surface so future
  * settings sections can be appended without reworking the layout.
- *
- * Options apply immediately — the avatar stays visible behind the scrim so
- * effects (like render-mode switches) can be previewed live.
  */
 @Composable
 private fun SettingsScreen(
-    renderMode: AvatarRenderMode,
-    onRenderModeChange: (AvatarRenderMode) -> Unit,
     onDismiss: () -> Unit
 ) {
     Box(
@@ -506,23 +492,8 @@ private fun SettingsScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    item { SettingsSectionHeader("Rendering") }
-                    item {
-                        SettingsOptionRow(
-                            title = "PBR",
-                            subtitle = "Physically-based rendering (realistic look)",
-                            selected = renderMode == AvatarRenderMode.PBR,
-                            onClick = { onRenderModeChange(AvatarRenderMode.PBR) }
-                        )
-                    }
-                    item {
-                        SettingsOptionRow(
-                            title = "MToon",
-                            subtitle = "Anime toon shading (VRM standard)",
-                            selected = renderMode == AvatarRenderMode.MTOON,
-                            onClick = { onRenderModeChange(AvatarRenderMode.MTOON) }
-                        )
-                    }
+                    // Future settings sections go here — add a group with
+                    // SettingsSectionHeader + SettingsOptionRow.
                 }
             }
         }

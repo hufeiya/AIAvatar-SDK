@@ -19,10 +19,7 @@ import com.neethu.corelib.internal.SoulLinkRenderer
  * AvatarView(
  *     modifier = Modifier.fillMaxSize(),
  *     controller = controller,
- *     config = AvatarConfig(
- *         iblPath = "default_env.ktx",
- *         enableMToon = true
- *     )
+ *     config = AvatarConfig(iblPath = "default_env.ktx")
  * )
  *
  * LaunchedEffect(Unit) {

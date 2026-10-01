@@ -20,13 +20,11 @@ import java.nio.ByteOrder
  *    neutral look; they merely flip gltfio's gate.
  *
  * 2. **Strip `KHR_materials_unlit`.** Even with weights present, gltfio skips the morph
- *    tangent job for materials flagged unlit (`!prim.material->unlit` gate). MToon/VRM
- *    exporters routinely stamp KHR_materials_unlit on every material (MToon does its own
- *    lighting), which would leave the morph normals as garbage again — visible as scrambled
- *    matcap swirls (materials with matcapTexture) or an all-dark body (toon ramp broken).
- *    This SDK always replaces gltfio materials with its own MToon/unlit materials
- *    (MToonMaterialHelper) and detects MToon via VRMC_materials_mtoon / VRM 0.x
- *    materialProperties, so removing the extension has no effect on final shading.
+ *    tangent job for materials flagged unlit (`!prim.material->unlit` gate). VRM exporters
+ *    routinely stamp KHR_materials_unlit on every material, which would leave the morph
+ *    normals as garbage — shading corrupts as soon as an expression drives a weight
+ *    non-zero. Stripping it also lets gltfio light the model with its standard PBR
+ *    ubershader instead of flat unlit shading.
  */
 internal object GlbMorphPatcher {
 

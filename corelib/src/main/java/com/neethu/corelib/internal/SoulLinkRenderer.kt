@@ -5,7 +5,6 @@ import android.view.SurfaceView
 import android.view.Choreographer
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
-import com.google.android.filament.MaterialInstance
 import com.google.android.filament.Skybox
 import com.google.android.filament.gltfio.AssetLoader
 import com.google.android.filament.gltfio.FilamentAsset
@@ -19,7 +18,6 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 
 import com.neethu.corelib.AvatarConfig
-import com.neethu.corelib.AvatarRenderMode
 
 /**
  * Internal rendering engine backed by Filament [ModelViewer].
@@ -39,28 +37,6 @@ internal class SoulLinkRenderer(
     private var animator: com.google.android.filament.gltfio.Animator? = null
     private var startTime = System.nanoTime()
 
-    // MToon material helper for VRM toon shading. Always created so the render
-    // mode can be switched at runtime even if the model was loaded as PBR.
-    private var mtoonHelper: MToonMaterialHelper? = null
-    private var useMToonMaterial: Boolean = config.enableMToon
-
-    // Parsed VRM data (textures + material params) for the current model, kept
-    // alive so PBR↔MToon switching doesn't need to re-decode textures. Parsing
-    // itself is lazy: it only happens the first time MToon is actually applied.
-    private var parsedVrm: VrmGlbParser.ParsedVrm? = null
-    private var materialInfos: List<VrmGlbParser.MaterialInfo> = emptyList()
-    private var primitiveInfos: List<VrmGlbParser.PrimitiveInfo> = emptyList()
-    private var isV0Model: Boolean = false
-
-    // The gltfio (PBR ubershader) material instances captured right after a model
-    // loads. Restoring them is what switching back from MToon does.
-    private data class OriginalMaterialSlot(
-        val entity: Int,
-        val primitiveIndex: Int,
-        val instance: MaterialInstance
-    )
-    private var originalMaterialSlots: List<OriginalMaterialSlot> = emptyList()
-
     // Built-in animation state
     private var currentAnimationIndex: Int = -1
     private var isAnimationLooping: Boolean = true
@@ -69,7 +45,6 @@ internal class SoulLinkRenderer(
     private var vrmaParser: VrmaParser = VrmaParser()
     private var vrmaEngine: VrmaAnimationEngine? = null
     private var vrmaStartTime: Long = 0L
-    private var currentModelGlbBytes: ByteArray? = null
 
     // Expression (morph target / blend shape) support
     private var expressionManager: VrmExpressionManager? = null
@@ -94,8 +69,7 @@ internal class SoulLinkRenderer(
             com.google.android.filament.utils.Utils.init()
         }
 
-        // Scene directional light rig. Shared between light creation and MToon
-        // material normalization (MToonMaterialHelper.setLightRig).
+        // Scene directional light rig.
         private val SUN_COLOR = floatArrayOf(1.0f, 0.98f, 0.95f)
         private const val SUN_LUX = 90_000f
         private val FILL_COLOR = floatArrayOf(0.8f, 0.85f, 1.0f)
@@ -153,7 +127,6 @@ internal class SoulLinkRenderer(
 
     init {
         setupLighting()
-        setupMToonMaterial()
         if (config.enableTouch) {
             surfaceView.setOnTouchListener { _, event ->
                 if (isDragMode) {
@@ -186,23 +159,6 @@ internal class SoulLinkRenderer(
                     true
                 }
             }
-        }
-    }
-
-    private fun setupMToonMaterial() {
-        mtoonHelper = MToonMaterialHelper(modelViewer.engine, surfaceView.context)
-        try {
-            val loaded = mtoonHelper?.loadMaterial() ?: false
-            if (!loaded) {
-                android.util.Log.w("SoulLinkRenderer", "MToon material not found, using default PBR")
-                useMToonMaterial = false
-            } else {
-                // Mirror the light rig so the shader can normalize lux into three-vrm units
-                mtoonHelper?.setLightRig(SUN_COLOR, SUN_LUX, FILL_COLOR, FILL_LUX)
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("SoulLinkRenderer", "Failed to load MToon material", e)
-            useMToonMaterial = false
         }
     }
 
@@ -250,9 +206,6 @@ internal class SoulLinkRenderer(
             val bytes = input.readBytes()
             val buffer = ByteBuffer.wrap(bytes)
 
-            // Store raw bytes for VRMA bone mapping later
-            currentModelGlbBytes = bytes
-
             // Pre-process: inject default morph weights so gltfio uploads morph target
             // normals (gltfio skips that upload when mesh.weights_count == 0, which
             // corrupts shading as soon as an expression drives a weight non-zero).
@@ -277,16 +230,6 @@ internal class SoulLinkRenderer(
             modelViewer.loadModelGlb(loadBuffer)
             modelViewer.transformToUnitCube()
 
-            // loadModelGlb destroyed the previous asset together with its renderables,
-            // so the previous model's MToon material instances and parsed textures are
-            // now unreferenced and can be freed before the new model is set up.
-            mtoonHelper?.releaseInstances()
-            releaseParsedVrm()
-
-            // Capture the gltfio (PBR ubershader) instances so the render mode can
-            // be switched back and forth without reloading.
-            modelViewer.asset?.let { asset -> captureOriginalMaterials(asset) }
-
             // Get animation controller
             animator = modelViewer.animator
 
@@ -299,9 +242,6 @@ internal class SoulLinkRenderer(
             vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
             modelViewer.asset?.let { asset ->
                 vrmaEngine?.bindToModel(asset, bytes)
-
-                // VRM 0.x models need shade clamping in MToon to prevent overbright
-                isV0Model = vrmaEngine?.getVrmMetaVersion() == "0"
 
                 // VRM 0.x models face the opposite direction from VRM 1.0.
                 // Apply a 180° Y rotation to the root so the character faces the camera.
@@ -351,11 +291,6 @@ internal class SoulLinkRenderer(
                     }
                 }
             }
-
-            // Apply custom MToon material
-            if (useMToonMaterial) {
-                modelViewer.asset?.let { asset -> applyMToonToAsset(asset) }
-            }
         }
 
         // Load IBL if configured
@@ -395,118 +330,6 @@ internal class SoulLinkRenderer(
         } catch (e: Exception) {
             android.util.Log.e("SoulLinkRenderer", "Failed to apply view settings", e)
         }
-    }
-
-    // ── Render Mode (PBR / MToon) API ─────────────────────────────────────
-
-    /**
-     * Switch the shading pipeline applied to the current model in real time.
-     *
-     * The switch only swaps material instances — no reload happens, and the
-     * model's animations/expressions are unaffected. If no model is loaded yet,
-     * the mode is remembered and takes effect on the next load.
-     *
-     * @return true if the mode was applied (or already active).
-     */
-    fun setRenderMode(mode: AvatarRenderMode): Boolean {
-        val wantMToon = mode == AvatarRenderMode.MTOON
-        if (wantMToon == useMToonMaterial) return true
-
-        if (wantMToon && mtoonHelper?.isAvailable() != true) {
-            android.util.Log.w("SoulLinkRenderer", "MToon materials unavailable; keeping current render mode")
-            return false
-        }
-
-        useMToonMaterial = wantMToon
-
-        val asset = modelViewer.asset ?: return true // no model yet — applied on next load
-
-        if (wantMToon) {
-            applyMToonToAsset(asset)
-        } else {
-            restoreOriginalMaterials()
-        }
-        android.util.Log.i("SoulLinkRenderer", "Render mode switched to $mode")
-        return true
-    }
-
-    fun getRenderMode(): AvatarRenderMode =
-        if (useMToonMaterial) AvatarRenderMode.MTOON else AvatarRenderMode.PBR
-
-    /**
-     * Replace every primitive's material with the MToon variant matching the
-     * original glTF blending mode. Uses the cached VRM parse if available.
-     */
-    private fun applyMToonToAsset(asset: FilamentAsset) {
-        ensureVrmParsed()
-        val parsed = parsedVrm
-        if (parsed != null && parsed.textures.isNotEmpty()) {
-            mtoonHelper?.applyToAssetWithTextures(asset, parsed.textures, materialInfos, primitiveInfos, isV0Model)
-        } else {
-            mtoonHelper?.applyToAsset(asset)
-        }
-    }
-
-    /**
-     * Put back the gltfio (PBR) material instances captured at load time, then
-     * free the MToon instances that are no longer referenced.
-     */
-    private fun restoreOriginalMaterials() {
-        val renderableManager = modelViewer.engine.renderableManager
-        for (slot in originalMaterialSlots) {
-            val ri = renderableManager.getInstance(slot.entity)
-            if (ri == 0) continue
-            if (slot.primitiveIndex < renderableManager.getPrimitiveCount(ri)) {
-                renderableManager.setMaterialInstanceAt(ri, slot.primitiveIndex, slot.instance)
-            }
-        }
-        mtoonHelper?.releaseInstances()
-    }
-
-    private fun captureOriginalMaterials(asset: FilamentAsset) {
-        val renderableManager = modelViewer.engine.renderableManager
-        val slots = mutableListOf<OriginalMaterialSlot>()
-        for (entity in asset.entities) {
-            val ri = renderableManager.getInstance(entity)
-            if (ri == 0) continue
-            for (i in 0 until renderableManager.getPrimitiveCount(ri)) {
-                slots.add(OriginalMaterialSlot(entity, i, renderableManager.getMaterialInstanceAt(ri, i)))
-            }
-        }
-        originalMaterialSlots = slots
-    }
-
-    /**
-     * Decode VRM textures/material parameters for the current model on first need.
-     * Kept deferred so PBR-only usage never pays the texture-decoding cost.
-     */
-    private fun ensureVrmParsed() {
-        if (parsedVrm != null) return
-        val bytes = currentModelGlbBytes ?: return
-        try {
-            val parser = VrmGlbParser(modelViewer.engine)
-            val vrm = parser.parse(ByteBuffer.wrap(bytes)) ?: return
-            materialInfos = parser.getMaterialInfos(vrm.json)
-            primitiveInfos = parser.getPrimitiveMaterialMapping(vrm.json)
-            parsedVrm = vrm
-            android.util.Log.i("SoulLinkRenderer",
-                "Parsed VRM: ${vrm.textures.size} textures, ${materialInfos.size} materials, ${primitiveInfos.size} primitives")
-        } catch (e: Exception) {
-            android.util.Log.w("SoulLinkRenderer", "VRM parsing failed, using default", e)
-        }
-    }
-
-    /**
-     * Destroy the current model's parsed VRM textures and clear the cache.
-     * Must only be called once no MToon material instance references them.
-     */
-    private fun releaseParsedVrm() {
-        parsedVrm?.let { vrm ->
-            vrm.textures.forEach { modelViewer.engine.destroyTexture(it) }
-        }
-        parsedVrm = null
-        materialInfos = emptyList()
-        primitiveInfos = emptyList()
     }
 
     /**
@@ -712,9 +535,6 @@ internal class SoulLinkRenderer(
         sceneResourceLoader = null
         sceneAssetLoader?.destroy()
         sceneAssetLoader = null
-        releaseParsedVrm()
-        mtoonHelper?.destroy()
-        mtoonHelper = null
         springBoneManager = null
     }
 
