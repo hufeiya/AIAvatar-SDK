@@ -5,146 +5,157 @@ material {
     blending : opaque,
     doubleSided : true,
     parameters : [
-        { type : float4, name : baseColor },
-        { type : float4, name : shadeColor },
-        { type : float,  name : shadingToony },
-        { type : float,  name : shadingShift },
-        { type : float3, name : rimColor },
-        { type : float,  name : rimPower },
-        { type : float,  name : rimLift },
-        { type : float,  name : rimLightingMix },
-        { type : float3, name : emissiveColor },
-        { type : float,  name : giEqualization },
+        { type : float4, name : baseColorFactor },
         { type : sampler2d, name : mainTexture },
-        { type : sampler2d, name : shadeTexture },
+        { type : float3, name : shadeColorFactor },
+        { type : sampler2d, name : shadeMultiplyTexture },
+        { type : bool, name : hasShadeMultiplyTexture },
+        { type : float, name : shadingShiftFactor },
+        { type : sampler2d, name : shadingShiftTexture },
+        { type : bool, name : hasShadingShiftTexture },
+        { type : float, name : shadingShiftTextureScale },
+        { type : float, name : shadingToonyFactor },
+        { type : float3, name : parametricRimColorFactor },
+        { type : sampler2d, name : rimMultiplyTexture },
+        { type : bool, name : hasRimMultiplyTexture },
+        { type : float, name : rimLightingMixFactor },
+        { type : float, name : parametricRimFresnelPowerFactor },
+        { type : float, name : parametricRimLiftFactor },
+        { type : float3, name : matcapFactor },
+        { type : sampler2d, name : matcapTexture },
+        { type : bool, name : hasMatcapTexture },
+        { type : float3, name : emissiveFactor },
         { type : sampler2d, name : emissiveTexture },
-        { type : bool, name : flipV },
-        { type : bool, name : hasShadeTexture },
         { type : bool, name : hasEmissiveTexture },
-        { type : bool, name : v0CompatShade }
+        { type : bool, name : v0CompatShade },
+        { type : bool, name : flipV },
+        { type : float, name : lightIntensityScale },
+        { type : float3, name : lightIrradianceSum }
     ],
     requires : [
         uv0
     ]
 }
 
+// MToon shading ported from pixiv/three-vrm (packages/three-vrm-materials-mtoon, mtoon.frag).
+//
+// Mapping notes vs three-vrm:
+//  - Direct lights: surfaceShading() is invoked once per light, which mirrors three-vrm's
+//    RE_Direct_MToon() being run per light in three.js.
+//  - Rim + matcap: three-vrm accumulates unshadowed light irradiance into directSpecular and adds
+//    rim ONCE after the light loop. Filament has no post-light hook in surface materials, so rim
+//    lives in material.emissive (Filament adds emissive after all lights) and the accumulated
+//    irradiance is provided by the app via the lightIrradianceSum uniform.
+//  - Indirect light: material.specularFactor = 0 disables the IBL specular lobe, leaving
+//    IBL diffuse = diffuseColor * irradiance, i.e. three-vrm's
+//    RE_IndirectDiffuse_MToon: irradiance * BRDF_Lambert(diffuseColor).
+//  - Filament directional light intensity is in lux while three-vrm expects intensities around 1.0;
+//    lightIntensityScale converts (app sets it to 1 / referenceLux).
 fragment {
-    // Helper to get flipped UV
-    vec2 getFlippedUV() {
+    vec2 getMToonUV() {
         vec2 uv = getUV0();
         if (materialParams.flipV) {
             uv.y = 1.0 - uv.y;
         }
         return uv;
     }
-    
-    // Matching three-vrm: linearstep for sharp toon transitions
+
     float linearstep(float a, float b, float t) {
-        return clamp((t - a) / (b - a + 0.00001), 0.0, 1.0);
+        return clamp((t - a) / (b - a + 1e-5), 0.0, 1.0);
     }
-    
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        
-        vec2 uv = getFlippedUV();
-        vec4 texColor = texture(materialParams_mainTexture, uv);
-        
-        material.baseColor = texColor * materialParams.baseColor;
-        
-        // No specular highlights for toon shading
+
+        vec2 uv = getMToonUV();
+        material.baseColor = texture(materialParams_mainTexture, uv) * materialParams.baseColorFactor;
         material.roughness = 1.0;
         material.metallic = 0.0;
-        
-        // Emissive (set here, NOT in surfaceShading which is per-light)
-        vec3 emissive = materialParams.emissiveColor;
+        material.specularFactor = 0.0;
+        material.ambientOcclusion = 1.0;
+
+        // -- MToon: rim lighting + matcap (three-vrm applies these once, after lighting) --
+        vec3 normal = getWorldNormalVector();
+        vec3 viewDir = getWorldViewVector();
+
+        vec3 rim = materialParams.parametricRimColorFactor *
+            pow(saturate(1.0 - dot(viewDir, normal) + materialParams.parametricRimLiftFactor),
+                max(materialParams.parametricRimFresnelPowerFactor, 1e-4));
+
+        if (materialParams.hasMatcapTexture) {
+            mat3 viewFromWorld = mat3(getViewFromWorldMatrix());
+            vec3 viewDirView = viewFromWorld * viewDir;
+            vec3 normalView = viewFromWorld * normal;
+            vec3 x = normalize(vec3(viewDirView.z, 0.0, -viewDirView.x));
+            vec3 y = cross(viewDirView, x);
+            vec2 sphereUv = 0.5 + 0.5 * vec2(dot(x, normalView), -dot(y, normalView));
+            rim += materialParams.matcapFactor * texture(materialParams_matcapTexture, sphereUv).rgb;
+        }
+
+        if (materialParams.hasRimMultiplyTexture) {
+            rim *= texture(materialParams_rimMultiplyTexture, uv).rgb;
+        }
+
+        // rimLightingMixFactor blends rim between white and the accumulated light irradiance
+        vec3 rimMix = mix(vec3(1.0), materialParams.lightIrradianceSum,
+            materialParams.rimLightingMixFactor);
+
+        // -- MToon: emission --
+        vec3 emissive = materialParams.emissiveFactor;
         if (materialParams.hasEmissiveTexture) {
             emissive *= texture(materialParams_emissiveTexture, uv).rgb;
         }
-        material.emissive = vec4(emissive, 0.0);
+
+        material.emissive = vec4(emissive + rimMix * rim, 0.0);
     }
 
-    // ====================================================================
-    // MToon custom surface shading — faithful port of three-vrm algorithm
-    // ====================================================================
-    //
-    // Reference: three-vrm mtoon.frag  RE_Direct_MToon / getDiffuse / getShading
-    //
-    // Key differences from the previous implementation:
-    //   1. Use 1/PI (BRDF_Lambert) for physically correct diffuse normalization
-    //   2. Apply shadow/visibility ONLY ONCE through getShading()
-    //   3. Shade color is NOT multiplied by litColor
-    //   4. GI equalization contributes ambient
-    //   5. VRM 0.x compat: clamp result to diffuseColor
-    // ====================================================================
-    
+    // three-vrm getShading(): convert dotNL into a toon ramp using shadingShift/shadingToony,
+    // then multiply by shadows.
+    float getShading(float dotNL, float shadow, float shadingShift) {
+        float shading = linearstep(
+            -1.0 + materialParams.shadingToonyFactor,
+            1.0 - materialParams.shadingToonyFactor,
+            dotNL + shadingShift);
+        return shading * shadow;
+    }
+
     vec3 surfaceShading(
         const MaterialInputs materialInputs,
         const ShadingData shadingData,
         const LightData lightData
     ) {
-        vec2 uv = getFlippedUV();
-        
-        // == Lit color (diffuseColor = baseColor * texture, already set via material.baseColor) ==
-        vec3 litColor = shadingData.diffuseColor;
-        
-        // == Shade color: shadeColorFactor * shadeTexture (NOT multiplied by litColor) ==
-        // Three-vrm: material.shadeColor = shadeColorFactor * texture(shadeMultiplyTexture)
-        vec3 shadeColor = materialParams.shadeColor.rgb;
-        if (materialParams.hasShadeTexture) {
-            shadeColor *= texture(materialParams_shadeTexture, uv).rgb;
-        }
-        
-        // == Core MToon shading (three-vrm getShading function) ==
-        float dotNL = lightData.NdotL;
-        
-        // shading = dotNL + shadingShift
-        float shading = dotNL + materialParams.shadingShift;
-        
-        // linearstep with toony factor: linearstep(-1+toony, 1-toony, shading)
-        float toony = materialParams.shadingToony;
-        shading = linearstep(-1.0 + toony, 1.0 - toony, shading);
-        
-        // Apply shadow/visibility ONCE (three-vrm: shading *= shadow)
-        float shadow = lightData.visibility * lightData.attenuation;
-        shading *= shadow;
-        
-        // == getDiffuse: mix shade ↔ lit, then apply light color with BRDF_Lambert ==
-        // Three-vrm: lightColor * BRDF_Lambert(mix(shadeColor, diffuseColor, shading))
-        // BRDF_Lambert(c) = c / PI — this is the physically correct normalization
-        // for diffuse lighting in a physically-based pipeline
-        vec3 lightColor = lightData.colorIntensity.rgb * lightData.colorIntensity.w;
-        vec3 mixedColor = mix(shadeColor, litColor, shading);
-        vec3 diffuse = lightColor * (mixedColor / PI);
-        
-        // VRM 0.x compatibility: clamp to prevent overbright
-        // Three-vrm: col = min(col, material.diffuseColor)
-        if (materialParams.v0CompatShade) {
-            diffuse = min(diffuse, litColor);
-        }
-        
-        // == Rim lighting ==
-        // Three-vrm computes rim ONCE after all lights using accumulated directSpecular.
-        // In Filament's per-light model, we approximate by using the light contribution.
-        vec3 viewDir = getWorldViewVector();
+        vec2 uv = getMToonUV();
         vec3 normal = getWorldNormalVector();
-        float NdotV = saturate(dot(viewDir, normal));
-        
-        float rim = pow(saturate(1.0 - NdotV + materialParams.rimLift), materialParams.rimPower);
-        
-        // rimMix = mix(1.0, lightContribution, rimLightingMixFactor)
-        // Three-vrm uses accumulated irradiance; we use this light's color as a proxy
-        vec3 rimLightContrib = lightColor / PI;
-        vec3 rimMix = mix(vec3(1.0), rimLightContrib, materialParams.rimLightingMix);
-        diffuse += rimMix * materialParams.rimColor * rim;
-        
-        // == GI equalization: blend indirect light contribution ==
-        // Three-vrm: indirectDiffuse = irradiance * BRDF_Lambert(diffuseColor)
-        // Then giEqualization mixes between shaded and unshaded indirect
-        // In Filament's surfaceShading we can approximate ambient contribution 
-        // using a scaled term based on NdotL
-        float ambientContrib = (1.0 - shadow) * materialParams.giEqualization;
-        diffuse += litColor * ambientContrib * 0.1;
-        
-        return diffuse;
+        float dotNL = clamp(dot(normal, lightData.l), -1.0, 1.0);
+
+        float shadingShift = materialParams.shadingShiftFactor;
+        if (materialParams.hasShadingShiftTexture) {
+            shadingShift += texture(materialParams_shadingShiftTexture, uv).r
+                * materialParams.shadingShiftTextureScale;
+        }
+
+        // visibility = shadow map (directional) / contact shadows; attenuation = distance falloff
+        // (punctual only, matches three-vrm where attenuation is folded into the light color)
+        float shadow = lightData.visibility;
+        float shading = getShading(dotNL, shadow, shadingShift);
+
+        vec3 shadeColor = materialParams.shadeColorFactor;
+        if (materialParams.hasShadeMultiplyTexture) {
+            shadeColor *= texture(materialParams_shadeMultiplyTexture, uv).rgb;
+        }
+
+        vec3 lightColor = lightData.colorIntensity.rgb
+            * (lightData.colorIntensity.w * materialParams.lightIntensityScale)
+            * lightData.attenuation;
+
+        // getDiffuse(): lightColor * BRDF_Lambert(mix(shade, lit, shading))
+        vec3 col = lightColor * mix(shadeColor, shadingData.diffuseColor, shading) / PI;
+
+        // V0_COMPAT_SHADE: clamp to the lit color after light multiplication (three-vrm behavior)
+        if (materialParams.v0CompatShade) {
+            col = min(col, shadingData.diffuseColor);
+        }
+
+        return col;
     }
 }

@@ -73,6 +73,13 @@ internal class SoulLinkRenderer(
         init {
             com.google.android.filament.utils.Utils.init()
         }
+
+        // Scene directional light rig. Shared between light creation and MToon
+        // material normalization (MToonMaterialHelper.setLightRig).
+        private val SUN_COLOR = floatArrayOf(1.0f, 0.98f, 0.95f)
+        private const val SUN_LUX = 90_000f
+        private val FILL_COLOR = floatArrayOf(0.8f, 0.85f, 1.0f)
+        private const val FILL_LUX = 30_000f
     }
 
     private val choreoCallback = object : Choreographer.FrameCallback {
@@ -171,6 +178,9 @@ internal class SoulLinkRenderer(
             if (!loaded) {
                 android.util.Log.w("SoulLinkRenderer", "MToon material not found, using default PBR")
                 useMToonMaterial = false
+            } else {
+                // Mirror the light rig so the shader can normalize lux into three-vrm units
+                mtoonHelper?.setLightRig(SUN_COLOR, SUN_LUX, FILL_COLOR, FILL_LUX)
             }
         } catch (e: Exception) {
             android.util.Log.w("SoulLinkRenderer", "Failed to load MToon material", e)
@@ -192,8 +202,8 @@ internal class SoulLinkRenderer(
         // Main directional light
         val sunEntity = entityManager.create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .color(1.0f, 0.98f, 0.95f)
-            .intensity(90_000f)
+            .color(SUN_COLOR[0], SUN_COLOR[1], SUN_COLOR[2])
+            .intensity(SUN_LUX)
             .direction(-0.5f, -1.0f, -0.5f)
             .castShadows(true)
             .build(engine, sunEntity)
@@ -202,8 +212,8 @@ internal class SoulLinkRenderer(
         // Fill light
         val fillEntity = entityManager.create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .color(0.8f, 0.85f, 1.0f)
-            .intensity(30_000f)
+            .color(FILL_COLOR[0], FILL_COLOR[1], FILL_COLOR[2])
+            .intensity(FILL_LUX)
             .direction(0.5f, -0.5f, 0.5f)
             .castShadows(false)
             .build(engine, fillEntity)
@@ -246,9 +256,15 @@ internal class SoulLinkRenderer(
                 }
             }
 
-            // Pre-process: cull unused bones to stay within Filament's 256 bone limit
+            // Pre-process: inject default morph weights so gltfio uploads morph target
+            // normals (gltfio skips that upload when mesh.weights_count == 0, which
+            // corrupts shading as soon as an expression drives a weight non-zero).
             buffer.rewind()
-            val loadBuffer = GlbBoneCuller.cullUnusedBones(buffer) ?: buffer.also { it.rewind() }
+            val morphPatched = GlbMorphPatcher.injectMorphDefaultWeights(buffer)
+
+            // Pre-process: cull unused bones to stay within Filament's 256 bone limit
+            val loadBuffer = GlbBoneCuller.cullUnusedBones(morphPatched)
+                ?: morphPatched.also { it.rewind() }
 
             // Clear old physics and animation state before loading the new model.
             // This prevents the Choreographer from trying to access destroyed entities

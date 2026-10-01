@@ -5,7 +5,7 @@ material {
     maskThreshold : 0.5,
     doubleSided : true,
     parameters : [
-        { type : float4, name : baseColor },
+        { type : float4, name : baseColorFactor },
         { type : sampler2d, name : mainTexture },
         { type : bool, name : flipV }
     ],
@@ -26,9 +26,9 @@ fragment {
             uv.y = 1.0 - uv.y;
         }
         
-        // Sample texture and multiply by baseColor
+        // Sample texture and multiply by baseColorFactor
         vec4 texColor = texture(materialParams_mainTexture, uv);
-        material.baseColor = texColor * materialParams.baseColor;
+        material.baseColor = texColor * materialParams.baseColorFactor;
         
         // Keep original alpha for masking (don't force to 1.0)
         // Alpha below maskThreshold will be discarded

@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.android.filament.Engine
 import com.google.android.filament.Texture
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -41,12 +42,17 @@ internal class VrmGlbParser(private val engine: Engine) {
         val shadingShiftFactor: Float = 0.0f,
         val shadingToonyFactor: Float = 0.9f,
         val shadeMultiplyTextureIndex: Int? = null,     // Image index for shade texture
+        val shadingShiftTextureIndex: Int? = null,      // Image index for shading shift ramp
+        val shadingShiftTextureScale: Float = 1.0f,
         val emissiveFactor: FloatArray? = null,          // RGB emissive color
         val emissiveTextureIndex: Int? = null,           // Image index for emissive texture
         val parametricRimColorFactor: FloatArray? = null, // RGB rim color
         val parametricRimFresnelPowerFactor: Float = 5.0f,
         val parametricRimLiftFactor: Float = 0.0f,
         val rimLightingMixFactor: Float = 1.0f,
+        val rimMultiplyTextureIndex: Int? = null,        // Image index for rim mask
+        val matcapTextureIndex: Int? = null,             // Image index for matcap
+        val matcapFactor: FloatArray? = null,            // RGB matcap tint
         val giEqualizationFactor: Float = 0.9f,
         val isMToon: Boolean = false                     // Whether material has MToon extension
     )
@@ -222,12 +228,18 @@ internal class VrmGlbParser(private val engine: Engine) {
     }
     
     /**
-     * Get material information including texture indices
+     * Get material information including texture indices.
+     * Handles both VRM 1.0 (VRMC_materials_mtoon) and VRM 0.x (VRM/materialProperties).
      */
     fun getMaterialInfos(json: JsonObject): List<MaterialInfo> {
         val materials = mutableListOf<MaterialInfo>()
         val materialsArray = json.getAsJsonArray("materials") ?: return emptyList()
         val texturesArray = json.getAsJsonArray("textures")
+        
+        // Check for VRM 0.x materialProperties (top-level extensions.VRM.materialProperties[])
+        val v0MaterialProperties = json.getAsJsonObject("extensions")
+            ?.getAsJsonObject("VRM")
+            ?.getAsJsonArray("materialProperties")
         
         for (i in 0 until materialsArray.size()) {
             val materialObj = materialsArray[i].asJsonObject
@@ -271,40 +283,50 @@ internal class VrmGlbParser(private val engine: Engine) {
                 }
             }
             
-            // Parse VRMC_materials_mtoon extension
+            // Parse VRMC_materials_mtoon extension (VRM 1.0)
             var shadeColorFactor: FloatArray? = null
             var shadingShiftFactor = 0.0f
             var shadingToonyFactor = 0.9f
             var shadeMultiplyTextureIndex: Int? = null
+            var shadingShiftTextureIndex: Int? = null
+            var shadingShiftTextureScale = 1.0f
             var parametricRimColorFactor: FloatArray? = null
             var parametricRimFresnelPowerFactor = 5.0f
             var parametricRimLiftFactor = 0.0f
             var rimLightingMixFactor = 1.0f
+            var rimMultiplyTextureIndex: Int? = null
+            var matcapTextureIndex: Int? = null
+            var matcapFactor: FloatArray? = null
             var giEqualizationFactor = 0.9f
             var isMToon = false
-            
+
             materialObj.getAsJsonObject("extensions")
                 ?.getAsJsonObject("VRMC_materials_mtoon")?.let { mtoon ->
                     isMToon = true
-                    
+
                     mtoon.getAsJsonArray("shadeColorFactor")?.let { factor ->
                         shadeColorFactor = FloatArray(3) { j ->
                             if (j < factor.size()) factor[j].asFloat else 0f
                         }
                     }
-                    
+
                     mtoon.get("shadingShiftFactor")?.asFloat?.let { shadingShiftFactor = it }
                     mtoon.get("shadingToonyFactor")?.asFloat?.let { shadingToonyFactor = it }
                     mtoon.get("giEqualizationFactor")?.asFloat?.let { giEqualizationFactor = it }
-                    
-                    mtoon.getAsJsonObject("shadeMultiplyTexture")?.let { texInfo ->
-                        val textureIndex = texInfo.get("index")?.asInt
-                        if (textureIndex != null && texturesArray != null && textureIndex < texturesArray.size()) {
-                            val textureObj = texturesArray[textureIndex].asJsonObject
-                            shadeMultiplyTextureIndex = textureObj.get("source")?.asInt
+
+                    shadeMultiplyTextureIndex = resolveImageIndex(mtoon.getAsJsonObject("shadeMultiplyTexture"), texturesArray)
+                    mtoon.getAsJsonObject("shadingShiftTexture")?.let { texInfo ->
+                        shadingShiftTextureIndex = resolveImageIndex(texInfo, texturesArray)
+                        texInfo.get("scale")?.asFloat?.let { shadingShiftTextureScale = it }
+                    }
+                    mtoon.getAsJsonArray("matcapFactor")?.let { factor ->
+                        matcapFactor = FloatArray(3) { j ->
+                            if (j < factor.size()) factor[j].asFloat else 1f
                         }
                     }
-                    
+                    matcapTextureIndex = resolveImageIndex(mtoon.getAsJsonObject("matcapTexture"), texturesArray)
+                    rimMultiplyTextureIndex = resolveImageIndex(mtoon.getAsJsonObject("rimMultiplyTexture"), texturesArray)
+
                     mtoon.getAsJsonArray("parametricRimColorFactor")?.let { factor ->
                         parametricRimColorFactor = FloatArray(3) { j ->
                             if (j < factor.size()) factor[j].asFloat else 0f
@@ -313,9 +335,116 @@ internal class VrmGlbParser(private val engine: Engine) {
                     mtoon.get("parametricRimFresnelPowerFactor")?.asFloat?.let { parametricRimFresnelPowerFactor = it }
                     mtoon.get("parametricRimLiftFactor")?.asFloat?.let { parametricRimLiftFactor = it }
                     mtoon.get("rimLightingMixFactor")?.asFloat?.let { rimLightingMixFactor = it }
-                    
-                    Log.d(TAG, "MToon ext for '$name': shade=${shadeColorFactor?.contentToString()}, shift=$shadingShiftFactor, toony=$shadingToonyFactor")
+
+                    Log.d(TAG, "MToon V1 ext for '$name': shade=${shadeColorFactor?.contentToString()}, shift=$shadingShiftFactor, toony=$shadingToonyFactor, matcapTex=$matcapTextureIndex, rimTex=$rimMultiplyTextureIndex, shiftTex=$shadingShiftTextureIndex")
                 }
+            
+            // Fallback: parse VRM 0.x materialProperties if no V1 MToon found
+            if (!isMToon && v0MaterialProperties != null && i < v0MaterialProperties.size()) {
+                val v0Mat = v0MaterialProperties[i].asJsonObject
+                val shader = v0Mat.get("shader")?.asString
+                
+                if (shader == "VRM/MToon") {
+                    isMToon = true
+                    val floatProps = v0Mat.getAsJsonObject("floatProperties")
+                    val vecProps = v0Mat.getAsJsonObject("vectorProperties")
+                    val texProps = v0Mat.getAsJsonObject("textureProperties")
+                    
+                    // Base color: _Color (gamma-encoded RGB, linear alpha)
+                    vecProps?.getAsJsonArray("_Color")?.let { c ->
+                        baseColorFactor = FloatArray(4) { j ->
+                            val v = if (j < c.size()) c[j].asFloat else 1f
+                            if (j < 3) gammaEOTF(v) else v  // RGB: gamma→linear, A: keep linear
+                        }
+                    }
+                    
+                    // Base texture: _MainTex
+                    texProps?.get("_MainTex")?.asInt?.let { texIdx ->
+                        if (texturesArray != null && texIdx < texturesArray.size()) {
+                            imageIndex = texturesArray[texIdx].asJsonObject.get("source")?.asInt
+                        }
+                    }
+                    
+                    // Shade color: _ShadeColor (gamma-encoded)
+                    vecProps?.getAsJsonArray("_ShadeColor")?.let { c ->
+                        shadeColorFactor = FloatArray(3) { j ->
+                            gammaEOTF(if (j < c.size()) c[j].asFloat else 0.97f)
+                        }
+                    }
+                    
+                    // Shade texture: _ShadeTexture
+                    texProps?.get("_ShadeTexture")?.asInt?.let { texIdx ->
+                        if (texturesArray != null && texIdx < texturesArray.size()) {
+                            shadeMultiplyTextureIndex = texturesArray[texIdx].asJsonObject.get("source")?.asInt
+                        }
+                    }
+                    
+                    // Shade shift/toony: V0→V1 conversion (three-vrm formula)
+                    // V0: _ShadeShift, _ShadeToony
+                    // V1: shadingToonyFactor = lerp(v0Toony, 1.0, 0.5 + 0.5 * v0ShadeShift)
+                    //     shadingShiftFactor = -v0ShadeShift - (1.0 - shadingToonyFactor)
+                    val v0ShadeShift = floatProps?.get("_ShadeShift")?.asFloat ?: 0.0f
+                    val v0ShadeToony = floatProps?.get("_ShadeToony")?.asFloat ?: 0.9f
+                    val lerpT = 0.5f + 0.5f * v0ShadeShift
+                    shadingToonyFactor = v0ShadeToony + (1.0f - v0ShadeToony) * lerpT
+                    shadingShiftFactor = -v0ShadeShift - (1.0f - shadingToonyFactor)
+                    
+                    // GI: _IndirectLightIntensity → giEqualizationFactor = 1.0 - intensity
+                    val giIntensity = floatProps?.get("_IndirectLightIntensity")?.asFloat ?: 0.1f
+                    giEqualizationFactor = if (giIntensity > 0f) 1.0f - giIntensity else 0.9f
+                    
+                    // Emissive: _EmissionColor (gamma-encoded)
+                    vecProps?.getAsJsonArray("_EmissionColor")?.let { c ->
+                        emissiveFactor = FloatArray(3) { j ->
+                            gammaEOTF(if (j < c.size()) c[j].asFloat else 0f)
+                        }
+                    }
+                    
+                    // Emissive texture: _EmissionMap
+                    texProps?.get("_EmissionMap")?.asInt?.let { texIdx ->
+                        if (texturesArray != null && texIdx < texturesArray.size()) {
+                            emissiveTextureIndex = texturesArray[texIdx].asJsonObject.get("source")?.asInt
+                        }
+                    }
+                    
+                    // Rim: _RimColor (gamma-encoded), _RimFresnelPower, _RimLift, _RimLightingMix
+                    vecProps?.getAsJsonArray("_RimColor")?.let { c ->
+                        parametricRimColorFactor = FloatArray(3) { j ->
+                            gammaEOTF(if (j < c.size()) c[j].asFloat else 0f)
+                        }
+                    }
+                    parametricRimFresnelPowerFactor = floatProps?.get("_RimFresnelPower")?.asFloat ?: 1.0f
+                    parametricRimLiftFactor = floatProps?.get("_RimLift")?.asFloat ?: 0.0f
+                    rimLightingMixFactor = floatProps?.get("_RimLightingMix")?.asFloat ?: 0.0f
+
+                    // Rim mask texture: _RimTexture (three-vrm v0compat maps this to rimMultiplyTexture)
+                    texProps?.get("_RimTexture")?.asInt?.let { texIdx ->
+                        if (texturesArray != null && texIdx < texturesArray.size()) {
+                            rimMultiplyTextureIndex = texturesArray[texIdx].asJsonObject.get("source")?.asInt
+                        }
+                    }
+
+                    // Matcap: _SphereAdd (three-vrm v0compat uses factor [1,1,1] for V0)
+                    texProps?.get("_SphereAdd")?.asInt?.let { texIdx ->
+                        if (texturesArray != null && texIdx < texturesArray.size()) {
+                            matcapTextureIndex = texturesArray[texIdx].asJsonObject.get("source")?.asInt
+                            if (matcapFactor == null) matcapFactor = floatArrayOf(1f, 1f, 1f)
+                        }
+                    }
+                    
+                    // Detailed debug: raw V0 values vs converted values
+                    val rawColor = vecProps?.getAsJsonArray("_Color")
+                    val rawShadeColor = vecProps?.getAsJsonArray("_ShadeColor")
+                    val rawMainTex = texProps?.get("_MainTex")
+                    val rawShadeTex = texProps?.get("_ShadeTexture")
+                    Log.d(TAG, "MToon V0 RAW for '$name': _Color=$rawColor, _ShadeColor=$rawShadeColor, " +
+                        "_MainTex=$rawMainTex, _ShadeTexture=$rawShadeTex")
+                    Log.d(TAG, "MToon V0 CONVERTED for '$name': baseColor=${baseColorFactor?.contentToString()}, " +
+                        "shade=${shadeColorFactor?.contentToString()}, " +
+                        "baseTexIdx=$imageIndex, shadeTexIdx=$shadeMultiplyTextureIndex, " +
+                        "shift=$shadingShiftFactor, toony=$shadingToonyFactor, gi=$giEqualizationFactor")
+                }
+            }
             
             materials.add(MaterialInfo(
                 name = name,
@@ -325,12 +454,17 @@ internal class VrmGlbParser(private val engine: Engine) {
                 shadingShiftFactor = shadingShiftFactor,
                 shadingToonyFactor = shadingToonyFactor,
                 shadeMultiplyTextureIndex = shadeMultiplyTextureIndex,
+                shadingShiftTextureIndex = shadingShiftTextureIndex,
+                shadingShiftTextureScale = shadingShiftTextureScale,
                 emissiveFactor = emissiveFactor,
                 emissiveTextureIndex = emissiveTextureIndex,
                 parametricRimColorFactor = parametricRimColorFactor,
                 parametricRimFresnelPowerFactor = parametricRimFresnelPowerFactor,
                 parametricRimLiftFactor = parametricRimLiftFactor,
                 rimLightingMixFactor = rimLightingMixFactor,
+                rimMultiplyTextureIndex = rimMultiplyTextureIndex,
+                matcapTextureIndex = matcapTextureIndex,
+                matcapFactor = matcapFactor,
                 giEqualizationFactor = giEqualizationFactor,
                 isMToon = isMToon
             ))
@@ -339,6 +473,22 @@ internal class VrmGlbParser(private val engine: Engine) {
         
         return materials
     }
+    
+    /**
+     * Resolve a glTF texture info object ({ index } into the textures array) to an image index.
+     */
+    private fun resolveImageIndex(texInfo: JsonObject?, texturesArray: JsonArray?): Int? {
+        if (texInfo == null) return null
+        val textureIndex = texInfo.get("index")?.asInt ?: return null
+        if (texturesArray == null || textureIndex >= texturesArray.size()) return null
+        return texturesArray[textureIndex].asJsonObject.get("source")?.asInt
+    }
+
+    /**
+     * Convert gamma-encoded value to linear (three-vrm gammaEOTF).
+     * VRM 0.x stores colors in gamma space; we need linear for rendering.
+     */
+    private fun gammaEOTF(v: Float): Float = Math.pow(v.toDouble(), 2.2).toFloat()
     
     /**
      * Parse glTF meshes to get material index for each primitive in order.
