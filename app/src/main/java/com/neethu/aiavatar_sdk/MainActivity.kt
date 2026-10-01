@@ -1,6 +1,9 @@
 package com.neethu.aiavatar_sdk
 
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -42,98 +45,150 @@ import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
+import kotlinx.coroutines.channels.Channel
 
+/**
+ * Demo activity. Beyond the touch UI it exposes an AI-native debug interface:
+ * any launch of this activity carrying `ai_cmd` extras (see [AiDebugCommand])
+ * is queued and executed once the UI is ready. Commands can arrive at cold
+ * start (via [onCreate]) or while the activity is already running (via
+ * [onNewIntent], enabled by `launchMode="singleTask"` in the manifest).
+ *
+ * Results are logged under [AI_LOG_TAG] for the agent to read back:
+ * ```
+ * adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd state
+ * adb logcat -d -s AIDebug
+ * ```
+ */
 class MainActivity : ComponentActivity() {
+
+    /** Intent-issued commands, consumed by [DemoScreen] once composed. */
+    private val aiCommands = Channel<AiDebugCommand>(Channel.UNLIMITED)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             AIAvatarSDKTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    DemoScreen(modifier = Modifier.padding(innerPadding))
+                    DemoScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        uiState = remember { DemoUiState(applicationContext) },
+                        aiCommands = aiCommands,
+                    )
                 }
             }
+        }
+        enqueueAiCommands(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        enqueueAiCommands(intent)
+    }
+
+    private fun enqueueAiCommands(intent: Intent?) {
+        val extras = intent?.extras ?: return
+        val command = parseAiDebugCommand(extras.toAiDebugMap())
+        if (command == null) {
+            if (extras.keySet().any { it in AI_EXTRA_KEYS }) {
+                Log.w(AI_LOG_TAG, "Intent ignored: missing or empty '$EXTRA_AI_CMD' string extra")
+            }
+            return
+        }
+        aiCommands.trySend(command)
+    }
+
+    private fun Bundle.toAiDebugMap(): Map<String, Any?> =
+        keySet().associateWith { get(it) }
+}
+
+/** Which panel is currently shown */
+internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, SETTINGS }
+
+/**
+ * UI + avatar-selection state for [DemoScreen], hoisted out of the composable
+ * so the AI debug executor ([executeAiCommand]) can drive the same switches
+ * the buttons do.
+ */
+internal class DemoUiState(context: Context) {
+
+    val modelFiles: List<String> = listAssets(context, "vrms") {
+        it.endsWith(".glb") || it.endsWith(".vrm")
+    }
+    val animationFiles: List<String> = listAssets(context, "animations") {
+        it.endsWith(".vrma")
+    }
+    val sceneFiles: List<String> = listAssets(context, "scene") {
+        it.endsWith(".glb")
+    }
+
+    var selectedModel by mutableStateOf("model.glb")
+    var selectedAnimation by mutableStateOf<String?>(null)
+    var selectedExpression by mutableStateOf<String?>(null)
+    var selectedScene: String? by mutableStateOf(sceneFiles.firstOrNull())
+    var activePanel by mutableStateOf(PanelType.NONE)
+    var isDragMode by mutableStateOf(false)
+    var renderSettings by mutableStateOf(AvatarRenderSettings())
+
+    companion object {
+        /** Preset expression names (used as fallback if model has none). */
+        val presetExpressions = listOf(
+            "happy", "sad", "angry", "surprised", "relaxed", "blink",
+            "blinkLeft", "blinkRight", "aa", "ih", "ou", "ee", "oh", "neutral"
+        )
+
+        /** Model-parsed expressions if available, otherwise the presets. */
+        fun resolveExpressions(state: AvatarState): List<String> {
+            val modelExpressions = (state as? AvatarState.Ready)?.expressions ?: emptyList()
+            return modelExpressions.ifEmpty { presetExpressions }
+        }
+
+        private fun listAssets(
+            context: Context,
+            path: String,
+            filter: (String) -> Boolean,
+        ): List<String> = try {
+            context.assets.list(path)?.filter(filter)?.sorted() ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 }
 
-/** Which panel is currently shown */
-private enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, SETTINGS }
-
 @Composable
-private fun DemoScreen(modifier: Modifier = Modifier) {
+private fun DemoScreen(
+    modifier: Modifier = Modifier,
+    uiState: DemoUiState,
+    aiCommands: Channel<AiDebugCommand>,
+) {
     val context = LocalContext.current
     val controller = rememberAvatarController()
     val state by controller.state.collectAsState()
     val fps by controller.fps.collectAsState()
 
-    // List all files under assets/vrms/
-    val modelFiles = remember {
-        try {
-            context.assets.list("vrms")
-                ?.filter { it.endsWith(".glb") || it.endsWith(".vrm") }
-                ?.sorted()
-                ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    // List all .vrma files under assets/animations/
-    val animationFiles = remember {
-        try {
-            context.assets.list("animations")
-                ?.filter { it.endsWith(".vrma") }
-                ?.sorted()
-                ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    // List all .glb files under assets/scene/
-    val sceneFiles = remember {
-        try {
-            context.assets.list("scene")
-                ?.filter { it.endsWith(".glb") }
-                ?.sorted()
-                ?: emptyList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    var selectedModel by remember { mutableStateOf("model.glb") }
-    var selectedAnimation by remember { mutableStateOf<String?>(null) }
-    var selectedExpression by remember { mutableStateOf<String?>(null) }
-    var selectedScene by remember { mutableStateOf(sceneFiles.firstOrNull()) }
-    var activePanel by remember { mutableStateOf(PanelType.NONE) }
-    var isDragMode by remember { mutableStateOf(false) }
-    var renderSettings by remember { mutableStateOf(AvatarRenderSettings()) }
-
-    // Preset expression names (used as fallback if model has none)
-    val presetExpressions = remember {
-        listOf("happy", "sad", "angry", "surprised", "relaxed", "blink",
-            "blinkLeft", "blinkRight", "aa", "ih", "ou", "ee", "oh", "neutral")
-    }
-
-    // Use model-parsed expressions if available, otherwise use presets
     val expressionList = remember(state) {
-        val modelExpressions = (state as? AvatarState.Ready)?.expressions ?: emptyList()
-        if (modelExpressions.isNotEmpty()) modelExpressions else presetExpressions
+        DemoUiState.resolveExpressions(state)
     }
 
     // Load the selected model whenever it changes
-    LaunchedEffect(selectedModel) {
-        selectedExpression = null
+    LaunchedEffect(uiState.selectedModel) {
+        uiState.selectedExpression = null
         controller.clearAllExpressions()
-        controller.loadModel("vrms/$selectedModel")
+        controller.loadModel("vrms/${uiState.selectedModel}")
     }
 
     // Load the selected scene whenever it changes
-    LaunchedEffect(selectedScene) {
-        selectedScene?.let { scene ->
+    LaunchedEffect(uiState.selectedScene) {
+        uiState.selectedScene?.let { scene ->
             controller.loadScene("scene/$scene")
+        }
+    }
+
+    // AI debug interface: execute queued Intent commands for the screen's lifetime
+    LaunchedEffect(aiCommands) {
+        for (command in aiCommands) {
+            executeAiCommand(context, controller, uiState, command)
         }
     }
 
@@ -141,12 +196,12 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
     // reverted in place (material params have no read-back), so turning them
     // off reloads the pristine model.
     val applyRenderSettings: (AvatarRenderSettings) -> Unit = { new ->
-        val materialReverted = renderSettings.enhanceMaterials && !new.enhanceMaterials
-        renderSettings = new
+        val materialReverted = uiState.renderSettings.enhanceMaterials && !new.enhanceMaterials
+        uiState.renderSettings = new
         controller.updateRenderSettings(new)
         if (materialReverted) {
-            selectedExpression = null
-            controller.loadModel("vrms/$selectedModel", forceReload = true)
+            uiState.selectedExpression = null
+            controller.loadModel("vrms/${uiState.selectedModel}", forceReload = true)
         }
     }
 
@@ -157,16 +212,16 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             controller = controller,
             config = AvatarConfig(
                 iblPath = "default_env.ktx",
-                renderSettings = renderSettings
+                renderSettings = uiState.renderSettings
             )
         )
 
-        LaunchedEffect(isDragMode) {
-            controller.setDragMode(isDragMode)
+        LaunchedEffect(uiState.isDragMode) {
+            controller.setDragMode(uiState.isDragMode)
         }
 
         // FPS counter badge (top-right), toggled from the settings screen
-        if (renderSettings.showFps && fps > 0) {
+        if (uiState.renderSettings.showFps && fps > 0) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -186,19 +241,19 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
 
         // Drag mode FAB at bottom-start
         SmallFloatingActionButton(
-            onClick = { isDragMode = !isDragMode },
+            onClick = { uiState.isDragMode = !uiState.isDragMode },
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp),
             shape = CircleShape,
-            containerColor = if (isDragMode)
+            containerColor = if (uiState.isDragMode)
                 MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
             else
                 MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
         ) {
             Icon(
-                imageVector = if (isDragMode) Icons.Default.Close else Icons.Default.Build,
-                contentDescription = if (isDragMode) "Exit drag mode" else "Enter drag mode"
+                imageVector = if (uiState.isDragMode) Icons.Default.Close else Icons.Default.Build,
+                contentDescription = if (uiState.isDragMode) "Exit drag mode" else "Enter drag mode"
             )
         }
 
@@ -213,92 +268,102 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             // Settings FAB (⚙️ gear icon) — opens the full settings screen
             SmallFloatingActionButton(
                 onClick = {
-                    activePanel = if (activePanel == PanelType.SETTINGS) PanelType.NONE else PanelType.SETTINGS
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.SETTINGS) PanelType.NONE
+                        else PanelType.SETTINGS
                 },
                 shape = CircleShape,
-                containerColor = if (activePanel == PanelType.SETTINGS)
+                containerColor = if (uiState.activePanel == PanelType.SETTINGS)
                     MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
                 Icon(
-                    imageVector = if (activePanel == PanelType.SETTINGS) Icons.Default.Close else Icons.Default.Settings,
-                    contentDescription = if (activePanel == PanelType.SETTINGS) "Hide settings" else "Show settings"
+                    imageVector = if (uiState.activePanel == PanelType.SETTINGS) Icons.Default.Close else Icons.Default.Settings,
+                    contentDescription = if (uiState.activePanel == PanelType.SETTINGS) "Hide settings" else "Show settings"
                 )
             }
 
             // Scene FAB (🏠 Home icon)
             SmallFloatingActionButton(
                 onClick = {
-                    activePanel = if (activePanel == PanelType.SCENES) PanelType.NONE else PanelType.SCENES
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.SCENES) PanelType.NONE
+                        else PanelType.SCENES
                 },
                 shape = CircleShape,
-                containerColor = if (activePanel == PanelType.SCENES)
+                containerColor = if (uiState.activePanel == PanelType.SCENES)
                     MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
                 Icon(
-                    imageVector = if (activePanel == PanelType.SCENES) Icons.Default.Close else Icons.Default.Home,
-                    contentDescription = if (activePanel == PanelType.SCENES) "Hide scenes" else "Show scenes"
+                    imageVector = if (uiState.activePanel == PanelType.SCENES) Icons.Default.Close else Icons.Default.Home,
+                    contentDescription = if (uiState.activePanel == PanelType.SCENES) "Hide scenes" else "Show scenes"
                 )
             }
 
             // Expression FAB (😊 Face icon)
             SmallFloatingActionButton(
                 onClick = {
-                    activePanel = if (activePanel == PanelType.EXPRESSIONS) PanelType.NONE else PanelType.EXPRESSIONS
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.EXPRESSIONS) PanelType.NONE
+                        else PanelType.EXPRESSIONS
                 },
                 shape = CircleShape,
-                containerColor = if (activePanel == PanelType.EXPRESSIONS)
+                containerColor = if (uiState.activePanel == PanelType.EXPRESSIONS)
                     MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
                 Icon(
-                    imageVector = if (activePanel == PanelType.EXPRESSIONS) Icons.Default.Close else Icons.Default.Face,
-                    contentDescription = if (activePanel == PanelType.EXPRESSIONS) "Hide expressions" else "Show expressions"
+                    imageVector = if (uiState.activePanel == PanelType.EXPRESSIONS) Icons.Default.Close else Icons.Default.Face,
+                    contentDescription = if (uiState.activePanel == PanelType.EXPRESSIONS) "Hide expressions" else "Show expressions"
                 )
             }
 
             // Animation FAB
             SmallFloatingActionButton(
                 onClick = {
-                    activePanel = if (activePanel == PanelType.ANIMATIONS) PanelType.NONE else PanelType.ANIMATIONS
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.ANIMATIONS) PanelType.NONE
+                        else PanelType.ANIMATIONS
                 },
                 shape = CircleShape,
-                containerColor = if (activePanel == PanelType.ANIMATIONS)
+                containerColor = if (uiState.activePanel == PanelType.ANIMATIONS)
                     MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
                 Icon(
-                    imageVector = if (activePanel == PanelType.ANIMATIONS) Icons.Default.Close else Icons.Default.PlayArrow,
-                    contentDescription = if (activePanel == PanelType.ANIMATIONS) "Hide animations" else "Show animations"
+                    imageVector = if (uiState.activePanel == PanelType.ANIMATIONS) Icons.Default.Close else Icons.Default.PlayArrow,
+                    contentDescription = if (uiState.activePanel == PanelType.ANIMATIONS) "Hide animations" else "Show animations"
                 )
             }
 
             // Model FAB
             SmallFloatingActionButton(
                 onClick = {
-                    activePanel = if (activePanel == PanelType.MODELS) PanelType.NONE else PanelType.MODELS
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.MODELS) PanelType.NONE
+                        else PanelType.MODELS
                 },
                 shape = CircleShape,
-                containerColor = if (activePanel == PanelType.MODELS)
+                containerColor = if (uiState.activePanel == PanelType.MODELS)
                     MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
                 Icon(
-                    imageVector = if (activePanel == PanelType.MODELS) Icons.Default.Close else Icons.Default.List,
-                    contentDescription = if (activePanel == PanelType.MODELS) "Hide models" else "Show models"
+                    imageVector = if (uiState.activePanel == PanelType.MODELS) Icons.Default.Close else Icons.Default.List,
+                    contentDescription = if (uiState.activePanel == PanelType.MODELS) "Hide models" else "Show models"
                 )
             }
         }
 
         // Model selector overlay at the bottom
         AnimatedVisibility(
-            visible = activePanel == PanelType.MODELS,
+            visible = uiState.activePanel == PanelType.MODELS,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
             modifier = Modifier
@@ -308,19 +373,19 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         ) {
             ListPanel(
                 title = "Models",
-                items = modelFiles,
-                selectedItem = selectedModel,
+                items = uiState.modelFiles,
+                selectedItem = uiState.selectedModel,
                 onItemClick = { fileName ->
-                    selectedModel = fileName
-                    selectedAnimation = null // reset animation on model switch
-                    activePanel = PanelType.NONE
+                    uiState.selectedModel = fileName
+                    uiState.selectedAnimation = null // reset animation on model switch
+                    uiState.activePanel = PanelType.NONE
                 }
             )
         }
 
         // Animation selector overlay at the bottom
         AnimatedVisibility(
-            visible = activePanel == PanelType.ANIMATIONS,
+            visible = uiState.activePanel == PanelType.ANIMATIONS,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
             modifier = Modifier
@@ -330,21 +395,21 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         ) {
             ListPanel(
                 title = "Animations",
-                items = animationFiles,
-                selectedItem = selectedAnimation,
+                items = uiState.animationFiles,
+                selectedItem = uiState.selectedAnimation,
                 displayName = { it.removeSuffix(".vrma") },
                 onItemClick = { fileName ->
-                    selectedAnimation = fileName
+                    uiState.selectedAnimation = fileName
                     controller.loadVrmaAnimation("animations/$fileName")
                     controller.playVrmaAnimation(loop = true)
-                    activePanel = PanelType.NONE
+                    uiState.activePanel = PanelType.NONE
                 }
             )
         }
 
         // Expression selector overlay at the bottom
         AnimatedVisibility(
-            visible = activePanel == PanelType.EXPRESSIONS,
+            visible = uiState.activePanel == PanelType.EXPRESSIONS,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
             modifier = Modifier
@@ -355,17 +420,17 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
             ListPanel(
                 title = "Expressions",
                 items = expressionList,
-                selectedItem = selectedExpression,
+                selectedItem = uiState.selectedExpression,
                 onItemClick = { name ->
-                    if (selectedExpression == name) {
+                    if (uiState.selectedExpression == name) {
                         // Toggle off — clear the expression
                         controller.clearAllExpressions()
-                        selectedExpression = null
+                        uiState.selectedExpression = null
                     } else {
                         // Apply the new expression at full weight
                         controller.clearAllExpressions()
                         controller.setExpression(name, 1.0f)
-                        selectedExpression = name
+                        uiState.selectedExpression = name
                     }
                 }
             )
@@ -373,7 +438,7 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
 
         // Scene selector overlay at the bottom
         AnimatedVisibility(
-            visible = activePanel == PanelType.SCENES,
+            visible = uiState.activePanel == PanelType.SCENES,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
             modifier = Modifier
@@ -383,27 +448,27 @@ private fun DemoScreen(modifier: Modifier = Modifier) {
         ) {
             ListPanel(
                 title = "Scenes",
-                items = sceneFiles,
-                selectedItem = selectedScene,
+                items = uiState.sceneFiles,
+                selectedItem = uiState.selectedScene,
                 displayName = { it.removeSuffix(".glb").replace("_", " ") },
                 onItemClick = { fileName ->
-                    selectedScene = fileName
-                    activePanel = PanelType.NONE
+                    uiState.selectedScene = fileName
+                    uiState.activePanel = PanelType.NONE
                 }
             )
         }
 
         // Settings screen overlay: dim scrim + bottom sheet.
         AnimatedVisibility(
-            visible = activePanel == PanelType.SETTINGS,
+            visible = uiState.activePanel == PanelType.SETTINGS,
             enter = fadeIn() + slideInVertically { it },
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.fillMaxSize()
         ) {
             SettingsScreen(
-                settings = renderSettings,
+                settings = uiState.renderSettings,
                 onSettingsChange = applyRenderSettings,
-                onDismiss = { activePanel = PanelType.NONE }
+                onDismiss = { uiState.activePanel = PanelType.NONE }
             )
         }
     }

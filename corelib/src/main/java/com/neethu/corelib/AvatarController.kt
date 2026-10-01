@@ -1,5 +1,6 @@
 package com.neethu.corelib
 
+import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.neethu.corelib.internal.SoulLinkRenderer
@@ -309,6 +310,66 @@ class AvatarController {
      */
     fun setDragMode(enabled: Boolean) {
         renderer?.isDragMode = enabled
+    }
+
+    // ── Public API: Programmatic Avatar & Camera Control ─────────────────
+
+    /**
+     * Translate the avatar root in world space (meters) without touch input.
+     * +X right, +Y up, +Z toward the camera. Mirrors drag-mode translation.
+     */
+    fun moveAvatar(dx: Float, dy: Float, dz: Float = 0f) {
+        renderer?.moveAvatar(dx, dy, dz)
+    }
+
+    /**
+     * Dolly the camera toward/away from the model.
+     * [spreadPx] uses pinch semantics: positive = spread fingers = zoom in,
+     * negative = pinch together = zoom out.
+     */
+    fun zoomCamera(spreadPx: Float) {
+        renderer?.zoomCamera(spreadPx)
+    }
+
+    /**
+     * Pan the camera laterally, equivalent to a two-finger drag of
+     * [dxPx]/[dyPx] screen pixels.
+     */
+    fun panCamera(dxPx: Float, dyPx: Float) {
+        renderer?.panCamera(dxPx, dyPx)
+    }
+
+    /**
+     * Orbit the camera around the model, equivalent to a single-finger drag of
+     * [yawPx]/[pitchPx] screen pixels.
+     */
+    fun orbitCamera(yawPx: Float, pitchPx: Float) {
+        renderer?.orbitCamera(yawPx, pitchPx)
+    }
+
+    /**
+     * Restore the camera to its initial pose (as when the model was loaded).
+     */
+    fun resetCamera() {
+        renderer?.resetCamera()
+    }
+
+    /**
+     * Current camera pose: `Triple(eye, target, up)`, each a 3-element
+     * array, or `null` while no view is attached.
+     */
+    fun getCameraLookAt(): Triple<FloatArray, FloatArray, FloatArray>? {
+        return renderer?.cameraLookAt()
+    }
+
+    /**
+     * Capture the next rendered frame as a [android.graphics.Bitmap] and pass
+     * it to [onCaptured] (on the main thread). Fails (returns `false`) when no
+     * view is attached or rendering is paused.
+     */
+    fun captureFrame(onCaptured: (Bitmap?) -> Unit): Boolean {
+        val r = renderer ?: return false
+        return r.captureNextFrame(onCaptured)
     }
 }
 

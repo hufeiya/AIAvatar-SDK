@@ -1,22 +1,27 @@
 package com.neethu.corelib.internal
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.view.SurfaceView
 import android.view.Choreographer
 import com.google.android.filament.ColorGrading
+import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
 import com.google.android.filament.Skybox
 import com.google.android.filament.ToneMapper
 import com.google.android.filament.View
+import com.google.android.filament.android.UiHelper
 import com.google.android.filament.gltfio.AssetLoader
 import com.google.android.filament.gltfio.FilamentAsset
 import com.google.android.filament.gltfio.ResourceLoader
 import com.google.android.filament.gltfio.UbershaderProvider
 import com.google.android.filament.utils.KTX1Loader
+import com.google.android.filament.utils.Manipulator
 import com.google.android.filament.utils.ModelViewer
 import java.nio.ByteBuffer
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -43,7 +48,23 @@ internal class SoulLinkRenderer(
     private val config: AvatarConfig = AvatarConfig()
 ) : DefaultLifecycleObserver {
 
-    private var modelViewer: ModelViewer = ModelViewer(surfaceView)
+    // Owned camera manipulator. Constructing it ourselves (instead of letting
+    // ModelViewer build its default) exposes programmatic camera control —
+    // zoom/pan/orbit/reset use the exact same manipulator calls that
+    // GestureDetector drives with real touch input, so the behavior matches
+    // the on-screen gestures. Constructor args replicate ModelViewer's own
+    // defaults (Engine.create(), UiHelper DONT_CHECK, ORBIT mode targeting
+    // MODEL_CENTER; the viewport is set later by ModelViewer on surface resize).
+    private val cameraManipulator: Manipulator = Manipulator.Builder()
+        .targetPosition(MODEL_CENTER[0], MODEL_CENTER[1], MODEL_CENTER[2])
+        .build(Manipulator.Mode.ORBIT)
+
+    private var modelViewer: ModelViewer = ModelViewer(
+        surfaceView,
+        Engine.create(),
+        UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK),
+        cameraManipulator
+    )
 
     private var animator: com.google.android.filament.gltfio.Animator? = null
     private var startTime = System.nanoTime()
@@ -117,6 +138,10 @@ internal class SoulLinkRenderer(
         private const val AO_RADIUS = 0.15f
 
         private const val FPS_WINDOW_NANOS = 500_000_000L
+
+        // Pinch-pixels → manipulator scroll delta, matching GestureDetector's
+        // private kZoomSpeed so programmatic zoom scales identically to fingers.
+        private const val ZOOM_SPEED_PER_PIXEL = 0.1f
 
         // Material name hints for applyMaterialEnhancements (VRM/glTF conventions)
         private val EYE_NAME_HINTS = listOf("eye", "目", "瞳")
@@ -773,11 +798,15 @@ internal class SoulLinkRenderer(
 
     // ── Lifecycle ────────────────────────────────────────────────────────
 
+    private var isRendering = false
+
     private fun startRendering() {
+        isRendering = true
         Choreographer.getInstance().postFrameCallback(choreoCallback)
     }
 
     private fun stopRendering() {
+        isRendering = false
         Choreographer.getInstance().removeFrameCallback(choreoCallback)
     }
 
@@ -818,5 +847,90 @@ internal class SoulLinkRenderer(
 
     fun setSpringBoneEnabled(enabled: Boolean) {
         springBoneManager?.setEnabled(enabled)
+    }
+
+    // ── Programmatic Avatar & Camera Control (AI debugging) ──────────────
+    // These mirror the touch-driven behaviors: moveAvatar replicates drag-mode
+    // translation, and the camera calls replicate the gestures that
+    // GestureDetector feeds into the manipulator (single-finger drag → orbit,
+    // two-finger midpoint drag → pan, pinch spread → dolly zoom).
+
+    /**
+     * Translate the avatar root in world space (meters).
+     * +X right, +Y up, +Z toward the camera.
+     */
+    fun moveAvatar(dx: Float, dy: Float, dz: Float) {
+        val asset = modelViewer.asset ?: return
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return
+        val mat = FloatArray(16)
+        tm.getTransform(instance, mat)
+        mat[12] += dx
+        mat[13] += dy
+        mat[14] += dz
+        tm.setTransform(instance, mat)
+    }
+
+    /**
+     * Dolly the camera toward/away from the model.
+     * [spreadPx] is expressed in the same units as a two-finger pinch:
+     * positive = fingers spread apart = zoom in, negative = zoom out.
+     * The scale factor matches GestureDetector's pinch handling
+     * (scroll delta = separation change × 0.1).
+     */
+    fun zoomCamera(spreadPx: Float) {
+        cameraManipulator.scroll(
+            surfaceView.width / 2,
+            surfaceView.height / 2,
+            -spreadPx * ZOOM_SPEED_PER_PIXEL
+        )
+    }
+
+    /** Pan the camera laterally, like a two-finger drag of [dxPx]/[dyPx] pixels. */
+    fun panCamera(dxPx: Float, dyPx: Float) {
+        grabCamera(dxPx, dyPx, strafe = true)
+    }
+
+    /** Orbit the camera, like a single-finger drag of [yawPx]/[pitchPx] pixels. */
+    fun orbitCamera(yawPx: Float, pitchPx: Float) {
+        grabCamera(yawPx, pitchPx, strafe = false)
+    }
+
+    private fun grabCamera(dxPx: Float, dyPx: Float, strafe: Boolean) {
+        val cx = surfaceView.width / 2
+        val cy = surfaceView.height / 2
+        cameraManipulator.grabBegin(cx, cy, strafe)
+        cameraManipulator.grabUpdate(cx + dxPx.roundToInt(), cy + dyPx.roundToInt())
+        cameraManipulator.grabEnd()
+    }
+
+    /** Restore the camera to its initial pose (as when the model was loaded). */
+    fun resetCamera() {
+        cameraManipulator.jumpToBookmark(cameraManipulator.homeBookmark)
+    }
+
+    /**
+     * Current camera pose: eye position, target position and up vector
+     * (each a 3-element array).
+     */
+    fun cameraLookAt(): Triple<FloatArray, FloatArray, FloatArray> {
+        val eye = FloatArray(3)
+        val target = FloatArray(3)
+        val up = FloatArray(3)
+        cameraManipulator.getLookAt(eye, target, up)
+        return Triple(eye, target, up)
+    }
+
+    /**
+     * Capture the next rendered frame as a [Bitmap]. The callback fires on the
+     * render (main) thread once the frame completes; return `false` if no
+     * frame is being rendered.
+     */
+    fun captureNextFrame(onCaptured: (Bitmap) -> Unit): Boolean {
+        return if (!isRendering) false else {
+            modelViewer.debugGetNextFrameCallback(onCaptured)
+            true
+        }
     }
 }
