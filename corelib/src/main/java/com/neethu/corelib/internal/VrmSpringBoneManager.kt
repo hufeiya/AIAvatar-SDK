@@ -401,33 +401,57 @@ internal class VrmSpringBoneManager(
         }
     }
 
-    /** Dumps a compact snapshot: constraint length vs rest length + strand root directions. */
+    /**
+     * Dumps a compact snapshot: constraint length vs rest length + strand directions.
+     * Covers the first 4 chains (back-compat) plus every hair chain's root and tip
+     * joint — the tip is where "hair stuck on the shoulder" manifests.
+     */
     private fun debugLogState(tm: TransformManager) {
         val worldMat = FloatArray(16)
         var logged = 0
         for (spring in runtimeSprings) {
-            val state = spring.jointStates.firstOrNull() ?: continue
-            val params = spring.jointParams.firstOrNull() ?: continue
-            val entity = state.entity
-            val instance = tm.getInstance(entity)
-            if (instance == 0) continue
-            tm.getWorldTransform(instance, worldMat)
-            val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
-            val tailWorld = spring.centerWorld?.let { mat4MulPoint(it, state.currentTail) }
-                ?: state.currentTail
-            val dir = floatArrayOf(
-                tailWorld[0] - headPos[0], tailWorld[1] - headPos[1], tailWorld[2] - headPos[2]
-            )
-            normalizeVecInPlace(dir)
-            val name = nodeEntities.entries.firstOrNull { it.value == entity }?.key?.let { nodeId ->
-                nodeNames[nodeId]
-            } ?: "?"
-            Log.i(TAG, "dbg $name: len=" +
-                    String.format(java.util.Locale.US, "%.3f/%.3f", state.boneLength, state.restBoneLength) +
-                    " dir=[" + String.format(java.util.Locale.US, "%.2f,%.2f,%.2f", dir[0], dir[1], dir[2]) + "]")
-            if (++logged >= 4) break
+            val first = spring.jointStates.firstOrNull() ?: continue
+            val firstName = nodeNameOf(first.entity)
+            val logHair = firstName?.startsWith("J_Sec_Hair") == true
+            if (logged >= 4 && !logHair) continue
+            val line = StringBuilder("dbg ").append(firstName ?: "?").append(": ")
+            val f = jointSnapshot(tm, spring, first, worldMat)
+            if (f == null) continue
+            line.append("root[").append(f).append("]")
+            val tip = spring.jointStates.lastOrNull()
+            if (tip != null && tip !== first) {
+                val t = jointSnapshot(tm, spring, tip, worldMat)
+                if (t != null) line.append(" tip[").append(t).append("]")
+            }
+            Log.i(TAG, line.toString())
+            logged++
+            if (logged >= 60) break
         }
     }
+
+    /** One "len=len/rest dir=[x,y,z]" snapshot for a joint of [spring]. */
+    private fun jointSnapshot(
+        tm: TransformManager,
+        spring: RuntimeSpring,
+        state: JointState,
+        worldMat: FloatArray
+    ): String? {
+        val instance = tm.getInstance(state.entity)
+        if (instance == 0) return null
+        tm.getWorldTransform(instance, worldMat)
+        val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
+        val tailWorld = spring.centerWorld?.let { mat4MulPoint(it, state.currentTail) }
+            ?: state.currentTail
+        val dir = floatArrayOf(
+            tailWorld[0] - headPos[0], tailWorld[1] - headPos[1], tailWorld[2] - headPos[2]
+        )
+        normalizeVecInPlace(dir)
+        return "len=" + String.format(java.util.Locale.US, "%.3f/%.3f", state.boneLength, state.restBoneLength) +
+                " dir=[" + String.format(java.util.Locale.US, "%.2f,%.2f,%.2f", dir[0], dir[1], dir[2]) + "]"
+    }
+
+    private fun nodeNameOf(entity: Int): String? =
+        nodeEntities.entries.firstOrNull { it.value == entity }?.key?.let { nodeNames[it] }
 
     /** Runs one integration substep over all springs. */
     private fun stepSprings(deltaTime: Float, tm: TransformManager) {
@@ -464,15 +488,24 @@ internal class VrmSpringBoneManager(
                     }
                 }
 
-                // Parent rotation (from the parent's current world transform)
-                val parentInstance = tm.getParent(instance)
-                val parentRot: FloatArray
-                if (parentInstance != 0) {
-                    val parentWorldMat = FloatArray(16)
-                    tm.getWorldTransform(parentInstance, parentWorldMat)
-                    parentRot = matrixToQuaternion(parentWorldMat)
+                // Parent rotation (from the parent's current world transform).
+                // TransformManager mixes two id spaces: getParent() takes an
+                // EntityInstance and returns the parent *entity*, while
+                // getWorldTransform() takes an EntityInstance. Passing the parent
+                // entity straight into getWorldTransform reads an unrelated node's
+                // transform (and SEGVs when the value is out of range).
+                val parentEntity = tm.getParent(instance)
+                val parentRot: FloatArray = if (parentEntity != 0) {
+                    val parentInst = tm.getInstance(parentEntity)
+                    if (parentInst != 0) {
+                        val parentWorldMat = FloatArray(16)
+                        tm.getWorldTransform(parentInst, parentWorldMat)
+                        matrixToQuaternion(parentWorldMat)
+                    } else {
+                        QUAT_IDENTITY
+                    }
                 } else {
-                    parentRot = QUAT_IDENTITY
+                    QUAT_IDENTITY
                 }
 
                 // ── Verlet Integration ──

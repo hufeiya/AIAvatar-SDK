@@ -54,6 +54,16 @@ internal suspend fun executeAiCommand(
                 "camera reset to initial pose"
             }
             "set_drag_mode" -> setDragModeCommand(uiState, command.arg)
+            "spring_debug" -> {
+                val enabled = when (command.arg?.lowercase()) {
+                    "on", "true", "1" -> true
+                    "off", "false", "0" -> false
+                    else -> throw IllegalArgumentException("spring_debug expects 'on' or 'off'")
+                }
+                controller.setSpringBoneDebugLog(enabled)
+                if (enabled) "spring bone debug log enabled (logcat tag SpringBone, 1 Hz)"
+                else "spring bone debug log disabled"
+            }
             "screenshot" -> screenshotCommand(context, controller)
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

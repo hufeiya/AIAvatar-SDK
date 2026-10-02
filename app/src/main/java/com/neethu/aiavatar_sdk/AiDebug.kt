@@ -120,6 +120,7 @@ fun aiDebugHelp(): String = """
     |  orbit                    Camera orbit. ai_x/ai_y = screen pixels (drag equivalent)
     |  reset_camera             Restore the initial camera pose
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
+    |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
     |Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |
