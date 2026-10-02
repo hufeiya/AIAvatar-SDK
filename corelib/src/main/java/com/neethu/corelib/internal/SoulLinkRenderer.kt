@@ -19,7 +19,10 @@ import com.google.android.filament.gltfio.UbershaderProvider
 import com.google.android.filament.utils.KTX1Loader
 import com.google.android.filament.utils.Manipulator
 import com.google.android.filament.utils.ModelViewer
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -82,8 +85,18 @@ internal class SoulLinkRenderer(
     private var expressionManager: VrmExpressionManager? = null
 
     // Spring bone physics support
-    private var springBoneManager: VrmSpringBoneManager? = null
+    internal var springBoneManager: VrmSpringBoneManager? = null
     private var lastFrameTimeNanos: Long = 0L
+
+    // Set when the model pose is about to snap (animation / VRMA start-stop); the
+    // spring bone tails are re-anchored after the first frame of the new pose.
+    private var pendingSpringReset: Boolean = false
+
+    // Drag mode translates the humanoid hips bone (three-vrm mouse.html semantics)
+    // instead of the asset root, so spring bones react to the body motion.
+    private var dragMovesHips: Boolean = true
+    private var hipsEntity: Int = 0
+    private var isVrm0: Boolean = false
 
     // Scene (environment/background GLB) support
     private var sceneAsset: FilamentAsset? = null
@@ -178,6 +191,13 @@ internal class SoulLinkRenderer(
             // Update expression morph weights each frame (with smooth transitions)
             expressionManager?.update(frameTimeNanos)
 
+            // Re-anchor spring bone tails after a pose snap (animation / VRMA start-stop).
+            // Runs once, after the first frame of the new pose has been applied.
+            if (pendingSpringReset && springBoneManager != null) {
+                springBoneManager?.reset()
+                pendingSpringReset = false
+            }
+
             // Spring bone physics — runs after animation, before render
             if (lastFrameTimeNanos > 0L) {
                 val dt = ((frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000.0f)
@@ -232,11 +252,21 @@ internal class SoulLinkRenderer(
                             lastTouchY = event.y
                             modelViewer.asset?.let { asset ->
                                 val tm = modelViewer.engine.transformManager
-                                val instance = tm.getInstance(asset.root)
+                                // Drag the humanoid HIPS bone (mouse.html semantics) so the
+                                // spring bones see real body motion and react; fall back to
+                                // the asset root when the model has no humanoid hips.
+                                val instance = if (dragMovesHips && hipsEntity != 0) {
+                                    tm.getInstance(hipsEntity)
+                                } else {
+                                    tm.getInstance(asset.root)
+                                }
                                 if (instance != 0) {
                                     val mat = FloatArray(16)
                                     tm.getTransform(instance, mat)
-                                    mat[12] += dx * 0.005f
+                                    // VRM 0.x models carry a 180° Y root rotation: the hips
+                                    // local frame is flipped relative to the world.
+                                    val sign = if (dragMovesHips && isVrm0) -1f else 1f
+                                    mat[12] += dx * 0.005f * sign
                                     mat[13] -= dy * 0.005f
                                     tm.setTransform(instance, mat)
                                 }
@@ -582,10 +612,13 @@ internal class SoulLinkRenderer(
                 if (config.enableSpringBone) {
                     springBoneManager = VrmSpringBoneManager(modelViewer.engine).also { mgr ->
                         mgr.parseFromGlb(bytes)
-                        mgr.expandVrm0Chains(asset)
                         mgr.bindToAsset(asset, bytes)
                     }
                 }
+
+                // Resolve the humanoid hips bone for hips-drag (mouse.html semantics)
+                isVrm0 = parseVrmMetaVersion(bytes) == "0"
+                hipsEntity = resolveHipsEntity(asset, bytes)
             }
         }
 
@@ -595,6 +628,63 @@ internal class SoulLinkRenderer(
         }
 
         applyMaterialEnhancements()
+    }
+
+    /** Detects the VRM meta version ("0" or "1") from GLB bytes. */
+    private fun parseVrmMetaVersion(glbBytes: ByteArray): String {
+        return try {
+            val json = parseGlbJson(glbBytes) ?: return "1"
+            val ext = json.getAsJsonObject("extensions") ?: return "1"
+            if (ext.has("VRMC_vrm")) "1" else if (ext.has("VRM")) "0" else "1"
+        } catch (e: Exception) {
+            "1"
+        }
+    }
+
+    /** Resolves the humanoid hips node entity for hips-drag (three-vrm mouse.html semantics). */
+    private fun resolveHipsEntity(asset: FilamentAsset, glbBytes: ByteArray): Int {
+        return try {
+            val json = parseGlbJson(glbBytes) ?: return 0
+            val ext = json.getAsJsonObject("extensions") ?: return 0
+            var hipsNodeIndex = -1
+
+            // VRM 1.0: extensions.VRMC_vrm.humanoid.humanBones.hips.node
+            ext.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("humanoid")
+                ?.getAsJsonObject("humanBones")?.getAsJsonObject("hips")
+                ?.get("node")?.asInt?.let { hipsNodeIndex = it }
+
+            // VRM 0.x: extensions.VRM.humanoid.humanBones[] with bone == "hips"
+            if (hipsNodeIndex < 0) {
+                ext.getAsJsonObject("VRM")?.getAsJsonObject("humanoid")
+                    ?.getAsJsonArray("humanBones")?.forEach { el ->
+                        val obj = el.asJsonObject
+                        if (obj.get("bone")?.asString == "hips") {
+                            hipsNodeIndex = obj.get("node")?.asInt ?: -1
+                        }
+                    }
+            }
+            if (hipsNodeIndex < 0) return 0
+
+            val nodes = json.getAsJsonArray("nodes") ?: return 0
+            val nodeName = nodes[hipsNodeIndex].asJsonObject.get("name")?.asString ?: return 0
+            asset.getFirstEntityByName(nodeName) ?: 0
+        } catch (e: Exception) {
+            android.util.Log.w("SoulLinkRenderer", "Failed to resolve hips entity", e)
+            0
+        }
+    }
+
+    private fun parseGlbJson(glbBytes: ByteArray): JsonObject? {
+        val buf = ByteBuffer.wrap(glbBytes).order(ByteOrder.LITTLE_ENDIAN)
+        if (buf.remaining() < 12) return null
+        buf.int; buf.int; buf.int // magic, version, length
+        if (buf.remaining() < 8) return null
+        val chunkLen = buf.int
+        val chunkType = buf.int
+        if (chunkType != 0x4E4F534A) return null
+        val jsonBytes = ByteArray(chunkLen)
+        buf.get(jsonBytes)
+        return Gson().fromJson(String(jsonBytes, Charsets.UTF_8), JsonObject::class.java)
     }
 
     fun loadEnvironment(iblPath: String) {
@@ -625,6 +715,7 @@ internal class SoulLinkRenderer(
         currentAnimationIndex = index
         isAnimationLooping = loop
         startTime = System.nanoTime()
+        pendingSpringReset = true
     }
 
     /**
@@ -712,6 +803,7 @@ internal class SoulLinkRenderer(
         // Start VRMA
         vrmaStartTime = System.nanoTime()
         vrmaEngine?.play(loop)
+        pendingSpringReset = true
     }
 
     /**
@@ -719,6 +811,7 @@ internal class SoulLinkRenderer(
      */
     fun stopVrmaAnimation() {
         vrmaEngine?.stop()
+        pendingSpringReset = true
     }
 
     // ── Scene (Environment/Background) API ────────────────────────────────
@@ -847,6 +940,17 @@ internal class SoulLinkRenderer(
 
     fun setSpringBoneEnabled(enabled: Boolean) {
         springBoneManager?.setEnabled(enabled)
+    }
+
+    /**
+     * When true (default), drag mode translates the humanoid hips bone instead of
+     * the asset root — three-vrm mouse.html semantics. The spring bones see real
+     * body motion and react with full swings; works for models with or without
+     * spring `center` nodes. When false, drag mode translates the asset root
+     * (models with a `center` node will show little to no reaction, per VRM spec).
+     */
+    fun setDragMovesHips(enabled: Boolean) {
+        dragMovesHips = enabled
     }
 
     // ── Programmatic Avatar & Camera Control (AI debugging) ──────────────

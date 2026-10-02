@@ -251,6 +251,20 @@ class AvatarController {
         renderer?.setSpringBoneEnabled(enabled)
     }
 
+    /**
+     * When true (default), drag mode moves the humanoid hips bone (three-vrm
+     * mouse.html semantics) so spring bones react with full swings. When false,
+     * drag mode moves the asset root instead.
+     */
+    fun setDragMovesHips(enabled: Boolean) {
+        renderer?.setDragMovesHips(enabled)
+    }
+
+    /** Enables once-per-second spring bone diagnostics in logcat (tag "SpringBone"). */
+    fun setSpringBoneDebugLog(enabled: Boolean) {
+        renderer?.springBoneManager?.setDebugLogEnabled(enabled)
+    }
+
     // ── Public API: Scene (Environment/Background) ───────────────────────
 
     /**

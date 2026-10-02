@@ -15,13 +15,22 @@ import kotlin.math.abs
 /**
  * VRM Spring Bone physics manager.
  *
- * Implements the `VRMC_springBone` extension to simulate secondary motion
- * (hair, clothing, ribbons) using Verlet integration with collision.
+ * Implements the `VRMC_springBone` (VRM 1.0) and `VRM.secondaryAnimation` (VRM 0.x)
+ * extensions to simulate secondary motion (hair, clothing, ribbons) using Verlet
+ * integration with collision.
  *
- * Algorithm ported from vrm-c/UniVRM:
- * - UpdateFastSpringBoneJob.cs  (Verlet integration + rotation recovery)
- * - SpringBoneCollision.cs      (Sphere / Capsule collision response)
- * - SpringBoneJointInit.cs      (Initialization + bone axis computation)
+ * Ported from pixiv/three-vrm (VRMSpringBoneJoint.ts / VRMSpringBoneLoaderPlugin.ts):
+ * - The Verlet tail state (`prevTail` / `currentTail`) lives in the spring's
+ *   **center space** when the spring declares a `center` node, and in world space
+ *   otherwise. Inertia is integrated in that space, so translating or teleporting
+ *   the whole model produces no false spring reaction — most VRoid models set
+ *   `center` to their Root node exactly for this purpose. Stiffness, gravity,
+ *   length constraint and collision all run in world space.
+ * - A joint's tail is the next joint node of its spring (VRM 1.0), the first
+ *   hierarchy child (VRM 0.x subtree traversal), or a virtual tail 7 cm along
+ *   the hierarchy parent→node direction when the joint has no child node.
+ * - Collider radii and `hitRadius` are model-unit values and are scaled by each
+ *   node's world scale (the renderer's `transformToUnitCube` scales the asset root).
  *
  * The simulation runs every frame after animation updates and before rendering.
  */
@@ -31,9 +40,9 @@ internal class VrmSpringBoneManager(
     companion object {
         private const val TAG = "SpringBone"
         private const val CHUNK_TYPE_JSON = 0x4E4F534A
-        /** Length of the virtual end bone as a fraction of parent bone length. */
-        private const val TAIL_APPROX_LENGTH_RATIO = 0.07f
-        private const val TAIL_APPROX_MIN_LENGTH = 0.01f
+        /** Length of the virtual tail created for a joint with no child node (model units, per VRM spec). */
+        private const val VIRTUAL_TAIL_LENGTH = 0.07f
+        private const val VIRTUAL_TAIL_MIN_LENGTH = 0.01f
     }
 
     // ── Data Classes ─────────────────────────────────────────────────────
@@ -51,9 +60,10 @@ internal class VrmSpringBoneManager(
         val colliderIndices: List<Int>
     )
 
-    /** Joint parameters from the VRMC_springBone spec. */
+    /** Joint parameters from the spring bone spec, plus the resolved tail node. */
     private data class SpringJointParams(
         val nodeIndex: Int,
+        val tailNodeIndex: Int?,     // glTF node whose position defines the tail; null = virtual tail
         val stiffness: Float,
         val gravityPower: Float,
         val gravityDir: FloatArray,  // [x,y,z]
@@ -61,30 +71,45 @@ internal class VrmSpringBoneManager(
         val hitRadius: Float
     )
 
-    /** A spring chain: ordered joints + associated collider groups. */
+    /** A spring chain: ordered joints + associated collider groups + optional center node. */
     private data class SpringChain(
         val name: String?,
         val joints: List<SpringJointParams>,
-        val colliderGroupIndices: List<Int>
+        val colliderGroupIndices: List<Int>,
+        val centerNodeIndex: Int?    // VRMC_springBone "center": verlet state space; null = world
     )
 
     /** Runtime state for each joint in a chain (updated every frame). */
     private class JointState(
         val entity: Int,              // Filament entity
-        val boneLength: Float,
-        val boneAxis: FloatArray,     // local-space direction [x,y,z]
+        var boneLength: Float,        // world-unit constraint length, refreshed every frame
+        val restBoneLength: Float,    // world-unit rest bone length (bind time, fixed)
+        val boneAxis: FloatArray,     // joint-local rest direction [x,y,z]
         val restLocalQuat: FloatArray, // [x,y,z,w]
         val restLocalMat: FloatArray, // 4x4 column-major
-        var prevTail: FloatArray,     // world position [x,y,z]
-        var currentTail: FloatArray   // world position [x,y,z]
+        var prevTail: FloatArray,     // tail position in CENTER space [x,y,z]
+        var currentTail: FloatArray,  // tail position in CENTER space [x,y,z]
+        val hasVirtualTail: Boolean,  // no real tail node: keep the fixed 7cm length
+        // World position of the TAIL NODE at the end of the previous frame, i.e. the
+        // bone-snapped position headPos + boneDir * restBoneLength (three-vrm reads
+        // child.matrixWorld here). NOT the verlet tail: the verlet tail is a free
+        // particle and would make the measured length grow without bound while the
+        // head keeps moving, locking the chain in the drag direction.
+        val lastTailNodeWorld: FloatArray
     )
 
     /** Resolved runtime spring chain with state for each joint. */
     private class RuntimeSpring(
         val jointStates: List<JointState>,
         val jointParams: List<SpringJointParams>,
-        val colliders: List<SpringCollider>
-    )
+        val colliders: List<SpringCollider>,
+        val centerEntity: Int         // 0 = simulate in world space
+    ) {
+        // Center-space conversion for the current frame. The center node is never a
+        // spring joint, so its world transform does not change between substeps.
+        var centerWorld: FloatArray? = null
+        var centerWorldInv: FloatArray? = null
+    }
 
     // ── Parsed Data ──────────────────────────────────────────────────────
 
@@ -92,22 +117,37 @@ internal class VrmSpringBoneManager(
     private var colliderGroups: List<SpringColliderGroup> = emptyList()
     private var springChains: List<SpringChain> = emptyList()
 
+    /** glTF node hierarchy, needed for VRM 0.x subtree expansion and virtual tails. */
+    private var nodeChildren: Map<Int, List<Int>> = emptyMap()
+    private var nodeParent: Map<Int, Int> = emptyMap()
+
     // ── Runtime State ────────────────────────────────────────────────────
 
     private var runtimeSprings: List<RuntimeSpring> = emptyList()
     private var nodeEntities: Map<Int, Int> = emptyMap()  // glTF node index → entity
+    private var nodeNames: Map<Int, String> = emptyMap()  // glTF node index → name (diagnostics)
     private var isEnabled: Boolean = true
     private var isInitialized: Boolean = false
+
+    // Diagnostics: when enabled, logs per-joint constraint length vs rest length and
+    // a few strand directions once per second so on-device state is observable.
+    private var debugLogEnabled: Boolean = false
+    private var debugLogFrameCounter: Int = 0
 
     // ── Public API ───────────────────────────────────────────────────────
 
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
 
+    /** Enables once-per-second logcat diagnostics (tag "SpringBone") for on-device verification. */
+    fun setDebugLogEnabled(enabled: Boolean) { debugLogEnabled = enabled }
+
     /**
-     * Parse VRMC_springBone extension from GLB bytes.
+     * Parse VRMC_springBone / VRM.secondaryAnimation extension from GLB bytes.
      */
     fun parseFromGlb(glbBytes: ByteArray) {
         val json = parseGlbJson(glbBytes) ?: return
+        parseNodeHierarchy(json)
+
         val ext = json.getAsJsonObject("extensions") ?: return
 
         // Try VRM 1.0: VRMC_springBone
@@ -118,8 +158,7 @@ internal class VrmSpringBoneManager(
         }
 
         // Try VRM 0.x: VRM.secondaryAnimation
-        val vrm0Ext = ext.getAsJsonObject("VRM")
-        val secAnim = vrm0Ext?.getAsJsonObject("secondaryAnimation")
+        val secAnim = ext.getAsJsonObject("VRM")?.getAsJsonObject("secondaryAnimation")
         if (secAnim != null) {
             parseVrm0SecondaryAnimation(secAnim)
             return
@@ -128,9 +167,29 @@ internal class VrmSpringBoneManager(
         Log.i(TAG, "No spring bone data found in model")
     }
 
+    /** Cache the glTF node hierarchy (children / parent maps). */
+    private fun parseNodeHierarchy(json: JsonObject) {
+        val nodes = json.getAsJsonArray("nodes") ?: return
+        val children = mutableMapOf<Int, MutableList<Int>>()
+        val parentMap = mutableMapOf<Int, Int>()
+        for (i in 0 until nodes.size()) {
+            val kids = nodes[i].asJsonObject.getAsJsonArray("children") ?: continue
+            val list = mutableListOf<Int>()
+            for (k in 0 until kids.size()) {
+                val c = kids[k].asInt
+                list.add(c)
+                parentMap[c] = i
+            }
+            if (list.isNotEmpty()) children[i] = list
+        }
+        nodeChildren = children
+        nodeParent = parentMap
+    }
+
     /**
      * Bind parsed spring bone data to a loaded Filament asset.
-     * Must be called after parseFromGlb and after the asset is fully loaded.
+     * Must be called after parseFromGlb and after the asset is fully loaded
+     * (and after any root transform such as transformToUnitCube is applied).
      */
     fun bindToAsset(asset: FilamentAsset, glbBytes: ByteArray) {
         if (springChains.isEmpty()) {
@@ -144,14 +203,17 @@ internal class VrmSpringBoneManager(
 
         // Build node index → entity map
         val nodeEntityMap = mutableMapOf<Int, Int>()
+        val nodeNameMap = mutableMapOf<Int, String>()
         for (i in 0 until nodes.size()) {
             val nodeName = nodes[i].asJsonObject.get("name")?.asString ?: continue
             val entity = asset.getFirstEntityByName(nodeName)
             if (entity != 0) {
                 nodeEntityMap[i] = entity
+                nodeNameMap[i] = nodeName
             }
         }
         nodeEntities = nodeEntityMap
+        nodeNames = nodeNameMap
 
         // Build runtime springs
         val springs = mutableListOf<RuntimeSpring>()
@@ -160,94 +222,116 @@ internal class VrmSpringBoneManager(
             val jointStates = mutableListOf<JointState>()
             val validParams = mutableListOf<SpringJointParams>()
 
-            for (i in chain.joints.indices) {
-                val joint = chain.joints[i]
+            // Center node defines the space the verlet state lives in (world space when absent)
+            var centerEntity = 0
+            var centerWorldInv: FloatArray? = null
+            val centerIdx = chain.centerNodeIndex
+            if (centerIdx != null) {
+                val cEntity = nodeEntityMap[centerIdx]
+                if (cEntity != null && cEntity != 0) {
+                    val cInstance = tm.getInstance(cEntity)
+                    if (cInstance != 0) {
+                        val cWorld = FloatArray(16)
+                        tm.getWorldTransform(cInstance, cWorld)
+                        val cInv = mat4Invert(cWorld)
+                        if (cInv != null) {
+                            centerEntity = cEntity
+                            centerWorldInv = cInv
+                        } else {
+                            Log.w(TAG, "Spring center world matrix is singular; simulating in world space")
+                        }
+                    }
+                }
+            }
+
+            for (joint in chain.joints) {
                 val entity = nodeEntityMap[joint.nodeIndex] ?: continue
                 val instance = tm.getInstance(entity)
                 if (instance == 0) continue
 
-                // Get rest-pose local transform
+                // Rest-pose local transform
                 val localMat = FloatArray(16)
                 tm.getTransform(instance, localMat)
                 val localQuat = matrixToQuaternion(localMat)
 
-                // Get world position of this bone
+                // World position / rotation of this bone (rest pose at bind time)
                 val worldMat = FloatArray(16)
                 tm.getWorldTransform(instance, worldMat)
                 val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
+                val worldQuat = matrixToQuaternion(worldMat)
+                val invWorldQuat = quatInverse(worldQuat)
 
-                // Determine bone axis and length by looking at the next joint's world position
-                var boneAxis: FloatArray
-                var boneLength: Float
-
-                val nextJoint = if (i + 1 < chain.joints.size) chain.joints[i + 1] else null
-                val nextEntity = nextJoint?.let { nodeEntityMap[it.nodeIndex] }
-
-                if (nextEntity != null && nextEntity != 0) {
-                    val nextInstance = tm.getInstance(nextEntity)
-                    if (nextInstance != 0) {
-                        val nextWorldMat = FloatArray(16)
-                        tm.getWorldTransform(nextInstance, nextWorldMat)
-                        val childWorldPos = floatArrayOf(nextWorldMat[12], nextWorldMat[13], nextWorldMat[14])
-
-                        // World-space direction from head to child
+                // Bone axis (joint-local) and length from the resolved tail node
+                var boneAxis: FloatArray? = null
+                var boneLength = 0f
+                var isVirtualTail = false
+                val tailEntity = joint.tailNodeIndex?.let { nodeEntityMap[it] }
+                if (tailEntity != null && tailEntity != 0) {
+                    val tailInstance = tm.getInstance(tailEntity)
+                    if (tailInstance != 0) {
+                        val tailWorld = FloatArray(16)
+                        tm.getWorldTransform(tailInstance, tailWorld)
                         val worldDir = floatArrayOf(
-                            childWorldPos[0] - headPos[0],
-                            childWorldPos[1] - headPos[1],
-                            childWorldPos[2] - headPos[2]
+                            tailWorld[12] - headPos[0],
+                            tailWorld[13] - headPos[1],
+                            tailWorld[14] - headPos[2]
                         )
                         boneLength = vecLength(worldDir)
-
                         if (boneLength > 1e-6f) {
-                            // Convert world direction to local space
-                            // localDir = inv(worldRot) * worldDir
-                            val worldQuat = matrixToQuaternion(worldMat)
-                            val invWorldQuat = quatInverse(worldQuat)
-                            boneAxis = quatRotateVec(invWorldQuat, worldDir)
-                            val axisLen = vecLength(boneAxis)
-                            if (axisLen > 1e-6f) {
-                                boneAxis[0] /= axisLen
-                                boneAxis[1] /= axisLen
-                                boneAxis[2] /= axisLen
-                            }
-                        } else {
-                            boneAxis = floatArrayOf(0f, -1f, 0f)
-                            boneLength = TAIL_APPROX_MIN_LENGTH
+                            boneAxis = normalizeVec(quatRotateVec(invWorldQuat, worldDir))
                         }
-                    } else {
-                        boneAxis = floatArrayOf(0f, -1f, 0f)
-                        boneLength = TAIL_APPROX_MIN_LENGTH
-                    }
-                } else {
-                    // Last joint in chain: create a virtual tail
-                    // Use the parent bone direction scaled by TAIL_APPROX_LENGTH_RATIO
-                    if (jointStates.isNotEmpty()) {
-                        val prevState = jointStates.last()
-                        boneLength = max(prevState.boneLength * TAIL_APPROX_LENGTH_RATIO, TAIL_APPROX_MIN_LENGTH)
-                        boneAxis = prevState.boneAxis.clone()
-                    } else {
-                        boneAxis = floatArrayOf(0f, -1f, 0f)
-                        boneLength = TAIL_APPROX_MIN_LENGTH
                     }
                 }
 
-                // Initial tail position in world space
-                val worldQuat = matrixToQuaternion(worldMat)
+                if (boneAxis == null) {
+                    // Virtual tail: 7 cm along the hierarchy parent→node direction (VRM spec).
+                    // The length is scaled into world units of the asset root.
+                    isVirtualTail = true
+                    val parentWorldPos = nodeParent[joint.nodeIndex]
+                        ?.let { nodeEntityMap[it] }
+                        ?.takeIf { it != 0 }
+                        ?.let { pEntity ->
+                            val pInstance = tm.getInstance(pEntity)
+                            if (pInstance != 0) {
+                                val pWorld = FloatArray(16)
+                                tm.getWorldTransform(pInstance, pWorld)
+                                floatArrayOf(pWorld[12], pWorld[13], pWorld[14])
+                            } else null
+                        }
+                    val dir = if (parentWorldPos != null) {
+                        normalizeVec(floatArrayOf(
+                            headPos[0] - parentWorldPos[0],
+                            headPos[1] - parentWorldPos[1],
+                            headPos[2] - parentWorldPos[2]
+                        ))
+                    } else {
+                        floatArrayOf(0f, -1f, 0f)
+                    }
+                    val worldScale = vecLength(floatArrayOf(worldMat[0], worldMat[1], worldMat[2]))
+                    boneLength = max(VIRTUAL_TAIL_LENGTH * worldScale, VIRTUAL_TAIL_MIN_LENGTH)
+                    boneAxis = normalizeVec(quatRotateVec(invWorldQuat, dir))
+                }
+
+                // Initial tail position: world, then into center space
                 val worldBoneDir = quatRotateVec(worldQuat, boneAxis)
-                val tailPos = floatArrayOf(
+                val tailWorld = floatArrayOf(
                     headPos[0] + worldBoneDir[0] * boneLength,
                     headPos[1] + worldBoneDir[1] * boneLength,
                     headPos[2] + worldBoneDir[2] * boneLength
                 )
+                val tailCenter = centerWorldInv?.let { mat4MulPoint(it, tailWorld) } ?: tailWorld
 
                 jointStates.add(JointState(
                     entity = entity,
                     boneLength = boneLength,
+                    restBoneLength = boneLength,
                     boneAxis = boneAxis,
                     restLocalQuat = localQuat,
                     restLocalMat = localMat.clone(),
-                    prevTail = tailPos.clone(),
-                    currentTail = tailPos.clone()
+                    prevTail = tailCenter.clone(),
+                    currentTail = tailCenter.clone(),
+                    hasVirtualTail = isVirtualTail,
+                    lastTailNodeWorld = tailWorld.clone()
                 ))
                 validParams.add(joint)
             }
@@ -265,13 +349,15 @@ internal class VrmSpringBoneManager(
                     }
                 }
 
-                springs.add(RuntimeSpring(jointStates, validParams, chainColliders))
+                springs.add(RuntimeSpring(jointStates, validParams, chainColliders, centerEntity))
             }
         }
 
         runtimeSprings = springs
         isInitialized = true
-        Log.i(TAG, "Bound ${springs.size} spring chains, ${springs.sumOf { it.jointStates.size }} joints")
+        val centered = springs.count { it.centerEntity != 0 }
+        Log.i(TAG, "Bound ${springs.size} spring chains, " +
+                "${springs.sumOf { it.jointStates.size }} joints, $centered with center node")
     }
 
     // ── Physics Update (called every frame) ──────────────────────────────
@@ -285,7 +371,71 @@ internal class VrmSpringBoneManager(
 
         val tm = engine.transformManager
 
+        // Refresh the center-space conversion for this frame (null = world space)
         for (spring in runtimeSprings) {
+            spring.centerWorld = null
+            spring.centerWorldInv = null
+            if (spring.centerEntity != 0) {
+                val centerInstance = tm.getInstance(spring.centerEntity)
+                if (centerInstance != 0) {
+                    val cWorld = FloatArray(16)
+                    tm.getWorldTransform(centerInstance, cWorld)
+                    val cInv = mat4Invert(cWorld)
+                    if (cInv != null) {
+                        spring.centerWorld = cWorld
+                        spring.centerWorldInv = cInv
+                    }
+                }
+            }
+        }
+
+        // Substep the integration so no single step exceeds ~1/120 s: a long frame
+        // (jank) would otherwise inject an outsized inertia/stiffness step into the
+        // Verlet state and send the chains flailing.
+        val steps = max(1, kotlin.math.ceil(deltaTime * 120.0).toInt().coerceAtMost(8))
+        val sdt = deltaTime / steps
+        repeat(steps) { stepSprings(sdt, tm) }
+
+        if (debugLogEnabled && ++debugLogFrameCounter % 60 == 0) {
+            debugLogState(tm)
+        }
+    }
+
+    /** Dumps a compact snapshot: constraint length vs rest length + strand root directions. */
+    private fun debugLogState(tm: TransformManager) {
+        val worldMat = FloatArray(16)
+        var logged = 0
+        for (spring in runtimeSprings) {
+            val state = spring.jointStates.firstOrNull() ?: continue
+            val params = spring.jointParams.firstOrNull() ?: continue
+            val entity = state.entity
+            val instance = tm.getInstance(entity)
+            if (instance == 0) continue
+            tm.getWorldTransform(instance, worldMat)
+            val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
+            val tailWorld = spring.centerWorld?.let { mat4MulPoint(it, state.currentTail) }
+                ?: state.currentTail
+            val dir = floatArrayOf(
+                tailWorld[0] - headPos[0], tailWorld[1] - headPos[1], tailWorld[2] - headPos[2]
+            )
+            normalizeVecInPlace(dir)
+            val name = nodeEntities.entries.firstOrNull { it.value == entity }?.key?.let { nodeId ->
+                nodeNames[nodeId]
+            } ?: "?"
+            Log.i(TAG, "dbg $name: len=" +
+                    String.format(java.util.Locale.US, "%.3f/%.3f", state.boneLength, state.restBoneLength) +
+                    " dir=[" + String.format(java.util.Locale.US, "%.2f,%.2f,%.2f", dir[0], dir[1], dir[2]) + "]")
+            if (++logged >= 4) break
+        }
+    }
+
+    /** Runs one integration substep over all springs. */
+    private fun stepSprings(deltaTime: Float, tm: TransformManager) {
+        for (spring in runtimeSprings) {
+            // Center-space conversion (world space when null)
+            val centerWorld = spring.centerWorld
+            val centerWorldInv = spring.centerWorldInv
+
             for (i in spring.jointStates.indices) {
                 val state = spring.jointStates[i]
                 val params = spring.jointParams[i]
@@ -293,12 +443,28 @@ internal class VrmSpringBoneManager(
                 val instance = tm.getInstance(state.entity)
                 if (instance == 0) continue
 
-                // Get current world transform of the head bone (after animation)
+                // Current world transform of the head bone (after animation)
                 val worldMat = FloatArray(16)
                 tm.getWorldTransform(instance, worldMat)
                 val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
+                val worldScale = vecLength(floatArrayOf(worldMat[0], worldMat[1], worldMat[2]))
 
-                // Get parent rotation (from the parent's world transform)
+                // ── Per-frame bone length (three-vrm _calcWorldSpaceBoneLength) ──
+                // three-vrm measures the length against the tail NODE's world position
+                // from the end of the previous frame, which slackens the constraint by
+                // exactly the per-frame head displacement and absorbs fast animation
+                // motion. Joints with a virtual tail keep their fixed 7cm length.
+                if (!state.hasVirtualTail) {
+                    val lenX = state.lastTailNodeWorld[0] - headPos[0]
+                    val lenY = state.lastTailNodeWorld[1] - headPos[1]
+                    val lenZ = state.lastTailNodeWorld[2] - headPos[2]
+                    val newLen = vecLength(floatArrayOf(lenX, lenY, lenZ))
+                    if (newLen > 1e-6f) {
+                        state.boneLength = newLen
+                    }
+                }
+
+                // Parent rotation (from the parent's current world transform)
                 val parentInstance = tm.getParent(instance)
                 val parentRot: FloatArray
                 if (parentInstance != 0) {
@@ -310,41 +476,32 @@ internal class VrmSpringBoneManager(
                 }
 
                 // ── Verlet Integration ──
-                // nextTail = currentTail
-                //   + (currentTail - prevTail) * (1 - dragForce)           // inertia
-                //   + parentRot * localRot * boneAxis * stiffness * dt     // stiffness
-                //   + gravityDir * gravityPower * dt                       // gravity
-
-                val inertia = floatArrayOf(
-                    (state.currentTail[0] - state.prevTail[0]) * (1f - params.dragForce),
-                    (state.currentTail[1] - state.prevTail[1]) * (1f - params.dragForce),
-                    (state.currentTail[2] - state.prevTail[2]) * (1f - params.dragForce)
+                // Inertia integrates in CENTER space (three-vrm VRMSpringBoneJoint.update):
+                // when the spring has a center node and the whole model is moved/rotated,
+                // the tails move with it and produce no false reaction.
+                val dragFactor = 1f - params.dragForce
+                val nextTailCenter = floatArrayOf(
+                    state.currentTail[0] + (state.currentTail[0] - state.prevTail[0]) * dragFactor,
+                    state.currentTail[1] + (state.currentTail[1] - state.prevTail[1]) * dragFactor,
+                    state.currentTail[2] + (state.currentTail[2] - state.prevTail[2]) * dragFactor
                 )
 
-                // Stiffness: parent world rotation * local rest rotation * bone axis
+                // Convert the tail point to world space
+                val converted = centerWorld?.let { mat4MulPoint(it, nextTailCenter) } ?: nextTailCenter
+
+                // Stiffness: pull toward the rest bone direction; gravity: world-space down.
                 val combinedRot = quatMultiply(parentRot, state.restLocalQuat)
                 val stiffnessDir = quatRotateVec(combinedRot, state.boneAxis)
-                val stiffness = floatArrayOf(
-                    stiffnessDir[0] * params.stiffness * deltaTime,
-                    stiffnessDir[1] * params.stiffness * deltaTime,
-                    stiffnessDir[2] * params.stiffness * deltaTime
-                )
-
-                // Gravity
-                val gravity = floatArrayOf(
-                    params.gravityDir[0] * params.gravityPower * deltaTime,
-                    params.gravityDir[1] * params.gravityPower * deltaTime,
-                    params.gravityDir[2] * params.gravityPower * deltaTime
-                )
-
                 var nextTail = floatArrayOf(
-                    state.currentTail[0] + inertia[0] + stiffness[0] + gravity[0],
-                    state.currentTail[1] + inertia[1] + stiffness[1] + gravity[1],
-                    state.currentTail[2] + inertia[2] + stiffness[2] + gravity[2]
+                    converted[0] + stiffnessDir[0] * params.stiffness * deltaTime
+                            + params.gravityDir[0] * params.gravityPower * deltaTime,
+                    converted[1] + stiffnessDir[1] * params.stiffness * deltaTime
+                            + params.gravityDir[1] * params.gravityPower * deltaTime,
+                    converted[2] + stiffnessDir[2] * params.stiffness * deltaTime
+                            + params.gravityDir[2] * params.gravityPower * deltaTime
                 )
 
                 // ── Length Constraint ──
-                // Force nextTail to be exactly boneLength from headPos
                 nextTail = constrainLength(headPos, nextTail, state.boneLength)
 
                 // ── Collision ──
@@ -358,7 +515,7 @@ internal class VrmSpringBoneManager(
                     tm.getWorldTransform(colliderInstance, colliderWorldMat)
 
                     val result = resolveCollision(
-                        headPos, nextTail, state.boneLength, params.hitRadius,
+                        headPos, nextTail, state.boneLength, params.hitRadius * worldScale,
                         collider, colliderWorldMat
                     )
                     if (result != null) {
@@ -366,35 +523,21 @@ internal class VrmSpringBoneManager(
                     }
                 }
 
-                // ── Update State ──
-                state.prevTail = state.currentTail.clone()
-                state.currentTail = nextTail
+                // ── Update State (back into center space) ──
+                state.prevTail = state.currentTail
+                state.currentTail = centerWorldInv?.let { mat4MulPoint(it, nextTail) } ?: nextTail
 
-                // ── Rotation Recovery ──
-                // Compute rotation that maps the rest-pose bone direction to the
-                // simulated direction (headPos → nextTail)
+                // ── Rotation Recovery (world space) ──
                 val currentDir = floatArrayOf(
                     nextTail[0] - headPos[0],
                     nextTail[1] - headPos[1],
                     nextTail[2] - headPos[2]
                 )
-                val dirLen = vecLength(currentDir)
-                if (dirLen > 1e-6f) {
-                    currentDir[0] /= dirLen
-                    currentDir[1] /= dirLen
-                    currentDir[2] /= dirLen
-                }
+                normalizeVecInPlace(currentDir)
 
-                // Rest direction in world space
                 val restDir = quatRotateVec(combinedRot, state.boneAxis)
-                val restDirLen = vecLength(restDir)
-                if (restDirLen > 1e-6f) {
-                    restDir[0] /= restDirLen
-                    restDir[1] /= restDirLen
-                    restDir[2] /= restDirLen
-                }
+                normalizeVecInPlace(restDir)
 
-                // rotation = fromToRotation(restDir, currentDir) * parentRot * localRot
                 val fromTo = fromToRotation(restDir, currentDir)
                 val newWorldRot = quatMultiply(fromTo, combinedRot)
 
@@ -409,6 +552,13 @@ internal class VrmSpringBoneManager(
                 quaternionToMatrix(newLocalRot, localMat)
                 localMat[12] = tx; localMat[13] = ty; localMat[14] = tz
                 tm.setTransform(instance, localMat)
+
+                // Record where the tail NODE now sits (bone-snapped: head + dir * restLen).
+                // `currentDir` is the final bone direction, so this is exactly what
+                // three-vrm reads from child.matrixWorld on the next frame.
+                state.lastTailNodeWorld[0] = headPos[0] + currentDir[0] * state.restBoneLength
+                state.lastTailNodeWorld[1] = headPos[1] + currentDir[1] * state.restBoneLength
+                state.lastTailNodeWorld[2] = headPos[2] + currentDir[2] * state.restBoneLength
             }
         }
     }
@@ -422,6 +572,16 @@ internal class VrmSpringBoneManager(
         val tm = engine.transformManager
 
         for (spring in runtimeSprings) {
+            var centerWorldInv: FloatArray? = null
+            if (spring.centerEntity != 0) {
+                val centerInstance = tm.getInstance(spring.centerEntity)
+                if (centerInstance != 0) {
+                    val cWorld = FloatArray(16)
+                    tm.getWorldTransform(centerInstance, cWorld)
+                    centerWorldInv = mat4Invert(cWorld)
+                }
+            }
+
             for (state in spring.jointStates) {
                 val instance = tm.getInstance(state.entity)
                 if (instance == 0) continue
@@ -435,13 +595,16 @@ internal class VrmSpringBoneManager(
                 val headPos = floatArrayOf(worldMat[12], worldMat[13], worldMat[14])
                 val worldQuat = matrixToQuaternion(worldMat)
                 val worldBoneDir = quatRotateVec(worldQuat, state.boneAxis)
-                val tailPos = floatArrayOf(
+                val tailWorld = floatArrayOf(
                     headPos[0] + worldBoneDir[0] * state.boneLength,
                     headPos[1] + worldBoneDir[1] * state.boneLength,
                     headPos[2] + worldBoneDir[2] * state.boneLength
                 )
-                state.prevTail = tailPos.clone()
-                state.currentTail = tailPos.clone()
+                val tailCenter = centerWorldInv?.let { mat4MulPoint(it, tailWorld) } ?: tailWorld
+                state.prevTail = tailCenter.clone()
+                state.currentTail = tailCenter.clone()
+                tailWorld.copyInto(state.lastTailNodeWorld)
+                state.boneLength = state.restBoneLength
             }
         }
     }
@@ -459,19 +622,23 @@ internal class VrmSpringBoneManager(
     ): FloatArray? {
         // Transform collider offset to world space
         val colliderWorldPos = mat4MulPoint(colliderWorldMat, collider.offset)
+        // Collider radius is a model-unit value; scale it into world space
+        val colliderScale = vecLength(floatArrayOf(
+            colliderWorldMat[0], colliderWorldMat[1], colliderWorldMat[2]
+        ))
 
         if (collider.tail != null) {
             // Capsule collider
             val colliderWorldTail = mat4MulPoint(colliderWorldMat, collider.tail)
             return resolveCapsuleCollision(
                 headPos, nextTail, boneLength, jointRadius,
-                colliderWorldPos, colliderWorldTail, collider.radius
+                colliderWorldPos, colliderWorldTail, collider.radius * colliderScale
             )
         } else {
             // Sphere collider
             return resolveSphereCollision(
                 headPos, nextTail, boneLength, jointRadius,
-                colliderWorldPos, collider.radius
+                colliderWorldPos, collider.radius * colliderScale
             )
         }
     }
@@ -615,23 +782,37 @@ internal class VrmSpringBoneManager(
         }
         colliderGroups = parsedGroups
 
-        // Parse springs
+        // Parse springs. Per the spec, each joint's tail is the next joint node;
+        // the last joint's tail is its first hierarchy child (or a virtual tail
+        // is created at bind time when it has no children).
         val springsArray = springBoneExt.getAsJsonArray("springs")
         val parsedChains = mutableListOf<SpringChain>()
         springsArray?.forEach { el ->
             val obj = el.asJsonObject
             val name = obj.get("name")?.asString
-            val joints = mutableListOf<SpringJointParams>()
 
+            val jointNodes = mutableListOf<Int>()
             obj.getAsJsonArray("joints")?.forEach { jEl ->
-                val jObj = jEl.asJsonObject
-                val nodeIdx = jObj.get("node")?.asInt ?: return@forEach
+                jointNodes.add(jEl.asJsonObject.get("node")?.asInt ?: -1)
+            }
+
+            val joints = mutableListOf<SpringJointParams>()
+            for (i in jointNodes.indices) {
+                val nodeIdx = jointNodes[i]
+                if (nodeIdx < 0) continue
+                val jObj = obj.getAsJsonArray("joints")[i].asJsonObject
+                val tailNode = if (i + 1 < jointNodes.size) {
+                    jointNodes[i + 1].takeIf { it >= 0 }
+                } else {
+                    nodeChildren[nodeIdx]?.firstOrNull()
+                }
                 joints.add(SpringJointParams(
                     nodeIndex = nodeIdx,
+                    tailNodeIndex = tailNode,
                     stiffness = jObj.get("stiffness")?.asFloat ?: 1.0f,
                     gravityPower = jObj.get("gravityPower")?.asFloat ?: 0f,
                     gravityDir = parseVec3(jObj.get("gravityDir"), default = floatArrayOf(0f, -1f, 0f)),
-                    dragForce = jObj.get("dragForce")?.asFloat ?: 0.5f,
+                    dragForce = jObj.get("dragForce")?.asFloat ?: 0.4f,
                     hitRadius = jObj.get("hitRadius")?.asFloat ?: 0f
                 ))
             }
@@ -641,20 +822,32 @@ internal class VrmSpringBoneManager(
                 colliderGroupIndices.add(idx.asInt)
             }
 
+            val centerEl = obj.get("center")
+            val centerNode = if (centerEl != null && !centerEl.isJsonNull) centerEl.asInt else null
+
+            // three-vrm's VRM 1.0 import creates joints only for joints[0..n-2]: the
+            // last schema joint serves purely as its parent's tail and is never
+            // simulated. Its short virtual tail would otherwise flap violently.
             if (joints.isNotEmpty()) {
-                parsedChains.add(SpringChain(name, joints, colliderGroupIndices))
+                joints.removeAt(joints.size - 1)
+            }
+
+            if (joints.isNotEmpty()) {
+                parsedChains.add(SpringChain(name, joints, colliderGroupIndices, centerNode))
             }
         }
         springChains = parsedChains
 
+        val centered = springChains.count { it.centerNodeIndex != null }
         Log.i(TAG, "Parsed VRM 1.0: ${colliders.size} colliders, " +
-                "${colliderGroups.size} groups, ${springChains.size} springs")
+                "${colliderGroups.size} groups, ${springChains.size} springs, $centered with center")
     }
 
     // ── JSON Parsing: VRM 0.x ────────────────────────────────────────────
 
     private fun parseVrm0SecondaryAnimation(secAnim: JsonObject) {
         // Parse collider groups (VRM 0.x: colliderGroups[] with node + colliders[])
+        // Collider offset Z is opposite in VRM 0.0 (three-vrm VRMSpringBoneLoaderPlugin._v0Import).
         val groupsArray = secAnim.getAsJsonArray("colliderGroups")
         val parsedColliders = mutableListOf<SpringCollider>()
         val parsedGroups = mutableListOf<SpringColliderGroup>()
@@ -662,7 +855,6 @@ internal class VrmSpringBoneManager(
         groupsArray?.forEach { el ->
             val obj = el.asJsonObject
             val nodeIdx = obj.get("node")?.asInt ?: return@forEach
-            val groupStartIdx = parsedColliders.size
             val indices = mutableListOf<Int>()
 
             obj.getAsJsonArray("colliders")?.forEach { cEl ->
@@ -670,7 +862,11 @@ internal class VrmSpringBoneManager(
                 val offset = parseVec3(cObj.get("offset"))
                 val radius = cObj.get("radius")?.asFloat ?: 0f
                 indices.add(parsedColliders.size)
-                parsedColliders.add(SpringCollider(nodeIdx, offset, radius, null))
+                parsedColliders.add(SpringCollider(
+                    nodeIdx,
+                    floatArrayOf(offset[0], offset[1], -offset[2]),
+                    radius, null
+                ))
             }
 
             parsedGroups.add(SpringColliderGroup(null, indices))
@@ -678,7 +874,9 @@ internal class VrmSpringBoneManager(
         colliders = parsedColliders
         colliderGroups = parsedGroups
 
-        // Parse bone groups (VRM 0.x: boneGroups[])
+        // Parse bone groups (VRM 0.x: boneGroups[] with per-group parameters).
+        // The roots' whole subtrees are simulated (three-vrm: root.traverse), each
+        // node's tail being its first hierarchy child.
         val boneGroupsArray = secAnim.getAsJsonArray("boneGroups")
         val parsedChains = mutableListOf<SpringChain>()
 
@@ -688,7 +886,7 @@ internal class VrmSpringBoneManager(
             val stiffness = obj.get("stiffiness")?.asFloat ?: obj.get("stiffness")?.asFloat ?: 1.0f
             val gravityPower = obj.get("gravityPower")?.asFloat ?: 0f
             val gravityDir = parseVec3(obj.get("gravityDir"), default = floatArrayOf(0f, -1f, 0f))
-            val dragForce = obj.get("dragForce")?.asFloat ?: 0.5f
+            val dragForce = obj.get("dragForce")?.asFloat ?: 0.4f
             val hitRadius = obj.get("hitRadius")?.asFloat ?: 0f
 
             val colliderGroupIndices = mutableListOf<Int>()
@@ -696,84 +894,39 @@ internal class VrmSpringBoneManager(
                 colliderGroupIndices.add(idx.asInt)
             }
 
-            // VRM 0.x: "bones" is an array of root nodes;
-            // each root + its descendants form one chain.
-            // For simplicity we treat each root as a chain with just that node.
-            // The full tree traversal would need the glTF node children info,
-            // which we handle in bindToAsset by walking the Filament transform hierarchy.
+            val centerEl = obj.get("center")
+            val centerNode = if (centerEl != null && !centerEl.isJsonNull) centerEl.asInt else null
+
             obj.getAsJsonArray("bones")?.forEach { boneEl ->
-                val nodeIdx = boneEl.asInt
+                val rootIdx = boneEl.asInt
                 val joints = mutableListOf<SpringJointParams>()
-                joints.add(SpringJointParams(nodeIdx, stiffness, gravityPower, gravityDir, dragForce, hitRadius))
-                parsedChains.add(SpringChain(comment, joints, colliderGroupIndices))
+                // DFS pre-order over the subtree: parents before children
+                val visited = mutableSetOf<Int>()
+                fun visit(idx: Int) {
+                    if (!visited.add(idx)) return
+                    joints.add(SpringJointParams(
+                        nodeIndex = idx,
+                        tailNodeIndex = nodeChildren[idx]?.firstOrNull(),
+                        stiffness = stiffness,
+                        gravityPower = gravityPower,
+                        gravityDir = gravityDir,
+                        dragForce = dragForce,
+                        hitRadius = hitRadius
+                    ))
+                    nodeChildren[idx]?.forEach { visit(it) }
+                }
+                visit(rootIdx)
+
+                if (joints.isNotEmpty()) {
+                    parsedChains.add(SpringChain(comment, joints, colliderGroupIndices, centerNode))
+                }
             }
         }
         springChains = parsedChains
 
         Log.i(TAG, "Parsed VRM 0.x: ${colliders.size} colliders, " +
-                "${colliderGroups.size} groups, ${springChains.size} springs")
-    }
-
-    /**
-     * For VRM 0.x, expand single-node chains by walking the Filament transform
-     * hierarchy to discover child nodes.
-     */
-    fun expandVrm0Chains(asset: FilamentAsset) {
-        if (springChains.isEmpty()) return
-
-        val tm = engine.transformManager
-        val expanded = mutableListOf<SpringChain>()
-
-        for (chain in springChains) {
-            if (chain.joints.size != 1) {
-                expanded.add(chain)
-                continue
-            }
-
-            val rootJoint = chain.joints[0]
-            val rootEntity = nodeEntities[rootJoint.nodeIndex]
-            if (rootEntity == null) {
-                expanded.add(chain)
-                continue
-            }
-
-            // Walk down the first-child chain
-            val allJoints = mutableListOf(rootJoint)
-            var currentEntity: Int = rootEntity
-
-            // Find node index → entity reverse map
-            val entityToNode = nodeEntities.entries.associateBy({ it.value }, { it.key })
-
-            while (true) {
-                val inst = tm.getInstance(currentEntity)
-                if (inst == 0) break
-
-                var childEntity = 0
-                val entities = asset.entities
-                for (i in entities.indices) {
-                    val e = entities[i]
-                    val ci = tm.getInstance(e)
-                    if (ci != 0 && tm.getParent(ci) == inst) {
-                        childEntity = e
-                        break
-                    }
-                }
-
-                if (childEntity == 0) break
-
-                val childNodeIdx = entityToNode[childEntity] ?: break
-
-                allJoints.add(SpringJointParams(
-                    childNodeIdx, rootJoint.stiffness, rootJoint.gravityPower,
-                    rootJoint.gravityDir, rootJoint.dragForce, rootJoint.hitRadius
-                ))
-                currentEntity = childEntity
-            }
-
-            expanded.add(SpringChain(chain.name, allJoints, chain.colliderGroupIndices))
-        }
-
-        springChains = expanded
+                "${colliderGroups.size} groups, ${springChains.size} springs, " +
+                "${springChains.sumOf { it.joints.size }} joints")
     }
 
     // ── Vector / Quaternion Math ──────────────────────────────────────────
@@ -782,6 +935,21 @@ internal class VrmSpringBoneManager(
 
     private fun vecLength(v: FloatArray): Float =
         sqrt((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).toDouble()).toFloat()
+
+    /** Returns a normalized copy of [v]; the zero vector maps to (0, -1, 0). */
+    private fun normalizeVec(v: FloatArray): FloatArray {
+        val len = vecLength(v)
+        if (len < 1e-12f) return floatArrayOf(0f, -1f, 0f)
+        return floatArrayOf(v[0] / len, v[1] / len, v[2] / len)
+    }
+
+    /** Normalizes [v] in place; a near-zero vector is left unchanged. */
+    private fun normalizeVecInPlace(v: FloatArray) {
+        val len = vecLength(v)
+        if (len > 1e-12f) {
+            v[0] /= len; v[1] /= len; v[2] /= len
+        }
+    }
 
     private fun quatMultiply(a: FloatArray, b: FloatArray): FloatArray {
         val ax = a[0]; val ay = a[1]; val az = a[2]; val aw = a[3]
@@ -854,6 +1022,36 @@ internal class VrmSpringBoneManager(
             m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
             m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]
         )
+    }
+
+    /**
+     * Invert a 4x4 column-major matrix (MESA gluInvertMatrix).
+     * Returns null when the matrix is singular.
+     */
+    private fun mat4Invert(m: FloatArray): FloatArray? {
+        val inv = FloatArray(16)
+        inv[0] =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10]
+        inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10]
+        inv[8] =  m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9]
+        inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9]
+        inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10]
+        inv[5] =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10]
+        inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9]
+        inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9]
+        inv[2] =  m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6]
+        inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6]
+        inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5]
+        inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5]
+        inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6]
+        inv[7] =  m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6]
+        inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5]
+        inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5]
+
+        val det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12]
+        if (abs(det) < 1e-12f) return null
+        val invDet = 1f / det
+        for (i in 0 until 16) inv[i] *= invDet
+        return inv
     }
 
     private fun quaternionToMatrix(q: FloatArray, mat: FloatArray) {
