@@ -118,7 +118,6 @@ internal class SoulLinkRenderer(
     private var keyLightEntity: Int = 0
     private var fillLightEntity: Int = 0
     private var rimLightEntity: Int = 0
-    private var lightRigSignature: LightRigSignature? = null
 
     // FPS measurement (reported via onFpsUpdated every FPS_WINDOW_NANOS)
     var onFpsUpdated: ((Int) -> Unit)? = null
@@ -134,18 +133,42 @@ internal class SoulLinkRenderer(
         // and the default orbit manipulator looks at it from +Z.
         private val MODEL_CENTER = floatArrayOf(0f, 0f, -4f)
 
-        // Three-point studio rig. Direction = the way the light travels:
-        // key and fill come from above the camera side (+Z), the rim sits
-        // behind and above the model (source at -Z) to outline hair/shoulders.
+        // Three-point studio rig, built around MODEL_CENTER (the model sits at
+        // (0, 0, -4)). Direction = the way the light travels. Every light in the
+        // rig is a SPOT light — including the "sun": Filament composes a
+        // directional light's direction with the camera/world transform in
+        // FScene::prepare, and in practice that path lit this scene as if the
+        // key were rotated 180° around Y (bright floor/backs, black faces and
+        // front walls) no matter what transform the light entity carried. The
+        // punctual (spot) path proved position- and direction-correct, so the
+        // key is a wide-cone shadow-casting spot — a studio softbox in effect.
+        // Spot intensity is candela; illuminance ≈ cd / distance².
         private val KEY_COLOR = floatArrayOf(1.0f, 0.98f, 0.95f)
-        private const val KEY_LUX = 90_000f
-        private val KEY_DIRECTION = floatArrayOf(-0.5f, -1.0f, -0.5f)
+        private const val KEY_CANDELA = 2_250_000f
+        private val KEY_POSITION = floatArrayOf(2.0f, 5.0f, -2.0f)
+        private val KEY_TARGET = floatArrayOf(0.0f, 0.9f, -4.0f)
+        private const val KEY_CONE_INNER = 0.35f
+        private const val KEY_CONE_OUTER = 0.7f
+
+        // Fill: cool spot from up-front-left, aimed at the model's chest.
+        // ~29000 lux at the subject ≈ a 1:2~1:3 key-to-fill ratio.
         private val FILL_COLOR = floatArrayOf(0.8f, 0.85f, 1.0f)
-        private const val FILL_LUX = 30_000f
-        private val FILL_DIRECTION = floatArrayOf(0.5f, -0.4f, -0.5f)
+        private const val FILL_CANDELA = 300_000f
+        private val FILL_POSITION = floatArrayOf(-2.0f, 2.6f, -2.0f)
+        private val FILL_TARGET = floatArrayOf(0.0f, 1.1f, -4.0f)
+        private const val FILL_CONE_INNER = 0.55f
+        private const val FILL_CONE_OUTER = 1.0f
+
+        // Rim: cool-white spot from up-behind, aimed past the model's head.
+        // ~70000 lux on the model's back, outlining hair and shoulders.
         private val RIM_COLOR = floatArrayOf(0.95f, 0.97f, 1.0f)
-        private const val RIM_LUX = 120_000f
-        private val RIM_DIRECTION = floatArrayOf(0.0f, -0.6f, 0.8f)
+        private const val RIM_CANDELA = 350_000f
+        private val RIM_POSITION = floatArrayOf(0.0f, 2.7f, -6.0f)
+        private val RIM_TARGET = floatArrayOf(0.0f, 1.3f, -4.0f)
+        private const val RIM_CONE_INNER = 0.5f
+        private const val RIM_CONE_OUTER = 0.9f
+
+        private const val SPOT_FALLOFF_METERS = 15f
 
         private const val CONTACT_SHADOW_STEPS = 8
         private const val AO_RADIUS = 0.15f
@@ -286,8 +309,9 @@ internal class SoulLinkRenderer(
 
     /**
      * Apply a full set of PBR render settings. Every part is hot-swappable;
-     * safe to call repeatedly with unchanged values (light entities are only
-     * rebuilt when the rig or shadow options actually change).
+     * safe to call repeatedly with unchanged values (the shadow-casting key
+     * light is only rebuilt when its shadow options change, and fill/rim are
+     * only touched when the rig actually changes).
      */
     fun applyRenderSettings(settings: AvatarRenderSettings) {
         renderSettings = settings
@@ -297,74 +321,155 @@ internal class SoulLinkRenderer(
         applyMaterialEnhancements()
     }
 
-    /** Identity of everything that requires rebuilding the light entities. */
-    private data class LightRigSignature(
-        val rig: LightingRig,
+    /** Shadow-related key-light options; changing them requires a light rebuild. */
+    private data class ShadowSignature(
         val shadowMapSize: Int,
         val contactShadows: Boolean,
     )
 
+    private var keyShadowSignature: ShadowSignature? = null
+
     private fun applyLighting() {
-        val signature = LightRigSignature(
-            rig = renderSettings.lightingRig,
+        // The key light entity is kept across rig switches (only its shadow
+        // options force a rebuild): destroying it would drop the shadow map
+        // and re-trigger shadow shader variants, which shows up as a visible
+        // hitch every time the user changes the lighting rig.
+        val shadowSignature = ShadowSignature(
             shadowMapSize = renderSettings.shadowMapSize,
             contactShadows = renderSettings.contactShadows,
         )
-        if (signature == lightRigSignature && keyLightEntity != 0) return
-        lightRigSignature = signature
+        if (keyLightEntity == 0 || shadowSignature != keyShadowSignature) {
+            keyShadowSignature = shadowSignature
+            destroyLight(keyLightEntity)
+            keyLightEntity = 0
+            keyLightEntity = createSpotLight(
+                color = KEY_COLOR,
+                candela = KEY_CANDELA,
+                position = KEY_POSITION,
+                target = KEY_TARGET,
+                coneInner = KEY_CONE_INNER,
+                coneOuter = KEY_CONE_OUTER,
+                castShadows = true,
+                shadowMapSize = renderSettings.shadowMapSize,
+                contactShadows = renderSettings.contactShadows,
+            )
+        }
 
-        val engine = modelViewer.engine
-        val scene = modelViewer.scene
-        val entityManager = EntityManager.get()
-
-        listOf(keyLightEntity, fillLightEntity, rimLightEntity)
-            .filter { it != 0 }
-            .forEach { entity ->
-                scene.removeEntity(entity)
-                engine.destroyEntity(entity)
+        // Fill / rim are punctual (spot) lights, so they can be added and
+        // removed freely without touching the shadow-casting key.
+        when (renderSettings.lightingRig) {
+            LightingRig.KEY_ONLY -> {
+                destroyLight(fillLightEntity); fillLightEntity = 0
+                destroyLight(rimLightEntity); rimLightEntity = 0
             }
-        keyLightEntity = 0
-        fillLightEntity = 0
-        rimLightEntity = 0
+            LightingRig.KEY_FILL -> {
+                destroyLight(rimLightEntity); rimLightEntity = 0
+                if (fillLightEntity == 0) {
+                    fillLightEntity = createSpotLight(
+                        color = FILL_COLOR,
+                        candela = FILL_CANDELA,
+                        position = FILL_POSITION,
+                        target = FILL_TARGET,
+                        coneInner = FILL_CONE_INNER,
+                        coneOuter = FILL_CONE_OUTER,
+                    )
+                }
+            }
+            LightingRig.STUDIO -> {
+                if (fillLightEntity == 0) {
+                    fillLightEntity = createSpotLight(
+                        color = FILL_COLOR,
+                        candela = FILL_CANDELA,
+                        position = FILL_POSITION,
+                        target = FILL_TARGET,
+                        coneInner = FILL_CONE_INNER,
+                        coneOuter = FILL_CONE_OUTER,
+                    )
+                }
+                if (rimLightEntity == 0) {
+                    rimLightEntity = createSpotLight(
+                        color = RIM_COLOR,
+                        candela = RIM_CANDELA,
+                        position = RIM_POSITION,
+                        target = RIM_TARGET,
+                        coneInner = RIM_CONE_INNER,
+                        coneOuter = RIM_CONE_OUTER,
+                    )
+                }
+            }
+        }
+    }
 
-        // Key light — the only shadow caster of the rig
-        keyLightEntity = entityManager.create()
-        LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .color(KEY_COLOR[0], KEY_COLOR[1], KEY_COLOR[2])
-            .intensity(KEY_LUX)
-            .direction(KEY_DIRECTION[0], KEY_DIRECTION[1], KEY_DIRECTION[2])
-            .castShadows(true)
-            .shadowOptions(
+    /**
+     * Build a light entity and add it to the scene. Every light gets a
+     * TransformManager component: Filament composes a light's world direction
+     * and position with its entity transform, and a light without one falls
+     * back to transform instance 0 (whatever component happens to live there),
+     * which mangles the authored direction.
+     */
+    private fun createLightEntity(builder: LightManager.Builder, position: FloatArray): Int {
+        val engine = modelViewer.engine
+        val entity = EntityManager.get().create()
+        builder.build(engine, entity)
+        val tm = engine.transformManager
+        val instance = tm.create(entity)
+        val transform = FloatArray(16).apply {
+            this[0] = 1f; this[5] = 1f; this[10] = 1f; this[15] = 1f
+            this[12] = position[0]; this[13] = position[1]; this[14] = position[2]
+        }
+        tm.setTransform(instance, transform)
+        modelViewer.scene.addEntity(entity)
+        return entity
+    }
+
+    /** Spot light at [position] aimed at [target]; intensity in candela. */
+    private fun createSpotLight(
+        color: FloatArray,
+        candela: Float,
+        position: FloatArray,
+        target: FloatArray,
+        coneInner: Float,
+        coneOuter: Float,
+        castShadows: Boolean = false,
+        shadowMapSize: Int = 1024,
+        contactShadows: Boolean = false,
+    ): Int {
+        val aim = normalize(
+            floatArrayOf(
+                target[0] - position[0],
+                target[1] - position[1],
+                target[2] - position[2],
+            )
+        )
+        val builder = LightManager.Builder(LightManager.Type.SPOT)
+            .color(color[0], color[1], color[2])
+            .intensity(candela)
+            .direction(aim[0], aim[1], aim[2])
+            .spotLightCone(coneInner, coneOuter)
+            .falloff(SPOT_FALLOFF_METERS)
+            .castShadows(castShadows)
+        if (castShadows) {
+            builder.shadowOptions(
                 LightManager.ShadowOptions().apply {
-                    mapSize = renderSettings.shadowMapSize
-                    screenSpaceContactShadows = renderSettings.contactShadows
+                    mapSize = shadowMapSize
+                    screenSpaceContactShadows = contactShadows
                     stepCount = CONTACT_SHADOW_STEPS
                 }
             )
-            .build(engine, keyLightEntity)
-        scene.addEntity(keyLightEntity)
-
-        if (renderSettings.lightingRig != LightingRig.KEY_ONLY) {
-            fillLightEntity = entityManager.create()
-            LightManager.Builder(LightManager.Type.DIRECTIONAL)
-                .color(FILL_COLOR[0], FILL_COLOR[1], FILL_COLOR[2])
-                .intensity(FILL_LUX)
-                .direction(FILL_DIRECTION[0], FILL_DIRECTION[1], FILL_DIRECTION[2])
-                .castShadows(false)
-                .build(engine, fillLightEntity)
-            scene.addEntity(fillLightEntity)
         }
+        return createLightEntity(builder, position)
+    }
 
-        if (renderSettings.lightingRig == LightingRig.STUDIO) {
-            rimLightEntity = entityManager.create()
-            LightManager.Builder(LightManager.Type.DIRECTIONAL)
-                .color(RIM_COLOR[0], RIM_COLOR[1], RIM_COLOR[2])
-                .intensity(RIM_LUX)
-                .direction(RIM_DIRECTION[0], RIM_DIRECTION[1], RIM_DIRECTION[2])
-                .castShadows(false)
-                .build(engine, rimLightEntity)
-            scene.addEntity(rimLightEntity)
-        }
+    private fun destroyLight(entity: Int) {
+        if (entity == 0) return
+        val engine = modelViewer.engine
+        modelViewer.scene.removeEntity(entity)
+        engine.destroyEntity(entity)
+    }
+
+    private fun normalize(v: FloatArray): FloatArray {
+        val length = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+        return if (length > 0f) floatArrayOf(v[0] / length, v[1] / length, v[2] / length) else v
     }
 
     private fun applyIblSettings() {
@@ -957,7 +1062,7 @@ internal class SoulLinkRenderer(
         keyLightEntity = 0
         fillLightEntity = 0
         rimLightEntity = 0
-        lightRigSignature = null
+        keyShadowSignature = null
         colorGrading?.let { engine.destroyColorGrading(it) }
         colorGrading = null
         appliedToneMapping = null
