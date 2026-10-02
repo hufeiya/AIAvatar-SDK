@@ -66,7 +66,13 @@ enum class AntiAliasingMode {
  * @property iblRotationDegrees Rotation of the IBL environment around Y, in degrees.
  * @property lightingRig Studio light rig level, see [LightingRig].
  * @property shadowMapSize Shadow map resolution of the key light (1024/2048/4096).
- * @property softShadows Use PCSS soft shadows instead of hard PCF.
+ *   1024 holds 60 FPS on mid-range mobile GPUs; 2048 already costs ~25% FPS on a
+ *   2019 flagship (Adreno 640) because the 3-point rig keeps a real shadow-casting
+ *   key light in every rig level (see [softShadows] for the hard cliff).
+ * @property softShadows Use PCSS soft shadows instead of hard PCF. Opt-in only:
+ *   Filament's PCSS fragment path is catastrophically slow on Adreno GPUs
+ *   (measured 1–5 FPS on an Adreno 640 flagship, independent of shadow map
+ *   size), so this defaults to off and the HIGH tier ships PCF as well.
  * @property contactShadows Screen-space contact shadows on the key light for
  *   micro shadows (eyelashes, nose wings). Costs a small amount of GPU bandwidth.
  * @property ambientOcclusion SSAO/GTAO level, see [AmbientOcclusionQuality].
@@ -90,8 +96,8 @@ data class AvatarRenderSettings(
     val iblIntensity: Float = 5_000f,
     val iblRotationDegrees: Float = 0f,
     val lightingRig: LightingRig = LightingRig.STUDIO,
-    val shadowMapSize: Int = 2048,
-    val softShadows: Boolean = true,
+    val shadowMapSize: Int = 1024,
+    val softShadows: Boolean = false,
     val contactShadows: Boolean = false,
     val ambientOcclusion: AmbientOcclusionQuality = AmbientOcclusionQuality.HIGH,
     val toneMapping: ToneMappingMode = ToneMappingMode.ACES,
@@ -114,10 +120,10 @@ enum class QualityPreset {
     /** Low-end devices: single key light, 1024 shadows, no AO, FXAA. Mobile-60fps target. */
     LOW,
 
-    /** Mainstream: key + fill, 2048 soft shadows, SSAO, ACES + light bloom. */
+    /** Mainstream: key + fill, 1024 shadows, SSAO, ACES + light bloom. */
     MEDIUM,
 
-    /** High: full three-point rig, GTAO, 2048 soft shadows, ACES + bloom. */
+    /** High: full three-point rig, GTAO, 2048 shadows, ACES + bloom. */
     HIGH,
 
     /** Next-gen: 4096 shadows + contact shadows, GTAO, TAA, bloom, DoF, material upgrades. */
@@ -153,8 +159,8 @@ enum class QualityPreset {
             iblIntensity = iblIntensity,
             iblRotationDegrees = iblRotationDegrees,
             lightingRig = LightingRig.KEY_FILL,
-            shadowMapSize = 2048,
-            softShadows = true,
+            shadowMapSize = 1024,
+            softShadows = false,
             contactShadows = false,
             ambientOcclusion = AmbientOcclusionQuality.STANDARD,
             toneMapping = ToneMappingMode.ACES,
@@ -170,7 +176,7 @@ enum class QualityPreset {
             iblRotationDegrees = iblRotationDegrees,
             lightingRig = LightingRig.STUDIO,
             shadowMapSize = 2048,
-            softShadows = true,
+            softShadows = false,
             contactShadows = false,
             ambientOcclusion = AmbientOcclusionQuality.HIGH,
             toneMapping = ToneMappingMode.ACES,

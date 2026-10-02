@@ -157,7 +157,7 @@ internal fun SettingsScreen(
                     item {
                         SettingsActionRow(
                             title = "主流 Medium",
-                            subtitle = "主光+辅光 · 2048 软阴影 · SSAO · ACES + 轻度泛光"
+                            subtitle = "主光+辅光 · 1024 阴影 · SSAO · ACES + 轻度泛光"
                         ) {
                             onSettingsChange(
                                 QualityPreset.MEDIUM.toRenderSettings(
@@ -171,7 +171,7 @@ internal fun SettingsScreen(
                     item {
                         SettingsActionRow(
                             title = "高配 High",
-                            subtitle = "三点布光 · 2048 软阴影 · GTAO · ACES + 泛光"
+                            subtitle = "三点布光 · 2048 阴影 · GTAO · ACES + 泛光"
                         ) {
                             onSettingsChange(
                                 QualityPreset.HIGH.toRenderSettings(
@@ -263,7 +263,7 @@ internal fun SettingsScreen(
                     item {
                         SettingsOptionRow(
                             title = "2048 (Medium)",
-                            subtitle = "主流推荐，配合软阴影",
+                            subtitle = "精度与开销平衡，旗舰机适用",
                             selected = settings.shadowMapSize == 2048
                         ) {
                             onSettingsChange(settings.copy(shadowMapSize = 2048))
@@ -281,7 +281,7 @@ internal fun SettingsScreen(
                     item {
                         SettingsSwitchRow(
                             title = "软阴影 (PCSS)",
-                            subtitle = "基于物理的阴影半影，边缘近实远虚",
+                            subtitle = "基于物理的阴影半影，边缘近实远虚；Adreno 上开销极大（实测个位数帧率），仅限旗舰机尝试",
                             checked = settings.softShadows
                         ) {
                             onSettingsChange(settings.copy(softShadows = it))
