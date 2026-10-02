@@ -23,10 +23,15 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -35,6 +40,7 @@ import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarRenderSettings
+import com.neethu.corelib.CameraShot
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.ToneMappingMode
 
@@ -58,8 +64,17 @@ internal class SoulLinkRenderer(
     // the on-screen gestures. Constructor args replicate ModelViewer's own
     // defaults (Engine.create(), UiHelper DONT_CHECK, ORBIT mode targeting
     // MODEL_CENTER; the viewport is set later by ModelViewer on surface resize).
+    //
+    // The zoom/orbit/fov/far values are pinned to camutils' defaults on
+    // purpose: the camera-shot driver below converts world-space corrections
+    // into scroll/grab deltas using these exact constants, so the conversions
+    // must not silently drift if the library defaults ever change.
     private val cameraManipulator: Manipulator = Manipulator.Builder()
         .targetPosition(MODEL_CENTER[0], MODEL_CENTER[1], MODEL_CENTER[2])
+        .zoomSpeed(MANIP_ZOOM_SPEED)
+        .orbitSpeed(MANIP_ORBIT_SPEED, MANIP_ORBIT_SPEED)
+        .fovDegrees(MANIP_FOV_DEGREES)
+        .farPlane(MANIP_FAR_PLANE)
         .build(Manipulator.Mode.ORBIT)
 
     private var modelViewer: ModelViewer = ModelViewer(
@@ -98,6 +113,19 @@ internal class SoulLinkRenderer(
     private var hipsEntity: Int = 0
     private var isVrm0: Boolean = false
 
+    // Humanoid bones used by the camera-shot driver to frame the model
+    // (0 = unresolved → proportional fallback).
+    private var headEntity: Int = 0
+    private var chestEntity: Int = 0
+
+    // Camera-shot framing. `activeShot` stays set until cleared or replaced —
+    // switching models re-frames the new character to the same shot.
+    // `shotSteering` is true only while a transition is gliding toward the
+    // shot pose; any camera touch/call cancels the glide but keeps the mode.
+    private var activeShot: CameraShot? = null
+    private var shotSteering = false
+    private var shotDeadlineNanos = 0L
+
     // Scene (environment/background GLB) support
     private var sceneAsset: FilamentAsset? = null
     private var sceneAssetLoader: AssetLoader? = null
@@ -132,6 +160,39 @@ internal class SoulLinkRenderer(
         // Camera side of the scene: ModelViewer places the model at MODEL_CENTER
         // and the default orbit manipulator looks at it from +Z.
         private val MODEL_CENTER = floatArrayOf(0f, 0f, -4f)
+
+        // camutils internal constants, pinned via the Manipulator.Builder so the
+        // camera-shot driver's world→gesture conversions are exact:
+        // - zoomSpeed: scroll(delta) moves eye+target along the gaze by
+        //   zoomSpeed × (−delta) meters (linear).
+        // - orbitSpeed: grabUpdate moves yaw/pitch by pixels × orbitSpeed radians
+        //   (yaw from (grabX − x), pitch from (grabY − y)).
+        // - fovDegrees/farPlane: only feed the strafe-pan raycast math; the
+        //   render camera itself is a 28 mm lens set by ModelViewer.
+        private const val MANIP_ZOOM_SPEED = 0.01f
+        private const val MANIP_ORBIT_SPEED = 0.01f
+        private const val MANIP_FOV_DEGREES = 33f
+        private const val MANIP_FAR_PLANE = 5000f
+
+        // Camera-shot transition tuning: exponential approach rate (1/s) toward
+        // the shot pose, error thresholds for "arrived", and a hard timeout so
+        // a pathological pose can never wedge the driver on.
+        private const val SHOT_APPROACH_RATE = 7f
+        private const val SHOT_ARRIVE_DIST = 0.012f
+        private const val SHOT_ARRIVE_ANGLE_RAD = 0.02f
+        private const val SHOT_TIMEOUT_NANOS = 4_000_000_000L
+
+        // tan(fovDegrees/2) — feeds the pan world-per-pixel conversion.
+        private val MANIP_FOV_TAN = tan(Math.toRadians((MANIP_FOV_DEGREES / 2f).toDouble())).toFloat()
+
+        private val WORLD_UP = floatArrayOf(0f, 1f, 0f)
+
+        // Proportional bone anchors for models without a humanoid rig. The
+        // unit-cube normalization puts feet at y ≈ −1 and the head top at
+        // y ≈ +1 around MODEL_CENTER; these match typical VRM bone heights.
+        private const val HEAD_FALLBACK_Y = 0.8f
+        private const val CHEST_FALLBACK_Y = 0.35f
+        private const val HIPS_FALLBACK_Y = 0.0f
 
         // Three-point studio rig, built around MODEL_CENTER (the model sits at
         // (0, 0, -4)). Direction = the way the light travels. Every light in the
@@ -231,6 +292,10 @@ internal class SoulLinkRenderer(
                     animator?.updateBoneMatrices()
                 }
             }
+            // Camera-shot framing: steer the manipulator toward the shot pose
+            // (bones may have moved this very frame, so this runs after the
+            // animation/spring-bone updates, right before render).
+            updateCameraShot(frameTimeNanos)
             lastFrameTimeNanos = frameTimeNanos
 
             updateFps(frameTimeNanos)
@@ -298,6 +363,13 @@ internal class SoulLinkRenderer(
                     }
                     true
                 } else {
+                    // Any camera-touch cancels the shot transition — the user
+                    // takes over from wherever the camera currently is.
+                    if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
+                        event.actionMasked == android.view.MotionEvent.ACTION_POINTER_DOWN
+                    ) {
+                        cancelShotTransition()
+                    }
                     modelViewer.onTouchEvent(event)
                     true
                 }
@@ -724,6 +796,19 @@ internal class SoulLinkRenderer(
                 // Resolve the humanoid hips bone for hips-drag (mouse.html semantics)
                 isVrm0 = parseVrmMetaVersion(bytes) == "0"
                 hipsEntity = resolveHipsEntity(asset, bytes)
+
+                // Resolve the bones the camera-shot driver frames against
+                // (chest falls back spine → upperChest is tried first).
+                headEntity = resolveHumanoidEntity(asset, bytes, "head")
+                chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
+
+                // A pending shot re-frames the freshly loaded character to the
+                // same framing (shot survives model switches until cancelled).
+                activeShot?.let { shot ->
+                    shotSteering = true
+                    shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
+                    android.util.Log.i("SoulLinkRenderer", "Re-framing camera shot: $shot")
+                }
             }
         }
 
@@ -746,37 +831,51 @@ internal class SoulLinkRenderer(
         }
     }
 
-    /** Resolves the humanoid hips node entity for hips-drag (three-vrm mouse.html semantics). */
-    private fun resolveHipsEntity(asset: FilamentAsset, glbBytes: ByteArray): Int {
+    /**
+     * Resolves a humanoid bone node entity by its VRM semantic name(s), trying
+     * each in order (VRM 1.0: `VRMC_vrm.humanoid.humanBones.<name>.node`;
+     * VRM 0.x: `VRM.humanoid.humanBones[]` with `bone == <name>`).
+     * Returns 0 when none of [semantics] resolve.
+     */
+    private fun resolveHumanoidEntity(asset: FilamentAsset, glbBytes: ByteArray, vararg semantics: String): Int {
         return try {
             val json = parseGlbJson(glbBytes) ?: return 0
             val ext = json.getAsJsonObject("extensions") ?: return 0
-            var hipsNodeIndex = -1
+            val nodes = json.getAsJsonArray("nodes")
 
-            // VRM 1.0: extensions.VRMC_vrm.humanoid.humanBones.hips.node
-            ext.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("humanoid")
-                ?.getAsJsonObject("humanBones")?.getAsJsonObject("hips")
-                ?.get("node")?.asInt?.let { hipsNodeIndex = it }
+            for (semantic in semantics) {
+                var nodeIndex = -1
 
-            // VRM 0.x: extensions.VRM.humanoid.humanBones[] with bone == "hips"
-            if (hipsNodeIndex < 0) {
-                ext.getAsJsonObject("VRM")?.getAsJsonObject("humanoid")
-                    ?.getAsJsonArray("humanBones")?.forEach { el ->
-                        val obj = el.asJsonObject
-                        if (obj.get("bone")?.asString == "hips") {
-                            hipsNodeIndex = obj.get("node")?.asInt ?: -1
+                // VRM 1.0
+                ext.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("humanoid")
+                    ?.getAsJsonObject("humanBones")?.getAsJsonObject(semantic)
+                    ?.get("node")?.asInt?.let { nodeIndex = it }
+
+                // VRM 0.x
+                if (nodeIndex < 0) {
+                    ext.getAsJsonObject("VRM")?.getAsJsonObject("humanoid")
+                        ?.getAsJsonArray("humanBones")?.forEach { el ->
+                            val obj = el.asJsonObject
+                            if (obj.get("bone")?.asString == semantic) {
+                                nodeIndex = obj.get("node")?.asInt ?: -1
+                            }
                         }
-                    }
-            }
-            if (hipsNodeIndex < 0) return 0
+                }
+                if (nodeIndex < 0 || nodes == null) continue
 
-            val nodes = json.getAsJsonArray("nodes") ?: return 0
-            val nodeName = nodes[hipsNodeIndex].asJsonObject.get("name")?.asString ?: return 0
-            asset.getFirstEntityByName(nodeName) ?: 0
+                val nodeName = nodes[nodeIndex].asJsonObject.get("name")?.asString ?: continue
+                asset.getFirstEntityByName(nodeName)?.let { return it }
+            }
+            0
         } catch (e: Exception) {
-            android.util.Log.w("SoulLinkRenderer", "Failed to resolve hips entity", e)
+            android.util.Log.w("SoulLinkRenderer", "Failed to resolve humanoid entity", e)
             0
         }
+    }
+
+    /** Resolves the humanoid hips node entity for hips-drag (three-vrm mouse.html semantics). */
+    private fun resolveHipsEntity(asset: FilamentAsset, glbBytes: ByteArray): Int {
+        return resolveHumanoidEntity(asset, glbBytes, "hips")
     }
 
     private fun parseGlbJson(glbBytes: ByteArray): JsonObject? {
@@ -1045,6 +1144,8 @@ internal class SoulLinkRenderer(
 
     override fun onDestroy(owner: LifecycleOwner) {
         stopRendering()
+        shotSteering = false
+        activeShot = null
         removeScene()
         sceneResourceLoader?.destroy()
         sceneResourceLoader = null
@@ -1116,6 +1217,7 @@ internal class SoulLinkRenderer(
      * (scroll delta = separation change × 0.1).
      */
     fun zoomCamera(spreadPx: Float) {
+        cancelShotTransition()
         cameraManipulator.scroll(
             surfaceView.width / 2,
             surfaceView.height / 2,
@@ -1125,11 +1227,13 @@ internal class SoulLinkRenderer(
 
     /** Pan the camera laterally, like a two-finger drag of [dxPx]/[dyPx] pixels. */
     fun panCamera(dxPx: Float, dyPx: Float) {
+        cancelShotTransition()
         grabCamera(dxPx, dyPx, strafe = true)
     }
 
     /** Orbit the camera, like a single-finger drag of [yawPx]/[pitchPx] pixels. */
     fun orbitCamera(yawPx: Float, pitchPx: Float) {
+        cancelShotTransition()
         grabCamera(yawPx, pitchPx, strafe = false)
     }
 
@@ -1143,6 +1247,7 @@ internal class SoulLinkRenderer(
 
     /** Restore the camera to its initial pose (as when the model was loaded). */
     fun resetCamera() {
+        cancelShotTransition()
         cameraManipulator.jumpToBookmark(cameraManipulator.homeBookmark)
     }
 
@@ -1157,6 +1262,240 @@ internal class SoulLinkRenderer(
         cameraManipulator.getLookAt(eye, target, up)
         return Triple(eye, target, up)
     }
+
+    // ── Camera Shots (smooth preset framing) ─────────────────────────────
+
+    /**
+     * Glide the camera to a preset [shot] with an exponential smooth-damp —
+     * never a hard cut. The look-at point is derived from the model's humanoid
+     * bones (head for [CameraShot.CLOSE_UP], chest/hips for the wider shots),
+     * so framing adapts to any model and its current animation pose.
+     *
+     * The shot also acts as a mode: it survives model switches (the freshly
+     * loaded character is re-framed) until [clearCameraShot] or a new
+     * [setCameraShot]. Any camera touch or programmatic camera call
+     * (zoom/pan/orbit/reset) cancels only the in-flight glide.
+     */
+    fun setCameraShot(shot: CameraShot) {
+        activeShot = shot
+        shotSteering = true
+        shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
+    }
+
+    /** Release the camera-shot mode; the camera stays where it is. */
+    fun clearCameraShot() {
+        activeShot = null
+        shotSteering = false
+    }
+
+    /** The last requested shot (camera mode), or `null` when released. */
+    fun getActiveCameraShot(): CameraShot? = activeShot
+
+    /** Stops steering toward the shot; keeps it as the current mode. */
+    private fun cancelShotTransition() {
+        shotSteering = false
+    }
+
+    /** Goal pose of a shot, in world space. */
+    private class ShotPose(
+        val pivot: FloatArray, // look-at point (3)
+        val distance: Float,   // eye distance from the pivot
+        val yaw: Float,        // orbit angle around Y; 0 = in front of the avatar (rad)
+        val pitch: Float,      // eye elevation above the pivot (rad)
+    )
+
+    /**
+     * Per-frame steering toward the active shot. The manipulator only exposes
+     * gesture primitives, so the glide is a closed loop: measure eye/gaze,
+     * then burn off a damped fraction (`step`) of the remaining error through
+     * those primitives —
+     *  1. strafe-pan: translates eye+pivot laterally (⊥ gaze), carrying the
+     *     pivot to the shot's look-at bone;
+     *  2. orbit: rotates the gaze (yaw/pitch) around the pivot;
+     *  3. scroll: dollies along the gaze to the shot distance.
+     * The world→pixel conversions mirror camutils' OrbitManipulator math
+     * (see the MANIP_* constants); whatever conversion error remains is
+     * cleaned up by the feedback over the following frames.
+     */
+    private fun updateCameraShot(nowNanos: Long) {
+        if (!shotSteering) return
+        val pose = shotPose(activeShot ?: return) ?: run { shotSteering = false; return }
+        if (nowNanos > shotDeadlineNanos) {
+            android.util.Log.w("SoulLinkRenderer", "Camera shot transition timed out")
+            shotSteering = false
+            return
+        }
+        val w = surfaceView.width
+        val h = surfaceView.height
+        if (w <= 0 || h <= 0) return
+        val dt = ((nowNanos - lastFrameTimeNanos) / 1_000_000_000.0f).coerceIn(0.001f, 0.05f)
+        val step = 1f - exp(-dt * SHOT_APPROACH_RATE)
+
+        val goalDir = orbitDirection(pose.yaw, pose.pitch)
+        val goalEye = floatArrayOf(
+            pose.pivot[0] + goalDir[0] * pose.distance,
+            pose.pivot[1] + goalDir[1] * pose.distance,
+            pose.pivot[2] + goalDir[2] * pose.distance,
+        )
+
+        // Measure #1 — current eye and gaze.
+        val eye = FloatArray(3)
+        val target = FloatArray(3)
+        val up = FloatArray(3)
+        cameraManipulator.getLookAt(eye, target, up)
+        val gaze = normalize(floatArrayOf(target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]))
+
+        // 1) Strafe pan: lateral (⊥ gaze) correction. camutils moves eye+pivot
+        //    by (2·fovTan·D/h) world units per dragged pixel, D = eye→pivot.
+        val err = floatArrayOf(goalEye[0] - eye[0], goalEye[1] - eye[1], goalEye[2] - eye[2])
+        val along = dot(err, gaze)
+        val right = normalize(cross(gaze, WORLD_UP))
+        val upward = cross(right, gaze)
+        val panD = dist3(eye, pose.pivot).coerceIn(0.3f, 20f)
+        val worldPerPixel = 2f * MANIP_FOV_TAN * panD / h
+        val panX = -dot(err, right) * step / worldPerPixel
+        val panY = -dot(err, upward) * step / worldPerPixel
+        if (abs(panX) >= 1f || abs(panY) >= 1f) {
+            cameraManipulator.grabBegin(w / 2, h / 2, true)
+            cameraManipulator.grabUpdate(
+                w / 2 + panX.roundToInt(),
+                h / 2 + panY.roundToInt()
+            )
+            cameraManipulator.grabEnd()
+        }
+
+        // 2) Orbit: rotate the gaze toward the shot direction. camutils applies
+        //    (grabX − x)·orbitSpeed to yaw and (grabY − y)·orbitSpeed to pitch.
+        val dTheta = wrapAngle(pose.yaw - atan2(-gaze[0], -gaze[2])) * step
+        val dPhi = (pose.pitch - asin((-gaze[1]).coerceIn(-1f, 1f))) * step
+        if (abs(dTheta) > 1e-4f || abs(dPhi) > 1e-4f) {
+            cameraManipulator.grabBegin(w / 2, h / 2, false)
+            cameraManipulator.grabUpdate(
+                w / 2 - (dTheta / MANIP_ORBIT_SPEED).roundToInt(),
+                h / 2 - (dPhi / MANIP_ORBIT_SPEED).roundToInt()
+            )
+            cameraManipulator.grabEnd()
+        }
+
+        // 3) Scroll: dolly along the (post-orbit) gaze. camutils moves the eye
+        //    by gaze·zoomSpeed·(−delta) meters.
+        cameraManipulator.getLookAt(eye, target, up)
+        val newGaze = normalize(floatArrayOf(target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]))
+        val s = dot(
+            floatArrayOf(goalEye[0] - eye[0], goalEye[1] - eye[1], goalEye[2] - eye[2]),
+            newGaze
+        ) * step
+        val delta = (-s / MANIP_ZOOM_SPEED).coerceIn(-500f, 500f)
+        if (abs(delta) > 1e-3f) {
+            cameraManipulator.scroll(w / 2, h / 2, delta)
+        }
+
+        // Arrival: every component decays geometrically; stop once the whole
+        // pose is within thresholds so gestures work normally again.
+        cameraManipulator.getLookAt(eye, target, up)
+        val gazeDot = dot(normalize(floatArrayOf(target[0] - eye[0], target[1] - eye[1], target[2] - eye[2])), goalDir)
+        if (dist3(eye, goalEye) < SHOT_ARRIVE_DIST && gazeDot > cos(SHOT_ARRIVE_ANGLE_RAD)) {
+            shotSteering = false
+        }
+    }
+
+    /**
+     * World-space pose for [shot], built from the humanoid bones. Distances
+     * scale with the head→hips span so any model proportion frames correctly.
+     * Bones that fail to resolve fall back to proportional anchors of the
+     * normalized rig (feet ≈ −1, head top ≈ +1 around MODEL_CENTER).
+     */
+    private fun shotPose(shot: CameraShot): ShotPose? {
+        if (modelViewer.asset == null) return null
+        val head = boneAnchor(headEntity, HEAD_FALLBACK_Y)
+        val chest = boneAnchor(chestEntity, CHEST_FALLBACK_Y)
+        val hips = boneAnchor(hipsEntity, HIPS_FALLBACK_Y)
+        val span = dist3(head, hips).coerceIn(0.25f, 1.5f)
+        return when (shot) {
+            CameraShot.CLOSE_UP -> ShotPose(
+                pivot = lerp3(head, chest, 0.22f),
+                distance = 1.45f * span,
+                yaw = 0f,
+                pitch = toRadians(6f),
+            )
+            CameraShot.MEDIUM_SHOT -> ShotPose(
+                pivot = lerp3(head, hips, 0.45f),
+                distance = 1.85f * span,
+                yaw = 0f,
+                pitch = toRadians(4f),
+            )
+            CameraShot.FULL_SHOT -> ShotPose(
+                pivot = lerp3(head, hips, 1.10f),
+                distance = 3.9f * span,
+                yaw = 0f,
+                pitch = toRadians(5f),
+            )
+            CameraShot.LONG_SHOT -> ShotPose(
+                // Full-body plus generous margin so large dance moves
+                // (jumps, arm swings, hip travel) stay in frame.
+                pivot = lerp3(head, hips, 1.0f),
+                distance = 6.0f * span,
+                yaw = 0f,
+                pitch = toRadians(6f),
+            )
+            CameraShot.OVER_SHOULDER -> ShotPose(
+                pivot = lerp3(head, chest, 0.55f),
+                distance = 2.1f * span,
+                yaw = toRadians(38f),
+                pitch = toRadians(6f),
+            )
+        }
+    }
+
+    /** World position of a bone entity, or a proportional fallback anchor. */
+    private fun boneAnchor(entity: Int, fallbackY: Float): FloatArray {
+        if (entity != 0) {
+            val tm = modelViewer.engine.transformManager
+            val instance = tm.getInstance(entity)
+            if (instance != 0) {
+                val m = FloatArray(16)
+                tm.getWorldTransform(instance, m)
+                return floatArrayOf(m[12], m[13], m[14])
+            }
+        }
+        return floatArrayOf(MODEL_CENTER[0], MODEL_CENTER[1] + fallbackY, MODEL_CENTER[2])
+    }
+
+    // ── Small vector helpers (camera shot driver) ────────────────────────
+
+    private fun dot(a: FloatArray, b: FloatArray): Float =
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    private fun cross(a: FloatArray, b: FloatArray): FloatArray = floatArrayOf(
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+    private fun dist3(a: FloatArray, b: FloatArray): Float =
+        sqrt(
+            (a[0] - b[0]) * (a[0] - b[0]) +
+                (a[1] - b[1]) * (a[1] - b[1]) +
+                (a[2] - b[2]) * (a[2] - b[2])
+        )
+
+    private fun lerp3(a: FloatArray, b: FloatArray, t: Float): FloatArray = floatArrayOf(
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    )
+
+    /** Unit vector from the pivot toward the eye for orbit angles (θ, φ). */
+    private fun orbitDirection(theta: Float, phi: Float): FloatArray =
+        floatArrayOf(sin(theta) * cos(phi), sin(phi), cos(theta) * cos(phi))
+
+    /** Wrap [x] into (−π, π]. */
+    private fun wrapAngle(x: Float): Float {
+        val twoPi = (2.0 * Math.PI).toFloat()
+        return ((x + Math.PI.toFloat()) % twoPi + twoPi) % twoPi - Math.PI.toFloat()
+    }
+
+    private fun toRadians(deg: Float): Float = (deg * Math.PI / 180.0).toFloat()
 
     /**
      * Capture the next rendered frame as a [Bitmap]. The callback fires on the

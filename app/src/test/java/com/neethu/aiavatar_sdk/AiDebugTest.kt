@@ -110,7 +110,7 @@ class AiDebugTest {
         listOf(
             "help", "state", "list", "load_model", "load_scene", "set_expression",
             "clear_expression", "play_animation", "stop_animation", "move", "zoom",
-            "pan", "orbit", "reset_camera", "set_drag_mode", "screenshot",
+            "pan", "orbit", "reset_camera", "camera_shot", "set_drag_mode", "screenshot",
         ).forEach { assertTrue("help should mention '$it'", help.contains(it)) }
     }
 }

@@ -39,6 +39,7 @@
 | `pan` | `ai_x` `ai_y` | 相机平移（屏幕像素，等效双指拖动） |
 | `orbit` | `ai_x` `ai_y` | 相机环绕（屏幕像素，等效单指拖动） |
 | `reset_camera` | — | 相机恢复初始机位 |
+| `camera_shot` | `ai_arg`= closeup \| medium \| full \| long \| over \| off | 平滑运镜到预设机位：closeup 面部特写、medium 中景半身、full 全景全身、long 远景（大动作舞蹈用）、over 反应侧景；`off` 释放回自由相机 |
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
 | `spring_debug` | `ai_arg`=on \| off | 弹簧骨骼诊断：on 时每秒向 logcat（tag `SpringBone`）输出各弹簧链根/梢关节的骨长 len=当前/静止 与方向 dir，用于真机物理排查 |
 | `screenshot` | — | 渲染一张 PNG 到应用外部目录，绝对路径打印到 logcat（可直接 `adb pull`） |
@@ -78,6 +79,7 @@ adb shell am start -n $PKG/.MainActivity --es ai_cmd zoom --ef ai_x 300
 adb shell am start -n $PKG/.MainActivity --es ai_cmd pan --ef ai_x -150 --ef ai_y 50
 adb shell am start -n $PKG/.MainActivity --es ai_cmd orbit --ef ai_x 200 --ef ai_y -100
 adb shell am start -n $PKG/.MainActivity --es ai_cmd reset_camera
+adb shell am start -n $PKG/.MainActivity --es ai_cmd camera_shot --es ai_arg closeup
 
 # 截图并拉取
 adb shell am start -n $PKG/.MainActivity --es ai_cmd screenshot

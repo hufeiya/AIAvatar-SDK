@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.neethu.corelib.AvatarController
+import com.neethu.corelib.CameraShot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -53,6 +54,7 @@ internal suspend fun executeAiCommand(
                 controller.resetCamera()
                 "camera reset to initial pose"
             }
+            "camera_shot" -> cameraShotCommand(controller, command.arg)
             "set_drag_mode" -> setDragModeCommand(uiState, command.arg)
             "spring_debug" -> {
                 val enabled = when (command.arg?.lowercase()) {
@@ -91,6 +93,7 @@ private fun describeState(controller: AvatarController, uiState: DemoUiState): S
         appendLine("cameraEye=${lookAt?.first?.toVec() ?: "n/a"}")
         appendLine("cameraTarget=${lookAt?.second?.toVec() ?: "n/a"}")
         appendLine("cameraUp=${lookAt?.third?.toVec() ?: "n/a"}")
+        appendLine("cameraShot=${controller.getActiveCameraShot() ?: "none"}")
         appendLine("expressions=${DemoUiState.resolveExpressions(controller.state.value)}")
     }.trimEnd()
 }
@@ -211,6 +214,25 @@ private fun orbitCommand(controller: AvatarController, command: AiDebugCommand):
     val pitch = command.y ?: 0f
     controller.orbitCamera(yaw, pitch)
     return String.format(Locale.US, "camera orbited by (%.0f, %.0f) px", yaw, pitch)
+}
+
+private fun cameraShotCommand(controller: AvatarController, arg: String?): String {
+    val shot = when (arg?.lowercase()) {
+        "closeup", "close_up", "cu" -> CameraShot.CLOSE_UP
+        "medium", "ms" -> CameraShot.MEDIUM_SHOT
+        "full", "fs" -> CameraShot.FULL_SHOT
+        "long", "ls", "wide" -> CameraShot.LONG_SHOT
+        "over", "over_shoulder", "os" -> CameraShot.OVER_SHOULDER
+        "off", "none", "clear" -> {
+            controller.clearCameraShot()
+            return "camera shot released (free camera)"
+        }
+        else -> throw IllegalArgumentException(
+            "camera_shot expects closeup|medium|full|long|over|off, got '$arg'"
+        )
+    }
+    controller.setCameraShot(shot)
+    return "camera gliding to $shot (${shot.label})"
 }
 
 private fun requireCoordinates(command: AiDebugCommand, what: String) {

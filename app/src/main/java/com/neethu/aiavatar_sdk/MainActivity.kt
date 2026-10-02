@@ -47,8 +47,10 @@ import com.neethu.corelib.AvatarController
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
+import com.neethu.corelib.CameraShot
 import com.neethu.corelib.rememberAvatarController
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import java.io.File
 
 /**
@@ -310,6 +312,16 @@ private fun DemoScreen(
     val state by controller.state.collectAsState()
     val fps by controller.fps.collectAsState()
 
+    // Camera-shot cycling: null = no shot applied yet (first tap → CLOSE_UP).
+    var currentShot by remember { mutableStateOf<CameraShot?>(null) }
+    var shotLabel by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(shotLabel) {
+        if (shotLabel != null) {
+            delay(1600)
+            shotLabel = null
+        }
+    }
+
     val expressionList = remember(state) {
         DemoUiState.resolveExpressions(state)
     }
@@ -382,6 +394,14 @@ private fun DemoScreen(
             }
         }
 
+        // Camera shot badge (bottom-center), briefly shown after switching
+        CameraShotLabelBadge(
+            label = shotLabel,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp)
+        )
+
         // Drag mode FAB at bottom-start
         SmallFloatingActionButton(
             onClick = { uiState.isDragMode = !uiState.isDragMode },
@@ -408,6 +428,24 @@ private fun DemoScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.End
         ) {
+            // Camera shot FAB (视角) — cycles the 4 preset framings
+            SmallFloatingActionButton(
+                onClick = {
+                    val shots = CameraShot.entries
+                    val next = shots[(shots.indexOf(currentShot) + 1).mod(shots.size)]
+                    currentShot = next
+                    controller.setCameraShot(next)
+                    shotLabel = next.label
+                },
+                shape = RoundedCornerShape(50),
+                containerColor = if (currentShot != null)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Text(text = "视", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+
             // Settings FAB (⚙️ gear icon) — opens the full settings screen
             SmallFloatingActionButton(
                 onClick = {
@@ -615,6 +653,30 @@ private fun DemoScreen(
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
                 onDismiss = { uiState.activePanel = PanelType.NONE }
+            )
+        }
+    }
+}
+
+/** Transient badge naming the camera shot that was just applied. */
+@Composable
+private fun CameraShotLabelBadge(label: String?, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = label != null,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Black.copy(alpha = 0.45f)
+        ) {
+            Text(
+                text = label.orEmpty(),
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
     }

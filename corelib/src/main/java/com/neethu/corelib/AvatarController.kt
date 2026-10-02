@@ -388,6 +388,50 @@ class AvatarController {
         return renderer?.cameraLookAt()
     }
 
+    // ── Public API: Camera Shots (preset framing) ────────────────────────
+
+    /**
+     * Glide the camera to a preset [shot] with a smooth transition — never a
+     * hard cut. Available shots:
+     *
+     *  - [CameraShot.CLOSE_UP] — 面部特写, chest-up to head (look-at on the head bone)
+     *  - [CameraShot.MEDIUM_SHOT] — 中景半身, waist-up (standard streamer framing)
+     *  - [CameraShot.FULL_SHOT] — 全景全身, head to feet
+     *  - [CameraShot.LONG_SHOT] — 远景, full body with wide margin for big dance moves
+     *  - [CameraShot.OVER_SHOULDER] — 反应侧景, half-body from ~38° side-front
+     *
+     * Framing is derived from the model's humanoid bones at call time, so it
+     * adapts to any model and animation pose. The shot stays as the camera
+     * "mode": switching models re-frames the new character with the same
+     * shot, until [clearCameraShot] or another [setCameraShot]. Manual camera
+     * input (touch or [zoomCamera]/[panCamera]/[orbitCamera]/[resetCamera])
+     * cancels only the in-flight glide.
+     *
+     * ```kotlin
+     * controller.setCameraShot(CameraShot.MEDIUM_SHOT)
+     * ```
+     */
+    fun setCameraShot(shot: CameraShot) {
+        renderer?.setCameraShot(shot)
+    }
+
+    /**
+     * Release the camera-shot mode. The camera stays where it is; gestures
+     * behave exactly as before.
+     */
+    fun clearCameraShot() {
+        renderer?.clearCameraShot()
+    }
+
+    /**
+     * The last requested [CameraShot] (camera mode), or `null` when released
+     * or no view is attached. Note: manual camera control cancels the glide
+     * but keeps the mode.
+     */
+    fun getActiveCameraShot(): CameraShot? {
+        return renderer?.getActiveCameraShot()
+    }
+
     /**
      * Capture the next rendered frame as a [android.graphics.Bitmap] and pass
      * it to [onCaptured] (on the main thread). Fails (returns `false`) when no

@@ -119,6 +119,8 @@ fun aiDebugHelp(): String = """
     |  pan                      Camera pan. ai_x/ai_y = screen pixels (two-finger equivalent)
     |  orbit                    Camera orbit. ai_x/ai_y = screen pixels (drag equivalent)
     |  reset_camera             Restore the initial camera pose
+    |  camera_shot <arg>        Frame a preset shot with a smooth transition:
+    |                           closeup | medium | full | long | over | off (release)
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
     |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
     |Other:
