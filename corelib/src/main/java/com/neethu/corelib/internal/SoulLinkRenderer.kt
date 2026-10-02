@@ -775,20 +775,47 @@ internal class SoulLinkRenderer(
             val assets = surfaceView.context.assets
             assets.open(assetsPath).use { input ->
                 val bytes = input.readBytes()
-                val buffer = ByteBuffer.wrap(bytes)
-                val animation = vrmaParser.parse(buffer)
-                if (animation != null) {
-                    vrmaEngine?.setAnimation(animation)
-                    android.util.Log.i("SoulLinkRenderer",
-                        "Loaded VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
-                    true
-                } else {
-                    android.util.Log.e("SoulLinkRenderer", "Failed to parse VRMA: $assetsPath")
-                    false
-                }
+                parseVrmaBytes(bytes, assetsPath)
             }
         } catch (e: Exception) {
             android.util.Log.e("SoulLinkRenderer", "Failed to load VRMA: $assetsPath", e)
+            false
+        }
+    }
+
+    /**
+     * Load a VRMA animation from a file on local storage (e.g. the app's
+     * external files dir), so large animation libraries don't have to ship
+     * inside the APK.
+     * @param path Absolute path to the .vrma file on the filesystem.
+     * @return true if loaded successfully.
+     */
+    fun loadVrmaAnimationFromFile(path: String): Boolean {
+        return try {
+            val file = java.io.File(path)
+            if (!file.isFile) {
+                android.util.Log.e("SoulLinkRenderer", "VRMA file not found: $path")
+                false
+            } else {
+                file.inputStream().use { input ->
+                    parseVrmaBytes(input.readBytes(), path)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Failed to load VRMA file: $path", e)
+            false
+        }
+    }
+
+    private fun parseVrmaBytes(bytes: ByteArray, source: String): Boolean {
+        val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
+        return if (animation != null) {
+            vrmaEngine?.setAnimation(animation)
+            android.util.Log.i("SoulLinkRenderer",
+                "Loaded VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
+            true
+        } else {
+            android.util.Log.e("SoulLinkRenderer", "Failed to parse VRMA: $source")
             false
         }
     }

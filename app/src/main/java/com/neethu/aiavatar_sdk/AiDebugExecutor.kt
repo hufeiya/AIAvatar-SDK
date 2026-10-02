@@ -39,7 +39,7 @@ internal suspend fun executeAiCommand(
                 uiState.selectedExpression = null
                 "face reset to neutral"
             }
-            "play_animation" -> playAnimationCommand(controller, uiState, command)
+            "play_animation" -> playAnimationCommand(context, controller, uiState, command)
             "stop_animation" -> {
                 controller.stopVrmaAnimation()
                 uiState.selectedAnimation = null
@@ -164,17 +164,19 @@ private fun setExpressionCommand(
 }
 
 private fun playAnimationCommand(
+    context: Context,
     controller: AvatarController,
     uiState: DemoUiState,
     command: AiDebugCommand,
 ): String {
     val name = resolveAssetFile(command.arg, uiState.animationFiles, "animations", listOf(".vrma"))
-    if (!controller.loadVrmaAnimation("animations/$name")) {
-        throw IllegalStateException("Failed to load animations/$name — check logcat for details")
+    if (!uiState.loadAnimation(context, controller, name)) {
+        throw IllegalStateException("Failed to load $name — check logcat for details")
     }
     controller.playVrmaAnimation(loop = command.loop)
     uiState.selectedAnimation = name
-    return "playing animations/$name (loop=${command.loop})"
+    val source = if (uiState.useExternalAnimations) "external" else "assets"
+    return "playing $name (loop=${command.loop}, source=$source)"
 }
 
 private fun moveCommand(controller: AvatarController, command: AiDebugCommand): String {
@@ -266,10 +268,20 @@ private fun resolveAssetFile(
         throw IllegalArgumentException("Missing $what file name. Send ai_cmd=list with ai_arg=$what to see options.")
     }
     val base = arg.substringAfterLast('/')
-    val match = files.firstOrNull { it.equals(base, ignoreCase = true) }
-        ?: files.firstOrNull { file -> extensions.any { file.equals(base + it, ignoreCase = true) } }
-        ?: throw IllegalArgumentException(
-            "No $what file matches '$arg'. Send ai_cmd=list with ai_arg=$what to see options."
-        )
+    val match =
+        // 1) 条目全名（外置模式为含子文件夹的相对路径）
+        files.firstOrNull { it.equals(arg, ignoreCase = true) }
+            ?: files.firstOrNull { it.equals(base, ignoreCase = true) }
+            // 2) 省略扩展名
+            ?: files.firstOrNull { file -> extensions.any { file.equals(base + it, ignoreCase = true) } }
+            // 3) 递归相对路径下仅按文件名匹配（如 "Waving" → "分类/Waving.vrma"）
+            ?: files.firstOrNull { file ->
+                val name = file.substringAfterLast('/')
+                name.equals(base, ignoreCase = true) ||
+                    extensions.any { name.equals(base + it, ignoreCase = true) }
+            }
+            ?: throw IllegalArgumentException(
+                "No $what file matches '$arg'. Send ai_cmd=list with ai_arg=$what to see options."
+            )
     return match
 }

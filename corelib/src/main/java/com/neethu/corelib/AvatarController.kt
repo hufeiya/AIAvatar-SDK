@@ -223,6 +223,18 @@ class AvatarController {
     }
 
     /**
+     * Load a VRMA animation file from local storage (e.g. the app's external
+     * files dir), for animation libraries downloaded or pushed at runtime
+     * instead of being packaged in the APK.
+     *
+     * @param path Absolute path to the `.vrma` file on the filesystem.
+     * @return `true` if the animation was loaded successfully.
+     */
+    fun loadVrmaAnimationFromFile(path: String): Boolean {
+        return renderer?.loadVrmaAnimationFromFile(path) ?: false
+    }
+
+    /**
      * Start playing the previously loaded VRMA animation.
      * This stops any built-in animation that is currently playing.
      *

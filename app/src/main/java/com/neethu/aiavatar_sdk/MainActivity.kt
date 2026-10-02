@@ -2,6 +2,7 @@ package com.neethu.aiavatar_sdk
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -18,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -41,11 +43,13 @@ import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
+import com.neethu.corelib.AvatarController
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.rememberAvatarController
 import kotlinx.coroutines.channels.Channel
+import java.io.File
 
 /**
  * Demo activity. Beyond the touch UI it exposes an AI-native debug interface:
@@ -106,6 +110,60 @@ class MainActivity : ComponentActivity() {
 /** Which panel is currently shown */
 internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, SETTINGS }
 
+// ── 设置持久化（SharedPreferences）─────────────────────────────────────
+
+private const val PREFS_NAME = "demo_settings"
+private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
+
+/** 读取枚举设置项；名字失效（如改过枚举名）时回落到默认值。 */
+private inline fun <reified T : Enum<T>> SharedPreferences.enumValue(
+    key: String,
+    default: T,
+): T = getString(key, null)?.let { name ->
+    runCatching { enumValueOf<T>(name) }.getOrNull()
+} ?: default
+
+/** 从 SharedPreferences 恢复渲染设置；未保存过的键回落到默认值。 */
+private fun SharedPreferences.loadRenderSettings(): AvatarRenderSettings {
+    val defaults = AvatarRenderSettings()
+    return AvatarRenderSettings(
+        iblIntensity = getFloat("render_iblIntensity", defaults.iblIntensity),
+        iblRotationDegrees = getFloat("render_iblRotationDegrees", defaults.iblRotationDegrees),
+        lightingRig = enumValue("render_lightingRig", defaults.lightingRig),
+        shadowMapSize = getInt("render_shadowMapSize", defaults.shadowMapSize),
+        softShadows = getBoolean("render_softShadows", defaults.softShadows),
+        contactShadows = getBoolean("render_contactShadows", defaults.contactShadows),
+        ambientOcclusion = enumValue("render_ambientOcclusion", defaults.ambientOcclusion),
+        toneMapping = enumValue("render_toneMapping", defaults.toneMapping),
+        bloomEnabled = getBoolean("render_bloomEnabled", defaults.bloomEnabled),
+        bloomStrength = getFloat("render_bloomStrength", defaults.bloomStrength),
+        antiAliasing = enumValue("render_antiAliasing", defaults.antiAliasing),
+        depthOfFieldEnabled = getBoolean("render_depthOfFieldEnabled", defaults.depthOfFieldEnabled),
+        enhanceMaterials = getBoolean("render_enhanceMaterials", defaults.enhanceMaterials),
+        showFps = getBoolean("render_showFps", defaults.showFps),
+    )
+}
+
+/** 把渲染设置的全部字段写入 SharedPreferences。 */
+private fun SharedPreferences.saveRenderSettings(s: AvatarRenderSettings) {
+    edit()
+        .putFloat("render_iblIntensity", s.iblIntensity)
+        .putFloat("render_iblRotationDegrees", s.iblRotationDegrees)
+        .putString("render_lightingRig", s.lightingRig.name)
+        .putInt("render_shadowMapSize", s.shadowMapSize)
+        .putBoolean("render_softShadows", s.softShadows)
+        .putBoolean("render_contactShadows", s.contactShadows)
+        .putString("render_ambientOcclusion", s.ambientOcclusion.name)
+        .putString("render_toneMapping", s.toneMapping.name)
+        .putBoolean("render_bloomEnabled", s.bloomEnabled)
+        .putFloat("render_bloomStrength", s.bloomStrength)
+        .putString("render_antiAliasing", s.antiAliasing.name)
+        .putBoolean("render_depthOfFieldEnabled", s.depthOfFieldEnabled)
+        .putBoolean("render_enhanceMaterials", s.enhanceMaterials)
+        .putBoolean("render_showFps", s.showFps)
+        .apply()
+}
+
 /**
  * UI + avatar-selection state for [DemoScreen], hoisted out of the composable
  * so the AI debug executor ([executeAiCommand]) can drive the same switches
@@ -113,15 +171,28 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, S
  */
 internal class DemoUiState(context: Context) {
 
+    /** 设置持久化：动画来源 + 全部渲染设置。 */
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
     val modelFiles: List<String> = listAssets(context, "vrms") {
         it.endsWith(".glb") || it.endsWith(".vrm")
-    }
-    val animationFiles: List<String> = listAssets(context, "animations") {
-        it.endsWith(".vrma")
     }
     val sceneFiles: List<String> = listAssets(context, "scene") {
         it.endsWith(".glb")
     }
+
+    /**
+     * 动画来源：`false` = APK 内置（assets/animations，默认），
+     * `true` = 手机外存（App data 目录，含分类子文件夹）。选择会持久化。
+     */
+    var useExternalAnimations by mutableStateOf(
+        prefs.getBoolean(KEY_USE_EXTERNAL_ANIMATIONS, false)
+    )
+        private set
+
+    /** 当前来源下可选的动画，条目为相对路径（外置模式含子文件夹）。 */
+    var animationFiles: List<String> by mutableStateOf(emptyList())
+        private set
 
     var selectedModel by mutableStateOf("model.glb")
     var selectedAnimation by mutableStateOf<String?>(null)
@@ -129,7 +200,58 @@ internal class DemoUiState(context: Context) {
     var selectedScene: String? by mutableStateOf(sceneFiles.firstOrNull())
     var activePanel by mutableStateOf(PanelType.NONE)
     var isDragMode by mutableStateOf(false)
-    var renderSettings by mutableStateOf(AvatarRenderSettings())
+
+    /** 渲染设置，初始值来自上一次会话的持久化。 */
+    var renderSettings by mutableStateOf(prefs.loadRenderSettings())
+
+    init {
+        refreshAnimationFiles(context)
+    }
+
+    /**
+     * 切换动画来源并持久化；列表随后由 [refreshAnimationFiles] 重新扫描。
+     */
+    fun setAnimationSource(context: Context, external: Boolean) {
+        useExternalAnimations = external
+        prefs.edit().putBoolean(KEY_USE_EXTERNAL_ANIMATIONS, external).apply()
+        refreshAnimationFiles(context)
+    }
+
+    /** 更新渲染设置并持久化全部字段。 */
+    fun updateRenderSettings(new: AvatarRenderSettings) {
+        renderSettings = new
+        prefs.saveRenderSettings(new)
+    }
+
+    /** 外置动画根目录：App 外部存储私有区（`/sdcard/Android/data/<pkg>/files`）。 */
+    fun externalAnimationsRoot(context: Context): File? = context.getExternalFilesDir(null)
+
+    /** 按当前动画来源重新扫描可选动画列表。 */
+    fun refreshAnimationFiles(context: Context) {
+        animationFiles = if (useExternalAnimations) {
+            val root = externalAnimationsRoot(context)
+            root?.walkTopDown()
+                ?.filter { it.isFile && it.extension.equals("vrma", ignoreCase = true) }
+                ?.map { it.relativeTo(root).path }
+                ?.sorted()
+                ?.toList()
+                ?: emptyList()
+        } else {
+            listAssetsRecursive(context, "animations") { it.endsWith(".vrma") }
+                .map { it.removePrefix("animations/") }
+        }
+    }
+
+    /**
+     * 按当前动画来源加载动画；[relativePath] 为 [animationFiles] 中的条目。
+     */
+    fun loadAnimation(context: Context, controller: AvatarController, relativePath: String): Boolean =
+        if (useExternalAnimations) {
+            val root = externalAnimationsRoot(context) ?: return false
+            controller.loadVrmaAnimationFromFile(File(root, relativePath).path)
+        } else {
+            controller.loadVrmaAnimation("animations/$relativePath")
+        }
 
     companion object {
         /** Preset expression names (used as fallback if model has none). */
@@ -150,6 +272,27 @@ internal class DemoUiState(context: Context) {
             filter: (String) -> Boolean,
         ): List<String> = try {
             context.assets.list(path)?.filter(filter)?.sorted() ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        /** 递归列出 assets/[path] 下（含子文件夹）满足 [filter] 的文件，返回相对路径。 */
+        private fun listAssetsRecursive(
+            context: Context,
+            path: String,
+            filter: (String) -> Boolean,
+        ): List<String> = try {
+            val am = context.assets
+            val found = mutableListOf<String>()
+            fun walk(dir: String) {
+                for (name in am.list(dir) ?: emptyArray()) {
+                    val child = "$dir/$name"
+                    if (!am.list(child).isNullOrEmpty()) walk(child)
+                    else if (filter(name)) found += child
+                }
+            }
+            walk(path)
+            found.sorted()
         } catch (_: Exception) {
             emptyList()
         }
@@ -197,7 +340,7 @@ private fun DemoScreen(
     // off reloads the pristine model.
     val applyRenderSettings: (AvatarRenderSettings) -> Unit = { new ->
         val materialReverted = uiState.renderSettings.enhanceMaterials && !new.enhanceMaterials
-        uiState.renderSettings = new
+        uiState.updateRenderSettings(new)
         controller.updateRenderSettings(new)
         if (materialReverted) {
             uiState.selectedExpression = null
@@ -397,12 +540,12 @@ private fun DemoScreen(
                 title = "Animations",
                 items = uiState.animationFiles,
                 selectedItem = uiState.selectedAnimation,
-                displayName = { it.removeSuffix(".vrma") },
+                // 只隐藏顶层目录名（如 VRMA_Selected_Categorized），保留分类子文件夹
+                displayName = { it.removeSuffix(".vrma").substringAfter('/') },
                 onItemClick = { fileName ->
                     uiState.selectedAnimation = fileName
-                    controller.loadVrmaAnimation("animations/$fileName")
+                    uiState.loadAnimation(context, controller, fileName)
                     controller.playVrmaAnimation(loop = true)
-                    uiState.activePanel = PanelType.NONE
                 }
             )
         }
@@ -467,6 +610,9 @@ private fun DemoScreen(
         ) {
             SettingsScreen(
                 settings = uiState.renderSettings,
+                useExternalAnimations = uiState.useExternalAnimations,
+                externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
+                onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
                 onDismiss = { uiState.activePanel = PanelType.NONE }
             )
@@ -475,7 +621,9 @@ private fun DemoScreen(
 }
 
 /**
- * Reusable list panel component for models and animations.
+ * Reusable list panel component for models and animations. While shown, the
+ * panel stays open on item click; each time it (re)appears it jumps straight
+ * to the currently selected item.
  */
 @Composable
 private fun ListPanel(
@@ -499,7 +647,17 @@ private fun ListPanel(
                 modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
             )
 
+            val listState = rememberLazyListState()
+            // The panel's content is only composed while visible, so this runs
+            // on every (re)open and lands the list on the selected item.
+            LaunchedEffect(Unit) {
+                items.indexOf(selectedItem)
+                    .takeIf { it >= 0 }
+                    ?.let { listState.scrollToItem(it) }
+            }
+
             LazyColumn(
+                state = listState,
                 modifier = Modifier.heightIn(max = 200.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {

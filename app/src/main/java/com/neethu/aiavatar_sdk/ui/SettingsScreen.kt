@@ -47,13 +47,16 @@ import kotlin.math.roundToInt
 
 /**
  * Full settings screen: a dim scrim over the 3D view plus a bottom sheet of
- * PBR render quality options (quality presets, lighting, shadows, AO,
- * post-processing, anti-aliasing and material upgrades). Changes are pushed
- * to the SDK immediately via [onSettingsChange].
+ * animation source options and PBR render quality options (quality presets,
+ * lighting, shadows, AO, post-processing, anti-aliasing and material
+ * upgrades). Changes are pushed to the SDK immediately via [onSettingsChange].
  */
 @Composable
 internal fun SettingsScreen(
     settings: AvatarRenderSettings,
+    useExternalAnimations: Boolean,
+    externalRootPath: String?,
+    onAnimationSourceChange: (Boolean) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -107,6 +110,34 @@ internal fun SettingsScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // ── 动画资源 ─────────────────────────────────────
+                    item { SettingsSectionHeader("动画资源 (Animations)") }
+                    item {
+                        SettingsOptionRow(
+                            title = "APK 内置动画",
+                            subtitle = "打包在 assets/animations 中，开箱即用（默认）",
+                            selected = !useExternalAnimations
+                        ) {
+                            onAnimationSourceChange(false)
+                        }
+                    }
+                    item {
+                        SettingsOptionRow(
+                            title = "手机外存动画",
+                            subtitle = "扫描 App data 目录及其子文件夹中的 .vrma，不占 APK 体积",
+                            selected = useExternalAnimations
+                        ) {
+                            onAnimationSourceChange(true)
+                        }
+                    }
+                    if (useExternalAnimations) {
+                        item {
+                            SettingsGroupLabel(
+                                "目录：${externalRootPath ?: "外部存储不可用"}\n将 .vrma 文件放入该目录即可（支持子文件夹分类）"
+                            )
+                        }
+                    }
+
                     // ── 画质预设 ─────────────────────────────────────
                     item { SettingsSectionHeader("画质预设 · 一键档位") }
                     item {
