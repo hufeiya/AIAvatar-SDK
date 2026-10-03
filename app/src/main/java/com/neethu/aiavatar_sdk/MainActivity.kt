@@ -211,7 +211,7 @@ internal class DemoUiState(context: Context) {
     var animationFiles: List<String> by mutableStateOf(emptyList())
         private set
 
-    var selectedModel by mutableStateOf("FreeTestCharacterAsuna_1024.vrm")
+    var selectedModel by mutableStateOf("SK_Sun_PERFORMANCE_jacket_off_1024.vrm")
     var selectedAnimation by mutableStateOf<String?>(null)
     var selectedExpression by mutableStateOf<String?>(null)
     var selectedScene: String? by mutableStateOf(sceneFiles.firstOrNull())
