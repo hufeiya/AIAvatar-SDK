@@ -25,6 +25,24 @@ internal class VrmExpressionManager(
     companion object {
         private const val TAG = "VrmExpressionMgr"
         private const val CHUNK_TYPE_JSON = 0x4E4F534A // "JSON"
+
+        /**
+         * Scale an expression's binds so its strongest bind reaches weight 1.0.
+         *
+         * Every consumer of expressions (lip-sync visemes, emotion blends, the
+         * blink engine, the manual expression panel) drives them with normalized
+         * 0..1 intensity values, where "1.0" must mean "the expression's primary
+         * morph fully applied" to be model-independent. Converter-exported models
+         * (ARKit morph sets with generated VRM presets) routinely author preset
+         * binds at 0.2-0.5, which leaves visemes and emotions at a fraction of
+         * the amplitude every full-weight model shows. Identity for models whose
+         * binds are already at 1.0; relative ratios between binds are preserved.
+         */
+        internal fun normalizeBindWeights(binds: List<MorphTargetBind>): List<MorphTargetBind> {
+            val max = binds.maxOfOrNull { it.weight } ?: return binds
+            if (max <= 0f || max >= 0.999f) return binds
+            return binds.map { it.copy(weight = it.weight / max) }
+        }
     }
 
     // ── Data Model ───────────────────────────────────────────────────────
@@ -99,7 +117,7 @@ internal class VrmExpressionManager(
             for (category in listOf("preset", "custom")) {
                 expressions.getAsJsonObject(category)?.entrySet()?.forEach { (name, element) ->
                     val exprObj = element.asJsonObject
-                    val binds = parseMorphTargetBindsV1(exprObj, nodes, meshes)
+                    val binds = normalizeBindWeights(parseMorphTargetBindsV1(exprObj, nodes, meshes))
                     if (binds.isNotEmpty()) {
                         parsed[name] = VrmExpression(name, binds)
                         Log.d(TAG, "VRM1.0 expression '$name': ${binds.size} binds")
@@ -122,7 +140,7 @@ internal class VrmExpressionManager(
                         group.get("name")?.asString ?: return@forEach
                     }
 
-                    val binds = parseMorphTargetBindsV0(group)
+                    val binds = normalizeBindWeights(parseMorphTargetBindsV0(group))
                     if (binds.isNotEmpty()) {
                         parsed[name] = VrmExpression(name, binds)
                         Log.d(TAG, "VRM0.x expression '$name': ${binds.size} binds")

@@ -83,7 +83,7 @@
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
 2. **FaceDriver 独占全部缓动**：corelib `VrmExpressionManager` 语义是「setExpression 写目标权重 + 内部按 transitionDuration lerp + 多表情按 bind 加法累加 clamp」。FaceDriver 启动时 `setExpressionTransitionDuration(0)` 切瞬时模式，自己画所有曲线——对齐 three-vrm 每帧 `setValue` 语义。**不要**在 corelib 里再加缓动。
-3. **VRM 表情名→morph 走模型自带的 expressionMap**（corelib 已解析 VRM1.0 preset+custom / 0.x blendShapeGroups），FaceDriver 按 `getAvailableExpressions()` 门控发送，缺名字自动跳过，**禁止硬编码 aa→jawOpen 之类映射**。
+3. **VRM 表情名→morph 走模型自带的 expressionMap**（corelib 已解析 VRM1.0 preset+custom / 0.x blendShapeGroups），FaceDriver 按 `getAvailableExpressions()` 门控发送，缺名字自动跳过，**禁止硬编码 aa→jawOpen 之类映射**。corelib 解析时会对每个表达式的绑定权重做归一化（最强 bind 缩放到 1.0，比率保持，见 A.1 第 16 条），使"表达式权重 1.0 = 主 morph 满幅"跨模型语义一致。
 4. **情绪协议是自定的** `<|emotion:name:intensity|>`，由 SystemPromptAssembler 注入指令教模型使用；可情绪集 = EmotionBlender.defs 的 7 个键。
 5. **adapter 的 okhttp/serialization/coroutines 必须 `api()`** 不能 `implementation`——构造器默认参数把 OkHttpClient/JsonObject 泄进了公共签名，改 implementation 会编译失败。
 6. TTS response_format 固定 `"wav"`（AiChat.kt），换 provider 若报 400 需要把格式做成设置项。
@@ -236,6 +236,7 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 13. **`WRITE_BLOCKING` 写完 ≠ 播完，`release()` 会吞句尾**：AudioTrackPlaybackQueue.playItem 写完 PCM 后立刻 `stop()+release()`——write 返回只代表数据进了轨道内部缓冲（本项目 `minBuf*2` ≈ 0.13-0.3s @16k），release 销毁轨道把未播出的句尾整段丢掉，用户感知"前一句最后一个字没说完就断句"。任务 1 观测到的"前句 Ended 10ms 后下句 Started"其实是 Ended 在尾巴未播完时就触发的证据。已修：写完后 `drainPlayback` 轮询播放头到片尾再 stop/release（20ms epsilon 吸收混音器位置粒度，remaining+1.5s 截止防卡死设备堵队列；stopRequested 期间照常走 interrupted 路径）。验证方法：对照 logcat 里 `clip #N pcm=X.XXs`（AvatarSession tag）与 SentenceStarted/Ended 时间戳，墙钟差 ≥ pcm 时长即完整播出；注意 Started/Ended 走 Main 派发，±50ms 抖动正常。
 14. **orchestrator JVM 单测遇到 `android.util.Log` 会抛 "not mocked"**：AvatarSession 的监听器常驻路径上一旦加了 Log 调用，AvatarSessionSpeakTest 就红。已在该模块 build.gradle.kts 加 `testOptions { unitTests.isReturnDefaultValues = true }`（Log 变 no-op），以后在 orchestrator 主代码加日志不必绕道。
 15. **FaceDriver 静止态必须"静默"，零值不能每帧重发**：`send()` 的去重守卫原本带 `&& value != 0f` 例外——说话结束后 else 分支每帧产出 0，守卫永不跳过，于是每帧 `setExpression(vowel, 0)`；而 corelib `VrmExpressionManager.setExpression` 对 `weight <= 0` 的语义是 **`targetWeights.remove(name)`**（见其源码 248-254 行，同名权重是替换、0 是删除），等于说话一结束就把手动设置的嘴部表情（面板 presetExpressions 的 aa/ih/ou/ee/oh）每帧抹掉。说话前 `sent` 缓存为空、零值走 `previous == null` 跳过，所以**只有说过话才复现**。已修：守卫去掉零值例外，静止时送最后一次清零即静默（所有权交还手动表情）；说话期间 viseme 变化超容差照常下发、独占嘴部不变。真机两轮验证：每轮结束后 `set_expression aa 1.0` 截屏差分集中在嘴部且 4 秒保持，第二轮说话口型日志正常。注意裁剪所有权时的行为模型：情绪活跃期（3s auto-reset 内）手动嘴部表情仍会被情绪通道覆盖，这是设计内所有权。
+16. **转换模型的 VRM preset 弱绑定会让口型/情绪整体变弱，解析时必须归一化**：换默认模型到 SK_Sun_PERFORMANCE（ARKit 52 词素 + 生成 preset 的转换模型）后嘴部动作非常小。解析其 GLB 发现全部 preset 绑定权重弱（aa 0.5 / ih·ou 0.2 / ee·oh 0.3 / sad·surprised 0.25 / happy 0.5），而 custom ARKit 词素全是 1.0——这意味着不只口型，LLM 情绪驱动的表情也只有 1/4~1/2 强度（blink 恰好 1.0 所以眨眼正常，最容易漏查）。驱动侧幅度正常（FaceDriver 日志 volume/top 与旧模型一致），纯模型资产问题。已修：`VrmExpressionManager.normalizeBindWeights` 在解析时（VRM 1.0 与 0.x 两条路径）把每个表达式的绑定权重缩放到最强 bind=1.0（比率保持；已全权重的模型恒等、零行为变化，四个仓库模型实测只有 SK_Sun 被放大）。注意副作用：同一 morph 组合、仅幅度不同的 preset（如此模型的 ee=[0.3×jaw,0.3×stretchL,0.3×stretchR] 与 ih=[0.2×同三 morph]）归一化后形状相同——幅度差异本就被 viseme 动态淹没，可接受。真机验证：aa=1.0 从半开变全开（截屏），说话中段嘴部帧间差 6~9%、句间停顿 1.7%。
 
 ### A.2 调参速查表
 
