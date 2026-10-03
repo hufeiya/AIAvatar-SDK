@@ -18,14 +18,18 @@ import kotlinx.coroutines.CoroutineScope
  * AI 对话配置（双服务商版）。除 API Key 外全部下拉框选择，模型/音色留空即用
  * 服务商默认（见 [resolveLlmModel]/[resolveTtsModel]/[resolveVoice]）。
  *
- * Key 按服务商分开存（`apiKeyFor`），切服务商互不覆盖；TTS 可独立选服务商
- * （[ttsSameProvider]=false 时用 [ttsProvider]），key 复用逻辑见 [apiKeyForTts]。
+ * Key 按服务分存（硅基流动一把通用；**火山的语音与大模型是两把 key**：
+ * [apiKeyVolcano]=方舟 Ark 大模型，[apiKeyVolcanoTts]=豆包语音合成，实测互不
+ * 通用）；TTS 可独立选服务商（[ttsSameProvider]=false 时用 [ttsProvider]）。
  */
 data class AiChatPrefs(
     val provider: AiProvider = AiProvider.SILICONFLOW,
     val llmModel: String = "",
     val apiKeySiliconflow: String = "",
+    /** 火山方舟（Ark）API Key——火山大模型链路。 */
     val apiKeyVolcano: String = "",
+    /** 豆包语音控制台 API Key——火山语音合成（seed-tts-2.0 WebSocket）链路。 */
+    val apiKeyVolcanoTts: String = "",
     /** TTS 与大模型同服务商（默认勾选）。 */
     val ttsSameProvider: Boolean = true,
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
@@ -40,13 +44,17 @@ data class AiChatPrefs(
     val ttsProviderResolved: AiProvider
         get() = if (ttsSameProvider) provider else ttsProvider
 
+    /** 大模型服务的 API Key（硅基流动 / 火山方舟）。 */
     fun apiKeyFor(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcano
     }
 
-    /** TTS 生效 key：同服务商（或服务商恰好相同）时直接复用对应 key。 */
-    fun apiKeyForTts(): String = apiKeyFor(ttsProviderResolved)
+    /** 语音合成服务的 API Key（硅基流动共用一份；火山语音用豆包语音那把）。 */
+    fun apiKeyForTts(): String = when (ttsProviderResolved) {
+        AiProvider.SILICONFLOW -> apiKeySiliconflow
+        AiProvider.VOLCANO -> apiKeyVolcanoTts
+    }
 
     val isConfigured: Boolean
         get() = apiKeyFor(provider).isNotBlank() && apiKeyForTts().isNotBlank() &&
@@ -59,7 +67,8 @@ private const val KEY_AI_PROVIDER = "ai_provider"
 private const val KEY_AI_BASE_URL = "ai_baseUrl" // 旧版遗留：仅作迁移推断，不再写入
 private const val KEY_AI_API_KEY = "ai_apiKey" // 旧版遗留：等价于硅基流动 key，仅作迁移
 private const val KEY_AI_API_KEY_SILICONFLOW = "ai_api_key_siliconflow"
-private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano"
+private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano" // 火山方舟（大模型）
+private const val KEY_AI_API_KEY_VOLCANO_TTS = "ai_api_key_volcano_tts" // 豆包语音（合成）
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
@@ -77,11 +86,17 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
     val legacyKey = getString(KEY_AI_API_KEY, "").orEmpty()
     val legacyBaseUrl = getString(KEY_AI_BASE_URL, "").orEmpty()
     val sfKey = getString(KEY_AI_API_KEY_SILICONFLOW, null) ?: legacyKey
+    // 火山单字段时代的遗留值按形态归位：ark- 前缀=方舟 key，否则视作豆包语音 key；
+    // 新的豆包语音字段一旦存在就优先（saveAiPrefs 起两字段各存各的）
+    val (volcArkKey, volcTtsKey) = splitLegacyVolcanoKey(
+        getString(KEY_AI_API_KEY_VOLCANO, "").orEmpty(),
+    )
     return AiChatPrefs(
         provider = prefsEnum<AiProvider>(this, KEY_AI_PROVIDER) ?: inferProviderFromBaseUrl(legacyBaseUrl),
         llmModel = getString(KEY_AI_LLM_MODEL, "").orEmpty(),
         apiKeySiliconflow = sfKey,
-        apiKeyVolcano = getString(KEY_AI_API_KEY_VOLCANO, "").orEmpty(),
+        apiKeyVolcano = volcArkKey,
+        apiKeyVolcanoTts = getString(KEY_AI_API_KEY_VOLCANO_TTS, null) ?: volcTtsKey,
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
@@ -96,6 +111,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_LLM_MODEL, p.llmModel.trim())
         .putString(KEY_AI_API_KEY_SILICONFLOW, p.apiKeySiliconflow.trim())
         .putString(KEY_AI_API_KEY_VOLCANO, p.apiKeyVolcano.trim())
+        .putString(KEY_AI_API_KEY_VOLCANO_TTS, p.apiKeyVolcanoTts.trim())
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())

@@ -104,6 +104,13 @@ private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): A
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcano = key)
     }
 
+/** 写语音合成服务的 API Key（火山写豆包语音那把，与大模型 key 互不通用）。 */
+private fun withTtsApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): AiChatPrefs =
+    when (provider) {
+        AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
+        AiProvider.VOLCANO -> prefs.copy(apiKeyVolcanoTts = key)
+    }
+
 /**
  * 音色下拉选项：接口拉到的音色在前、静态兜底在后（按 value 去重）；
  * 当前生效值不在清单里（如手填过自定义音色）时追加保底，避免下拉框显示成裸值。
@@ -314,9 +321,9 @@ internal fun SettingsScreen(
                                 onAiPrefsChange(aiPrefs.copy(provider = AiProvider.valueOf(value)))
                             }
                             SettingsTextFieldRow(
-                                title = "${aiPrefs.provider.label} API Key",
+                                title = aiPrefs.provider.llmKeyLabel,
                                 value = aiPrefs.apiKeyFor(aiPrefs.provider),
-                                placeholder = if (aiPrefs.provider == AiProvider.SILICONFLOW) "sk-..." else "粘贴 API Key",
+                                placeholder = aiPrefs.provider.llmKeyHint,
                                 password = true
                             ) { onAiPrefsChange(withApiKey(aiPrefs, aiPrefs.provider, it)) }
                             SettingsDropdownRow(
@@ -344,13 +351,16 @@ internal fun SettingsScreen(
                                 ) { value ->
                                     onAiPrefsChange(aiPrefs.copy(ttsProvider = AiProvider.valueOf(value)))
                                 }
-                                if (ttsProvider != aiPrefs.provider) {
+                                if (ttsProvider != aiPrefs.provider || ttsProvider == AiProvider.VOLCANO) {
+                                    // 火山语音与火山大模型是两把互不通用的 key（豆包语音
+                                    // 控制台 vs 方舟控制台），勾了「同服务商」也必须单填；
+                                    // 硅基流动 TTS 仅在独立于大模型服务商时才露 key
                                     SettingsTextFieldRow(
-                                        title = "${ttsProvider.label} API Key（语音合成用）",
-                                        value = aiPrefs.apiKeyFor(ttsProvider),
-                                        placeholder = if (ttsProvider == AiProvider.SILICONFLOW) "sk-..." else "粘贴 API Key",
+                                        title = ttsProvider.ttsKeyLabel,
+                                        value = aiPrefs.apiKeyForTts(),
+                                        placeholder = ttsProvider.ttsKeyHint,
                                         password = true
-                                    ) { onAiPrefsChange(withApiKey(aiPrefs, ttsProvider, it)) }
+                                    ) { onAiPrefsChange(withTtsApiKey(aiPrefs, ttsProvider, it)) }
                                 }
                             }
                             SettingsDropdownRow(

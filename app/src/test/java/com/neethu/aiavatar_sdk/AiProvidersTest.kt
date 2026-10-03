@@ -128,27 +128,57 @@ class AiProvidersTest {
         val base = AiChatPrefs(provider = AiProvider.SILICONFLOW, apiKeySiliconflow = "sk-1")
         assertTrue(base.isConfigured) // 模型/音色留空 = 默认值，仍算配置完成
 
-        // TTS 独立到火山但火山 key 缺失 → 不算配置完成（会话装配会缺 TTS 凭据）
-        val independentNoVolcanoKey = base.copy(ttsSameProvider = false, ttsProvider = AiProvider.VOLCANO)
-        assertFalse(independentNoVolcanoKey.isConfigured)
+        // TTS 独立到火山但豆包语音 key 缺失 → 不算配置完成（会话装配会缺 TTS 凭据）
+        val independentNoVolcanoTtsKey = base.copy(ttsSameProvider = false, ttsProvider = AiProvider.VOLCANO)
+        assertFalse(independentNoVolcanoTtsKey.isConfigured)
         assertTrue(
-            independentNoVolcanoKey.copy(apiKeyVolcano = "volc-1").isConfigured,
+            independentNoVolcanoTtsKey.copy(apiKeyVolcanoTts = "volc-tts-1").isConfigured,
+        )
+
+        // 大模型切火山缺方舟 key 同理（同服务商勾选时语音链路还要豆包语音 key）
+        val volcanoLlm = base.copy(provider = AiProvider.VOLCANO)
+        assertFalse(volcanoLlm.isConfigured)
+        assertFalse(volcanoLlm.copy(apiKeyVolcano = "ark-1").isConfigured) // 还缺豆包语音 key
+        assertTrue(
+            volcanoLlm.copy(apiKeyVolcano = "ark-1", apiKeyVolcanoTts = "volc-tts-1").isConfigured,
         )
     }
 
     @Test
     fun `tts provider resolution and key routing`() {
+        // 火山语音与火山大模型是两把互不通用的 key（豆包语音 vs 方舟 Ark）
         val prefs = AiChatPrefs(
             provider = AiProvider.VOLCANO,
             apiKeySiliconflow = "sk-1",
-            apiKeyVolcano = "volc-1",
+            apiKeyVolcano = "ark-1",
+            apiKeyVolcanoTts = "volc-tts-1",
             ttsSameProvider = true,
         )
         assertEquals(AiProvider.VOLCANO, prefs.ttsProviderResolved)
-        assertEquals("volc-1", prefs.apiKeyForTts())
+        assertEquals("ark-1", prefs.apiKeyFor(prefs.provider)) // 大模型链路 = 方舟 key
+        assertEquals("volc-tts-1", prefs.apiKeyForTts()) // 语音链路 = 豆包语音 key
 
-        val independent = prefs.copy(ttsSameProvider = false, ttsProvider = AiProvider.SILICONFLOW)
-        assertEquals(AiProvider.SILICONFLOW, independent.ttsProviderResolved)
-        assertEquals("sk-1", independent.apiKeyForTts())
+        val sfTts = prefs.copy(ttsSameProvider = false, ttsProvider = AiProvider.SILICONFLOW)
+        assertEquals(AiProvider.SILICONFLOW, sfTts.ttsProviderResolved)
+        assertEquals("sk-1", sfTts.apiKeyForTts()) // 硅基流动一份 key 三服务共用
+    }
+
+    // ── 火山单字段 key 的迁移拆分（ark- 前缀=方舟，UUID 形=豆包语音）──────
+    @Test
+    fun `legacy volcano key splits by format`() {
+        assertEquals("ark-abc" to "", splitLegacyVolcanoKey("ark-abc"))
+        assertEquals("" to "020b5acf-808a", splitLegacyVolcanoKey("020b5acf-808a"))
+        assertEquals("" to "", splitLegacyVolcanoKey("  "))
+        // 大小写不敏感、去空白
+        assertEquals("ARK-xyz" to "", splitLegacyVolcanoKey("  ARK-xyz "))
+    }
+
+    @Test
+    fun `key field labels follow the service`() {
+        assertEquals("硅基流动 API Key", AiProvider.SILICONFLOW.llmKeyLabel)
+        assertEquals("火山方舟 API Key（大模型用）", AiProvider.VOLCANO.llmKeyLabel)
+        assertEquals("豆包语音 API Key（语音合成用）", AiProvider.VOLCANO.ttsKeyLabel)
+        // 硅基流动一家一把 key：TTS 字段只在与大模型不同服务商时出现，标签带用途后缀
+        assertEquals("硅基流动 API Key（语音合成用）", AiProvider.SILICONFLOW.ttsKeyLabel)
     }
 }

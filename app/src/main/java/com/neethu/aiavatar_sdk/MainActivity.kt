@@ -969,7 +969,7 @@ private fun DemoScreen(
                 "TTS provider=${provider.name.lowercase()} (independent of LLM) " +
                     "ttsModel=${resolveTtsModel(provider, uiState.aiPrefs.ttsModel)} " +
                     "voice=${resolveVoice(provider, uiState.aiPrefs.voice)} " +
-                    "key=${if (uiState.aiPrefs.apiKeyFor(provider).isNotBlank()) "set" else "MISSING"}"
+                    "ttsKey=${if (uiState.aiPrefs.apiKeyForTts().isNotBlank()) "set" else "MISSING"}"
             },
         )
     }

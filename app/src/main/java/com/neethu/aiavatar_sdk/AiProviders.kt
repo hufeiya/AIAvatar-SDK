@@ -24,6 +24,12 @@ enum class AiProvider(
     /** 音色清单接口拉不到时的静态兜底（显示名与存储短名一致）。 */
     val voices: List<String>,
     val defaultVoice: String,
+    /** 大模型服务的 API Key 字段标签/占位（火山的语音与大模型是两把 key，见下）。 */
+    val llmKeyLabel: String,
+    val llmKeyHint: String,
+    /** 语音合成服务的 API Key 字段标签/占位。 */
+    val ttsKeyLabel: String,
+    val ttsKeyHint: String,
 ) {
     SILICONFLOW(
         label = "硅基流动",
@@ -41,6 +47,11 @@ enum class AiProvider(
         voicePrefix = "FunAudioLLM/CosyVoice2-0.5B",
         voices = listOf("alex", "anna", "bella", "benjamin", "charles", "claire"),
         defaultVoice = "anna",
+        // 硅基流动一家一把 key，LLM/TTS/ASR 共用
+        llmKeyLabel = "硅基流动 API Key",
+        llmKeyHint = "sk-...",
+        ttsKeyLabel = "硅基流动 API Key（语音合成用）",
+        ttsKeyHint = "sk-...",
     ),
     VOLCANO(
         label = "火山引擎",
@@ -65,6 +76,12 @@ enum class AiProvider(
             "zh_female_meilinvyou_uranus_bigtts",
         ),
         defaultVoice = "zh_female_vv_uranus_bigtts",
+        // 火山是两把钥匙（2026-10-03 实测互不通用）：大模型走方舟 Ark 控制台，
+        // 语音合成走豆包语音控制台——同选火山也必须各填各的
+        llmKeyLabel = "火山方舟 API Key（大模型用）",
+        llmKeyHint = "ark-...",
+        ttsKeyLabel = "豆包语音 API Key（语音合成用）",
+        ttsKeyHint = "粘贴豆包语音控制台 Key",
     ),
     ;
 
@@ -82,6 +99,16 @@ enum class AiProvider(
 fun inferProviderFromBaseUrl(baseUrl: String): AiProvider =
     if (baseUrl.contains("volces.com", ignoreCase = true)) AiProvider.VOLCANO
     else AiProvider.SILICONFLOW
+
+/**
+ * 旧版只有一个「火山引擎 API Key」字段（单字段时代两把 key 填过哪把算哪把）；
+ * 拆分为方舟（大模型）/豆包语音（合成）两个字段时按 key 形态归类——
+ * 方舟 key 带 `ark-` 前缀，豆包语音 key 是 UUID 形。返回 (大模型key, 语音key)。
+ */
+fun splitLegacyVolcanoKey(legacy: String): Pair<String, String> {
+    val v = legacy.trim()
+    return if (v.startsWith("ark-", ignoreCase = true)) v to "" else "" to v
+}
 
 /**
  * 把存储的音色值拼成请求用完整引用：已含 `:`（完整引用/自定义音色 URI）原样，
