@@ -18,6 +18,11 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    testOptions {
+        // 主代码（AvatarSession/FaceDriver）在监听器常驻路径上有 android.util.Log，
+        // JVM 单测没有 mock，return default values 让 Log 变 no-op 而不是抛 RuntimeException。
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

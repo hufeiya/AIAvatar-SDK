@@ -233,6 +233,8 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 10. **设置页逐字符提交 + 会话即时重建 = "打字把正在播的回复杀掉"**：设置五项是即填即存，`produceState` 以 `aiPrefs` 为 key，每敲一个字符就 close+rebuild 一次会话——打字期间在播的回合反复被打断（用户感知"还没输完就没声/崩了"），且**半截配置会被持久化**（真机实测 prefs 里存着 `...:a` 的残缺音色，重启后继续 400 全灭）。已修：`produceState` 里 `delay(800)` 防抖，输入停稳才重建；注意 run-as 写 prefs 模拟不了"打字中"（SharedPreferences 不重载已运行的进程），只能靠真手测。
 11. **HTTP 200 + 非 WAV body 会让 PcmDecoder 抛谜语 "Not a RIFF file"**：TTS 适配器原本只拦非 2xx；实测硅基流动对残缺音色回的是 `400 Invalid voice`（能正常报错），但网关/代理可能对失败请求回 200 的 HTML/JSON 页面，喂进解码器只剩谜语（本次真机事故的唯一线索，200 来源未能离线复现——疑似网络层劫持）。已修：适配器按声明的 response_format 校验魔数（WAV=RIFF / MP3=ID3或帧同步 / OGG=OggS），不符时抛带 content-type + 24 字节预览的 IOException，真实原因直接进堆栈；MockWebServer 单测覆盖 400 / 200非WAV / 正常WAV / MP3 四条路径。同时 `SentenceFailed` 上了 UI 错误条（"第 N 句语音合成失败：…"，6s 自动清除），句子失败不再静默。
 12. **切分决策只能在标点处做，不能在任何字符位置**：初版 SentenceChunker 把 `maximumWords` 实现成"逐字符扫描一旦超 12 词就在当前位置强制下刀"——这是对 AIRI 的移植偏差（上游只在标点字符处评估 'limit' 切分，无标点的长句一直等到 flush）。中文 12 个词很快就到，长句被腰斩在短语中间，TTS 韵律和字幕都破碎（用户感知"在任意地方断句"）。已修：删除任意位置切分；超限后**软标点也成为切点**（AIRI 'limit' 语义），无标点长句等下一个标点或 flush。顺带修了同源问题：连续标点（`什么？！`）切出的裸 `！` 碎片此前会变成独立 TTS 请求并消耗 boost 预算，现在纯标点/纯动作碎片直接丢弃。
+13. **`WRITE_BLOCKING` 写完 ≠ 播完，`release()` 会吞句尾**：AudioTrackPlaybackQueue.playItem 写完 PCM 后立刻 `stop()+release()`——write 返回只代表数据进了轨道内部缓冲（本项目 `minBuf*2` ≈ 0.13-0.3s @16k），release 销毁轨道把未播出的句尾整段丢掉，用户感知"前一句最后一个字没说完就断句"。任务 1 观测到的"前句 Ended 10ms 后下句 Started"其实是 Ended 在尾巴未播完时就触发的证据。已修：写完后 `drainPlayback` 轮询播放头到片尾再 stop/release（20ms epsilon 吸收混音器位置粒度，remaining+1.5s 截止防卡死设备堵队列；stopRequested 期间照常走 interrupted 路径）。验证方法：对照 logcat 里 `clip #N pcm=X.XXs`（AvatarSession tag）与 SentenceStarted/Ended 时间戳，墙钟差 ≥ pcm 时长即完整播出；注意 Started/Ended 走 Main 派发，±50ms 抖动正常。
+14. **orchestrator JVM 单测遇到 `android.util.Log` 会抛 "not mocked"**：AvatarSession 的监听器常驻路径上一旦加了 Log 调用，AvatarSessionSpeakTest 就红。已在该模块 build.gradle.kts 加 `testOptions { unitTests.isReturnDefaultValues = true }`（Log 变 no-op），以后在 orchestrator 主代码加日志不必绕道。
 
 ### A.2 调参速查表
 
@@ -249,7 +251,7 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 | 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
 
-验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
+验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 
 ## 附录 B：记忆索引（新会话自动加载）
 

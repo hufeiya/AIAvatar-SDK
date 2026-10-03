@@ -136,6 +136,12 @@ class AvatarSession(
             override fun onPlaybackEnded(item: PlaybackItem) {
                 pipeline.onPlaybackSettled()
                 faceDriver?.onPlaybackEnded()
+                // 观测点：Ended 应发生在整段 PCM 播完之后（墙钟差 ≥ pcm 时长），
+                // 若明显小于说明句尾被截断（对照 logcat 的 SentenceStarted 时间戳）。
+                Log.i(
+                    "AvatarSession",
+                    "clip #${item.sequence} pcm=${"%.2f".format(item.pcm.size.toFloat() / item.sampleRateHz)}s",
+                )
                 scope.launch(Dispatchers.Main.immediate) {
                     emit(AvatarEvent.SentenceEnded(item.sequence, item.text))
                 }

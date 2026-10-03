@@ -154,7 +154,15 @@ class AudioTrackPlaybackQueue : PlaybackQueue {
                 offset += written
             }
             if (!interrupted) {
-                track.stop() // drains remaining buffer
+                // WRITE_BLOCKING returning only means the PCM reached the track's
+                // internal buffer (~0.1-0.3s at 16 kHz) — stop()+release() right
+                // away destroys the track with that tail still unplayed, clipping
+                // the sentence's last syllable. Let the head drain to the end first.
+                drainPlayback(track, item)
+                if (stopRequested || released) interrupted = true
+            }
+            if (!interrupted) {
+                track.stop() // everything played by now; stop is lifecycle bookkeeping
             }
         } catch (_: IllegalStateException) {
             // Track already torn down by stopAll — treat as interrupted.
@@ -175,6 +183,38 @@ class AudioTrackPlaybackQueue : PlaybackQueue {
             }
         } else {
             listener?.onPlaybackEnded(item)
+        }
+    }
+
+    /**
+     * Block until every frame of [item] has left the speaker: poll the playback
+     * head until it reaches the end of the PCM (a ~20 ms epsilon absorbs the
+     * mixer's position granularity — inaudible), then return. The deadline is
+     * generous but bounded so a wedged audio device can only delay the queue by
+     * ~1.5 s, never hang it.
+     */
+    private fun drainPlayback(track: AudioTrack, item: PlaybackItem) {
+        val totalFrames = item.pcm.size
+        val epsilon = item.sampleRateHz / 50
+        val firstHead = try {
+            track.playbackHeadPosition
+        } catch (_: IllegalStateException) {
+            return
+        }
+        val remainingMs = (totalFrames - firstHead).coerceAtLeast(0) * 1000L / item.sampleRateHz
+        val deadlineNs = System.nanoTime() + (remainingMs + 1_500) * 1_000_000L
+        while (!stopRequested && !released) {
+            val head = try {
+                track.playbackHeadPosition
+            } catch (_: IllegalStateException) {
+                return
+            }
+            if (head >= totalFrames - epsilon || System.nanoTime() >= deadlineNs) return
+            try {
+                Thread.sleep(10)
+            } catch (_: InterruptedException) {
+                return
+            }
         }
     }
 
