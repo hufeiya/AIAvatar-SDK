@@ -1,0 +1,224 @@
+# AIAvatar-SDK · AI 交互层攻坚交接文档
+
+> 用途：新会话冷启动用的自包含上下文。任何一轮新对话开始时，**先读完本文档**，再按「第六节」的任务提示词开工。
+> 生成时间：2026-10-03。对应提交：`83d2914`（四层架构中两层落地，46 文件 +4146 行）。
+
+---
+
+## 一、项目背景（30 秒版）
+
+开源 Android 虚拟人 SDK + Demo：Filament(C++/JNI) 渲染底座 + 纯客户端（Serverless）AI 对话——Android 端直连公网 OpenAI 兼容 API（LLM + TTS），端侧口型解算与生理微动作，支持酒馆人物卡（SillyTavern Character Card）。
+
+四层 Gradle 架构（依赖只能向下）：
+
+```
+:app (demo)  →  :avatar-orchestrator (业务中台)  →  :avatar-ai-adapter (能力适配)
+                        └──────────────→  :corelib (渲染底座,已存在)  ←──┘ (严禁 adapter→corelib)
+```
+
+对齐参照物：**AIRI**（moeru-ai/airi）本地源码在 `/home/neethu/projects/airi`，其关键 file:line 锚点与对齐参数已固化在项目记忆 `airi-source-anchors` 中（新会话自动加载 MEMORY.md 索引，需要细节时读该记忆文件）。
+
+## 二、当前进度（已完成，勿重做）
+
+### 2.1 `:avatar-ai-adapter`（纯 JVM 模块，包 `com.neethu.aiadapter`）
+
+| 文件 | 职责 |
+|---|---|
+| `api/LlmAdapter.kt` | `streamChat(messages, config): Flow<LlmStreamEvent>`，事件 = TextDelta/Finish/Error |
+| `api/TtsAdapter.kt` | `suspend synthesize(text, config): TtsResult`（V1 句级整段返回） |
+| `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
+| `api/EmotionExtractor.kt` | 流式标记过滤：`feed(delta) → ExtractionResult(cleanText, cues)` |
+| `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
+| `openai/OpenAiCompatibleLlmAdapter.kt` | OkHttp SSE 手解 `data:` 行；`channelFlow + awaitClose{call.cancel()}` 取消即断连 |
+| `openai/OpenAiCompatibleTtsAdapter.kt` | POST `{base}/audio/speech`，response_format 可配（demo 默认 wav） |
+| `lipsync/Dsp.kt` + `MfccFrontend.kt` | **wLipSync/uLipSync MFCC 管线精确移植**：RMS→FIR低通→16k降采样→预加重0.97→汉明窗→峰值归一→FFT→30 Mel→10log10→DCT→取系数1..12 |
+| `lipsync/WlipsyncProfile.kt` | 解析标定 profile（`src/main/resources/wlipsync/profile.json`，**直接复用 AIRI 的文件**），cosine^100 打分归一化 |
+| `lipsync/VowelDriver.kt` | AIRI vowel-driver.ts 逐常量移植：音量 `min(0.9v,1)^0.7`、winner≤0.7/runner×0.6≤0.35、静音门限 0.04/0.05/160ms、非对称指数平滑升50/降30、死区0.01、输出×0.7。元音槽序 **AA,IH,OU,EE,OH** |
+| `lipsync/WlipsyncLipSyncProcessor.kt` | 组合前端+profile→VisemeTimeline；暴露 `vowelLayout`（音素→元音槽映射） |
+| `emotion/MarkerEmotionExtractor.kt` | 协议 `<\|emotion:happy\|>` / `<\|emotion:happy:0.8\|>`（强度可负，clamp 0..1），跨 delta 缓冲半截标记，flush 丢弃悬尾 |
+
+### 2.2 `:avatar-orchestrator`（android library，包 `com.neethu.orchestrator`）
+
+| 文件 | 职责 |
+|---|---|
+| `session/AvatarSession.kt` | **门面**：`send/sendAndAwait/interrupt/close/setCharacterCard`；`llmConfig`/`ttsConfig` 属性；`phase: StateFlow` + `events: SharedFlow`。内部组装 extractor→chunker→pipeline，collect LLM 流 |
+| `session/ConversationPhase.kt` | IDLE/THINKING/SPEAKING（注意与 corelib 的 `AvatarState` 渲染状态是两回事） |
+| `chunker/SentenceChunker.kt` | AIRI tts-chunker 规则：硬标点 `.。?？!！…⋯～~\n\r\t`、软标点 boost=2/min=4/max=12、小数点保护、`...`点串一次切、`*动作*` 剥离（跨 delta 缓冲未闭合段）；词计数 `java.text.BreakIterator`（可注入 WordCounter） |
+| `pipeline/SpeechPipeline.kt` | TTS 并发≤4（Semaphore）、completed 按 sequence 严格有序入队、失败用 failedSequences 跳过前沿不卡队、`awaitTurnComplete()`、cancelTurn 级联 |
+| `audio/PlaybackQueue.kt` / `AudioTrackPlaybackQueue.kt` | maxVoices=1 FIFO；写线程 4096 帧块写；stopAll 从调用线程 pause+flush 即时静音；`ActivePlayback.positionSeconds()` 用 AudioTimestamp 音频时钟（FaceDriver 靠它对口型） |
+| `audio/PcmDecoder.kt` | WAV 纯 Kotlin 解析（16bit PCM/8bit/32f、立体声下混）+ MP3/OGG 走 MediaExtractor+MediaCodec(MediaDataSource) |
+| `face/FaceDriver.kt` | Choreographer 每帧混合：口型(时间线采样+VowelDriver 状态机)→情绪→眨眼；**所有权规则**：说话中口型独占嘴部、结束后 viseme 从 0 淡入情绪目标(blend-back)、眼区情绪压制眨眼；`controller.setExpressionTransitionDuration(0)` 后全部缓动自绘 |
+| `face/EmotionBlender.kt` | AIRI expression.ts 组合表(happy=happy0.7+aa0.2 等7种)、easeInOutCubic、起点捕获当前显示值、3s 自动回 neutral、eyeAreaActive 判定 |
+| `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s（gaze/saccade 未做，见任务5） |
+| `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
+| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n` + 情绪协议指令块（告诉模型怎么发 `<\|emotion:..\|>`） |
+| `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；**Room 版未做**（任务3） |
+
+### 2.3 `:app` 集成
+
+- `AiChat.kt`：AiChatPrefs(5项配置+持久化键 `ai_baseUrl/ai_apiKey/ai_llmModel/ai_ttsModel/ai_voice`，prefs=`demo_settings`)、AiChatController(配置变化即重建 session，AIRI getProviderInstance 语义)
+- `MainActivity.kt`：底部 `AiChatBar`(输入/发送/打断/状态徽标/回复字幕/错误条)、produceState 装配 session、事件收集；视角 badge 移到 bottom=180dp
+- `SettingsScreen.kt`：新增「AI 对话 (AI Chat · OpenAI 兼容)」区块（5 个 SettingsTextFieldRow）
+- `AndroidManifest.xml`：补了 INTERNET 权限
+
+### 2.4 验证状态
+
+- **48 单测全绿**：adapter 20（emotion 9 / vowel 5 / processor 3 / profile 3）+ orchestrator 28（chunker 12 / card 7 / assembler 4 / pipeline 5）
+- **真机冒烟通过**（设备 `2c3769db`）：安装无崩溃 60FPS；聊天条/设置面板渲染正常；**send→LLM 真实请求→异常→TurnFailed 事件→UI 错误条** 全链路已验证（设备直连不了 api.openai.com 属网络问题）。**成功路径（音频+口型）待真实 API Key 验证**
+- 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts
+
+## 三、关键设计决策（改代码前必读）
+
+1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
+2. **FaceDriver 独占全部缓动**：corelib `VrmExpressionManager` 语义是「setExpression 写目标权重 + 内部按 transitionDuration lerp + 多表情按 bind 加法累加 clamp」。FaceDriver 启动时 `setExpressionTransitionDuration(0)` 切瞬时模式，自己画所有曲线——对齐 three-vrm 每帧 `setValue` 语义。**不要**在 corelib 里再加缓动。
+3. **VRM 表情名→morph 走模型自带的 expressionMap**（corelib 已解析 VRM1.0 preset+custom / 0.x blendShapeGroups），FaceDriver 按 `getAvailableExpressions()` 门控发送，缺名字自动跳过，**禁止硬编码 aa→jawOpen 之类映射**。
+4. **情绪协议是自定的** `<|emotion:name:intensity|>`，由 SystemPromptAssembler 注入指令教模型使用；可情绪集 = EmotionBlender.defs 的 7 个键。
+5. **adapter 的 okhttp/serialization/coroutines 必须 `api()`** 不能 `implementation`——构造器默认参数把 OkHttpClient/JsonObject 泄进了公共签名，改 implementation 会编译失败。
+6. TTS response_format 固定 `"wav"`（AiChat.kt），换 provider 若报 400 需要把格式做成设置项。
+
+## 四、已知坑清单（每条都真实踩过）
+
+1. AIRI 的 profile.json 有 **12 个音素条目且重名**（A/I/U/E/O/S 各两套录音）：打分按 12 条目归一化，`VowelDriver.setPhonemeGroups` 按名分组 max 合并，S 视作 ih 别名。
+2. profile 里 `useStandardization` 是 JSON 布尔，**不能** `jsonPrimitive.int` 解析（直接抛 NumberFormatException）。
+3. `VowelDriver.lastActiveTime` 必须初始化 0 不能 NEG_INF——t=0 时 `t-last=∞` 会让首帧起永远静音（AIRI 时钟从 0 起）。
+4. 情绪标记强度正则要带 `-?`（负号），否则 `<|emotion:sad:-2|>` 整体不匹配、原文穿透进语音。
+5. kotlin-jvm 插件在混 AGP 工程必须在 root `build.gradle.kts` `apply false` 声明，否则 "already on the classpath with an unknown version"。
+6. wLipSync C 版 `downSample` 的 `i1=min(i0,size-1)` 是上游笔误（插值失效），Kotlin 版已改成 `i0+1`，勿"改回去"。
+7. wLipSync `low_pass_filter` 是把滤波项**加在原始数据上**的半边对称卷积（ quirky 但标定数据就是这么采的）——Dsp 移植保持原样，别"修正"。
+8. Compose UI 在 MIUI 上 uiautomator 只能看到部分节点（TextField 不可见）：真机冒烟走 `run-as` 直接写 prefs（先 force-stop）+ 截图(1:1 物理分辨率) + bounds 中心 tap。
+9. corelib 的 `AvatarState`（渲染状态）与 orchestrator 的 `ConversationPhase`（会话状态）是两套，别混。
+
+## 五、测试与 API 配置现状
+
+- **API 要求**：一个同时提供 OpenAI 兼容 `/chat/completions`(流式) 与 `/audio/speech` 的服务，LLM/TTS 共用同一 Base URL + Key。
+  - 推荐：硅基流动 `https://api.siliconflow.cn/v1`（国内直连，注册送额度）：LLM=`deepseek-ai/DeepSeek-V3` 或免费 `Qwen/Qwen2.5-7B-Instruct`；TTS=`FunAudioLLM/CosyVoice2-0.5B`，Voice=`FunAudioLLM/CosyVoice2-0.5B:alex`
+  - 备选：OpenAI 官方（需海外网络，`gpt-4o-mini`+`tts-1`+`alloy`）；或任意 one-api/new-api 网关
+- 填写入口：App ⚙️ 设置 →「AI 对话」→ 五项即填即存。
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest`
+- 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
+- 设备：`2c3769db`；日志关注 `adb logcat -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
+
+## 六、接下来的工作 —— 任务提示词（按优先级）
+
+> 使用方式：新会话中直接粘贴对应任务块。每个提示词都假设对方已读过本文档。
+
+### 任务 1：成功路径真机验证 + 观感调参（拿到 API Key 后第一件事）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章与第三章。
+当前状态:48单测绿,真机冒烟通过但音频成功路径未验证(无真实Key)。
+任务:设备 2c3769db 已连接。我会提供硅基流动的 API Key(见下)。请:
+1. 用 run-as 把五项配置写入 app 的 demo_settings prefs(force-stop 后写,键名 ai_baseUrl/ai_apiKey/ai_llmModel/ai_ttsModel/ai_voice,
+   值: https://api.siliconflow.cn/v1 / <KEY> / deepseek-ai/DeepSeek-V3 / FunAudioLLM/CosyVoice2-0.5B / FunAudioLLM/CosyVoice2-0.5B:alex),
+   重启 app,让虚拟人说一段 3-4 句的长回复。
+2. 逐项检查并截图:①断句流水(字幕逐句追加、第一句出声时后续已在合成) ②口型音画同步(有无明显滞后/嘴型单调)
+   ③情绪标记是否被模型遵守(字幕里不应出现 <|emotion:..|> 原文;表情是否变化且3秒回落) ④眨眼 ⑤播放中点打断✕是否立即静音
+3. 若口型单调:检查 logcat 里 VisemeTimeline 采样是否正常,必要时微调 avatar-ai-adapter VowelDriver 常量区(各常量含义有注释);
+   若断句太碎/太迟:调 avatar-orchestrator SentenceChunker.Options(boost/minimumWords/maximumWords)。
+4. 把调过的参数与观察结论写进 docs/ai-layer-handoff.md 附录A,提交代码(仓库风格 TYPE: fix/feat 中文描述)。
+API Key: <在这里贴上Key>
+```
+
+### 任务 2：人物卡导入 UI（不依赖 API，随时可做）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章;本次做人物卡导入 UI。
+解析器已就绪: avatar-orchestrator card/CharacterCardParser.parse(bytes) 自动识别 PNG(酒馆 chara 键 + AIRI ccv3 键,含 zTXt)与 JSON(V1平铺/V2/V3)。
+要求:
+1. MainActivity 的 PanelType 加 CARDS,底部 FAB 列表加入口(参照现有 Expression FAB 写法),面板用现有 ListPanel 风格扩展成卡片列表
+   (标题用 CharacterCard.name,副标题 spec+characterVersion)。
+2. 导入: ActivityResultContracts.OpenDocument 选 image/png 与 application/json,读 bytes → CharacterCardParser.parse →
+   成功后把【原始 bytes 存文件】到 context.filesDir/cards/<nanoid或name>.<png|json>(别序列化 data class,extensions 是 JsonObject);
+   卡片索引持久化到 demo_settings(ai_cards 列表 + ai_active_card)。
+3. 激活卡片: session.setCharacterCard(card)(AvatarSession 已有);切换卡片时 clearHistory + 重写系统提示。
+4. 开场白: 给 AvatarSession 加 suspend fun speak(text: String)——跳过 LLM,直接 chunker切句→pipeline.submit→播放
+   (复用 handleDelta 的情绪提取路径吗?不需要,开场白无标记,直接 pipeline.submit 即可,记得 emit SentenceQueued 与状态流转 THINKING→跳过直接 SPEAKING 由播放回调驱动)。
+   卡片激活后自动 speak(firstMessage)。
+5. 单测: 卡片文件持久化往返(存→读→parse→setCharacterCard 后 systemPrompt 包含 description)。
+验收: 把任意 SillyTavern 导出的 PNG 卡导入后,提问角色能按人设回答,开场白自动朗读。提交代码,风格 TYPE: feat 中文描述。
+```
+
+### 任务 3：Room 会话存储 + 历史裁剪
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
+任务: 用 Room 实现 history/ConversationStore 接口(现为 InMemoryConversationStore 杀进程即失)。
+1. orchestrator 加 room 依赖(room-runtime/room-ktx 2.6.1 + ksp 插件,ksp 版本需匹配 kotlin 2.0.21,查 google maven)。
+   实体: session(id, characterId, updatedAt) + message(id, sessionId, role, content, createdAt)。
+   实现 RoomConversationStore;AvatarSession 构造参数加 store: ConversationStore = InMemoryConversationStore()(现在是内部 new 的,要改成可注入),
+   demo 在 AiChatController 里装配,持久化 session id 到 prefs。
+2. 历史裁剪: AvatarSession.buildRequestMessages 目前全量发,加 Options.recentTurnLimit(Int?=null)——只保留最近 N 条 user/assistant
+   (system 消息永远保留且置顶)。
+3. 单测: 裁剪边界(N 条/N+1 条/只有 system)、Room 读写(instrumented 或用 robolectric,若嫌重就只测裁剪逻辑+DAO 抽象)。
+注意: kotlin 2.0.21 + ksp 版本兼容是本任务最大风险,先跑通一个空 Room 工程再铺开。提交代码。
+```
+
+### 任务 4：语音输入（ASR 适配器）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
+任务: 给对话加语音输入。
+1. :avatar-ai-adapter 加 api/AsrAdapter 接口(对齐 TtsAdapter 风格): 两个实现方向二选一先做简单的——
+   a) android.speech.SpeechRecognizer(免费离线可能不可用,在线需 Google 服务,国内设备大概率没有) → 
+   b) OpenAI 兼容 /audio/transcriptions 适配器(whisper-1 格式,multipart 上传 wav) —— 推荐 b,
+      录音用 MediaRecorder 输出 mp3/amr 到 cacheDir,松手即发。接口: suspend transcribe(audio: ByteArray, mime: String, config): String。
+2. AiChatBar 加按住说话按钮(按住 MediaRecorder 录音,松手→transcribe→文本自动填入输入框,由用户确认发送;或直接发送,做成设置开关)。
+3. 半双工: 按下录音键时若 phase==SPEAKING 自动 session.interrupt()(对齐 AIRI: 说话时抑制聆听)。
+4. RECORD_AUDIO 权限运行时申请。
+验收: 真机按住说话→识别文本→发送→回复正常。提交代码。
+```
+
+### 任务 5：视线系统（corelib lookAt + saccade，难度最高，放后）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第三章(设计决策2)与记忆 filament-camera-programmatic-control。
+任务: 实现注视(gaze)与 saccade 微颤。
+1. 先勘察 corelib: VrmAnimationEngine/humanoid 骨骼访问能力——确认能否在 Kotlin/JNI 层对头颈/眼骨叠加旋转
+   (注意记忆 filament-1683-api-constraints 的 getParent entity/instance 坑)。若无现成通道,需在 JNI 加 setLookAtTarget(x,y,z) 或骨骼偏移接口。
+2. orchestrator face/ 加 SaccadeEngine,精确移植 AIRI packages/stage-ui-three/src/composables/vrm/utils/eye-motions.ts:
+   分段均匀分布(400ms一档,首档0-400ms概率0.075) + 注视点±0.25世界单位抖动;目标由 trackingMode 决定(camera/touch/none),平滑交给骨骼解算。
+3. 接入 FaceDriver.tick: 眨眼之后、情绪之前,把视线目标写 corelib。
+4. 回归: 必须真机验证不破 SpringBone 与 VRMA 播放(记忆 vrm-springbone-center-semantics、vrma-anim-library)。
+提交代码,附真机截图。
+```
+
+### 任务 6：Edge-TTS 免费适配器（开源友好）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
+任务: :avatar-ai-adapter 加 EdgeTtsAdapter(微软 Edge 朗读接口,免费无 Key),实现 TtsAdapter 接口。
+要点: WSS 连接 speech.platform.bing.com 的 wss 端点,二进制音频(mp3/24k)分片回传;
+2024 年起需要 Sec-MS-GEC 鉴权头(SHA-256 DRM token),参考开源实现 edge-tts(python) 的 token 算法,别凭记忆写。
+输出 mp3 → orchestrator PcmDecoder 的 MediaCodec 路径已能解,无需新解码器。
+demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl/key)。
+验收: 不填任何 Key,选 Edge-TTS,虚拟人开口说话。注意该接口无 SLA,失败要优雅降级并给明确错误事件。
+```
+
+### 任务 7：SDK 化收尾（文档/发布/锦上添花）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。任务(按顺序,做完一项提交一项):
+1. SDK README: 四层架构图、3 步集成示例(Gradle 依赖→AvatarView+AvatarSession→send)、API 速查表。
+2. CameraDirector: orchestrator director/ 下规则式实现——phase→CameraShot 映射(THINKING→CLOSE_UP, SPEAKING→MEDIUM_SHOT,
+   IDLE→FULL_SHOT,可配置),订阅 session.events 驱动 controller.setCameraShot(已有平滑运镜,勿重复造轮子);默认关闭。
+3. maven-publish 配置: 两个 SDK 模块发布到 mavenLocal 起步。
+4. 流式 TTS(远期): TtsAdapter 加 streaming 变体(Flow<AudioChunk>),对齐 AIRI bidirectional-ws 语义,播放按 chunk 走。
+```
+
+## 附录 A：观感调参速查（成功路径验证后更新此表）
+
+| 现象 | 调哪里 |
+|---|---|
+| 句子太碎 | `SentenceChunker.Options(minimumWords↑ / boost↓)` |
+| 句子太迟（等待感） | `maximumWords↓`、软标点 boost↑ |
+| 嘴张不开/太夸张 | `VowelDriver.OUTPUT_GAIN` / `WINNER_CAP` |
+| 口型拖泥带水 | `RELEASE_RATE↑`（30→更高） |
+| 口型抖动 | `ATTACK_RATE↓` |
+| 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
+| 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
+
+## 附录 B：记忆索引（新会话自动加载）
+
+- `airi-source-anchors` — AIRI file:line 锚点与对齐参数（本文档的上游依据）
+- `sdk-four-layer-progress` — 本次落地的进度/坑清单精简版
+- 其余 corelib 相关：`pbr-only-rendering`、`filament-1683-api-constraints`、`filament-light-rig-spot-only`、`filament-pcss-adreno-cliff`、`filament-camera-programmatic-control`、`vrm-springbone-center-semantics`、`vrma-anim-library`、`android-device-debug-workflow`
