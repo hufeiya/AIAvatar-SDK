@@ -187,6 +187,13 @@ internal fun SettingsScreen(
                             placeholder = "alloy /Arabella / ..."
                         ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
                     }
+                    item {
+                        SettingsSwitchRow(
+                            title = "AI 可控镜头",
+                            subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
+                            checked = aiPrefs.llmCamera
+                        ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
+                    }
 
                     // ── 画质预设 ─────────────────────────────────────
                     item { SettingsSectionHeader("画质预设 · 一键档位") }

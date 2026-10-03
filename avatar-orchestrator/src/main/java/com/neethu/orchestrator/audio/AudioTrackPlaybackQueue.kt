@@ -111,8 +111,16 @@ class AudioTrackPlaybackQueue : PlaybackQueue {
             var stopSeen = false
             synchronized(lock) {
                 while (waiting.isEmpty() && !stopRequested && !released) {
-                    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-                    (lock as Object).wait()
+                    try {
+                        @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                        (lock as Object).wait()
+                    } catch (_: InterruptedException) {
+                        // release() interrupts the writer as its shutdown signal
+                        // (released is set first). An uncaught InterruptedException
+                        // here is a FATAL crash on avatar-playback (seen live when
+                        // a config rebuild closed the session mid-wait) — unwind quietly.
+                        return
+                    }
                 }
                 stopSeen = stopRequested
                 item = waiting.removeFirstOrNull()

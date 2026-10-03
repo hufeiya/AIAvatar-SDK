@@ -1,6 +1,7 @@
 package com.neethu.orchestrator.session
 
 import com.neethu.aiadapter.api.EmotionCue
+import com.neethu.corelib.CameraShot
 
 /** Observable happenings during a conversation turn. */
 sealed interface AvatarEvent {
@@ -16,8 +17,14 @@ sealed interface AvatarEvent {
     /** A sentence failed to synthesize/decode; the turn continues without it. */
     data class SentenceFailed(val sequence: Int, val text: String, val message: String) : AvatarEvent
 
-    /** An emotion marker was extracted from the LLM stream. */
+    /** An emotion tag was extracted from the LLM stream. */
     data class EmotionChanged(val cue: EmotionCue) : AvatarEvent
+
+    /** An `<act:…>` tag started a gesture from the action catalog. */
+    data class ActionStarted(val tag: String, val label: String) : AvatarEvent
+
+    /** A `<cam:…>` tag switched the preset camera framing. */
+    data class CameraChanged(val shot: CameraShot) : AvatarEvent
 
     /** The current turn finished to the end (LLM + TTS + playback all drained). */
     data class TurnCompleted(val interrupted: Boolean) : AvatarEvent

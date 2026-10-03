@@ -1045,6 +1045,12 @@ internal class SoulLinkRenderer(
         pendingSpringReset = true
     }
 
+    /**
+     * Duration of the currently loaded VRMA animation in seconds
+     * (0 when none is loaded).
+     */
+    fun getVrmaDuration(): Float = vrmaEngine?.getDuration() ?: 0f
+
     // ── Scene (Environment/Background) API ────────────────────────────────
 
     /**

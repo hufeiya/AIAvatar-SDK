@@ -1,11 +1,13 @@
 package com.neethu.orchestrator.session
 
 import android.util.Log
-import com.neethu.aiadapter.api.EmotionExtractor
 import com.neethu.aiadapter.api.LipSyncProcessor
 import com.neethu.aiadapter.api.LlmAdapter
 import com.neethu.aiadapter.api.TtsAdapter
-import com.neethu.aiadapter.emotion.MarkerEmotionExtractor
+import com.neethu.aiadapter.api.EmotionCue
+import com.neethu.aiadapter.api.TagCue
+import com.neethu.aiadapter.api.TagExtractor
+import com.neethu.aiadapter.emotion.InlineTagExtractor
 import com.neethu.aiadapter.lipsync.WlipsyncLipSyncProcessor
 import com.neethu.aiadapter.model.ChatMessage
 import com.neethu.aiadapter.model.ChatRole
@@ -13,6 +15,7 @@ import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.LlmStreamEvent
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.corelib.AvatarController
+import com.neethu.corelib.CameraShot
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
 import com.neethu.orchestrator.audio.PlaybackItem
 import com.neethu.orchestrator.audio.PlaybackQueue
@@ -20,6 +23,8 @@ import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.chunker.SentenceChunker
 import com.neethu.orchestrator.face.FaceDriver
+import com.neethu.orchestrator.gesture.ActionEntry
+import com.neethu.orchestrator.gesture.GestureDriver
 import com.neethu.orchestrator.history.ConversationStore
 import com.neethu.orchestrator.history.InMemoryConversationStore
 import com.neethu.orchestrator.pipeline.SpeechPipeline
@@ -64,10 +69,11 @@ class AvatarSession(
     private val scope: CoroutineScope,
     private val llm: LlmAdapter,
     private val tts: TtsAdapter,
-    controller: AvatarController? = null,
+    private val controller: AvatarController? = null,
     private val options: Options = Options(),
     playbackQueue: PlaybackQueue? = null,
     lipSyncProcessor: LipSyncProcessor? = WlipsyncLipSyncProcessor(),
+    gestureDriver: GestureDriver? = null,
 ) {
 
     data class Options(
@@ -76,8 +82,12 @@ class AvatarSession(
         val chunkerOptions: SentenceChunker.Options = SentenceChunker.Options(),
         val enableFaceDriving: Boolean = true,
         val assembler: SystemPromptAssembler = SystemPromptAssembler(),
-        /** Append the emotion-marker protocol to every system prompt. */
-        val emotionProtocol: Boolean = true,
+        /** Append the multimodal-tag protocol to every system prompt. */
+        val protocolInstructions: Boolean = true,
+        /** Let `<act:…>` tags play gestures from the action catalog. */
+        val enableLlmGestures: Boolean = true,
+        /** Let `<cam:…>` tags switch the preset camera framing. */
+        val enableLlmCamera: Boolean = true,
     )
 
     /** LLM request parameters; must be set before [send]. */
@@ -102,9 +112,31 @@ class AvatarSession(
     val faceDriver: FaceDriver? =
         if (controller != null && options.enableFaceDriving) FaceDriver(controller, scope) else null
 
+    /**
+     * LLM-driven gesture player; null when no controller or gestures
+     * disabled. Injectable for tests (pass a fake via the constructor).
+     */
+    val gestureDriver: GestureDriver? =
+        if (controller != null && options.enableLlmGestures) {
+            gestureDriver ?: GestureDriver(controller)
+        } else {
+            null
+        }
+
+    /**
+     * The gesture catalog advertised to the LLM in the protocol block and
+     * playable by `<act:…>` tags. Empty catalog = no action section in the
+     * prompt and action cues are silently dropped.
+     */
+    var actionCatalog: List<ActionEntry> = emptyList()
+        set(value) {
+            field = value
+            gestureDriver?.setCatalog(value)
+        }
+
     private val queue: PlaybackQueue = playbackQueue ?: AudioTrackPlaybackQueue()
     private val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent)
-    private val extractor: EmotionExtractor = MarkerEmotionExtractor()
+    private val extractor: TagExtractor = InlineTagExtractor()
     private val chunker = SentenceChunker(options.chunkerOptions)
     private val store: ConversationStore = InMemoryConversationStore()
     private val replyBuffer = StringBuilder()
@@ -242,11 +274,12 @@ class AvatarSession(
 
     /**
      * Speak [text] directly, without an LLM turn — character-card greetings,
-     * announcements. The text goes through the same chunker → TTS → ordered
-     * playback pipeline (emotion markers are NOT interpreted); phase skips
-     * THINKING and the playback callback drives IDLE→SPEAKING→IDLE. The text
-     * is not appended to conversation history. Suspending like
-     * [sendAndAwait]; [interrupt] cuts it mid-playback.
+     * announcements. The text goes through the same tag extractor → chunker
+     * → TTS → ordered playback pipeline as LLM turns (inline tags — emotion,
+     * action, camera — ARE interpreted, so a greeting can wave and smile);
+     * phase skips THINKING and the playback callback drives IDLE→SPEAKING→
+     * IDLE. The text is not appended to conversation history. Suspending
+     * like [sendAndAwait]; [interrupt] cuts it mid-playback.
      */
     suspend fun speak(text: String) {
         if (text.isBlank()) return
@@ -256,10 +289,15 @@ class AvatarSession(
             return
         }
         val job = scope.launch {
+            extractor.reset()
             chunker.reset()
             pipeline.beginTurn()
             try {
-                (chunker.feed(text) + chunker.flush()).forEach { submitSentence(it, ttsCfg) }
+                val tagged = extractor.feed(text)
+                val tail = extractor.flush()
+                dispatchCues(tagged.cues + tail.cues)
+                (chunker.feed(tagged.cleanText + tail.cleanText) + chunker.flush())
+                    .forEach { submitSentence(it, ttsCfg) }
                 pipeline.endTurn()
                 pipeline.awaitTurnComplete()
                 _phase.value = ConversationPhase.IDLE
@@ -278,11 +316,14 @@ class AvatarSession(
 
     /**
      * Three-layer interrupt (AIRI parity): cancels the LLM stream, aborts
-     * in-flight TTS, and silences playback immediately. Phase returns to IDLE.
+     * in-flight TTS, and silences playback immediately. Any LLM-started
+     * gesture is cut back to the rest pose; the camera keeps its current
+     * framing (a shot is a mode, not a transient). Phase returns to IDLE.
      */
     fun interrupt(reason: String = "user-interrupt") {
         turnJob?.cancel()
         turnJob = null
+        gestureDriver?.stop()
         pipeline.cancelTurn(reason)
         scope.launch(Dispatchers.Main.immediate) {
             if (_phase.value != ConversationPhase.IDLE) _phase.value = ConversationPhase.IDLE
@@ -301,13 +342,39 @@ class AvatarSession(
     private fun handleDelta(delta: String, ttsCfg: TtsConfig) {
         replyBuffer.append(delta)
         val result = extractor.feed(delta)
-        for (cue in result.cues) {
-            faceDriver?.applyEmotion(cue)
-            emit(AvatarEvent.EmotionChanged(cue))
-        }
+        dispatchCues(result.cues)
         if (result.cleanText.isNotEmpty()) {
             chunker.feed(result.cleanText).forEach { submitSentence(it, ttsCfg) }
         }
+    }
+
+    /**
+     * Multimodal dispatch (docs/ai-layer-handoff.md §7.4): cues fire the
+     * moment the LLM emits them (AIRI semantics — reactions read as fast);
+     * unknown names are silently dropped, never surfaced as errors.
+     */
+    private fun dispatchCues(cues: List<TagCue>) {
+        for (cue in cues) when (cue) {
+            is TagCue.Emotion -> {
+                val emotion = EmotionCue(cue.name, cue.intensity)
+                faceDriver?.applyEmotion(emotion)
+                emit(AvatarEvent.EmotionChanged(emotion))
+            }
+            is TagCue.Action -> {
+                val entry = actionCatalog.firstOrNull { it.tag == cue.name }
+                if (gestureDriver?.play(cue.name) == true) {
+                    emit(AvatarEvent.ActionStarted(cue.name, entry?.label ?: cue.name))
+                }
+            }
+            is TagCue.Camera -> dispatchCamera(cue.name)
+        }
+    }
+
+    private fun dispatchCamera(name: String) {
+        if (!options.enableLlmCamera) return
+        val shot = CAMERA_SHOTS[name] ?: return
+        controller?.setCameraShot(shot)
+        emit(AvatarEvent.CameraChanged(shot))
     }
 
     private fun submitSentence(sentence: String, ttsCfg: TtsConfig) {
@@ -318,11 +385,19 @@ class AvatarSession(
 
     private fun buildRequestMessages(): List<ChatMessage> {
         val list = mutableListOf<ChatMessage>()
+        // Sections of the protocol block that cannot run are omitted so the
+        // prompt never advertises a tag the session would drop.
+        val cameras =
+            if (options.enableLlmCamera && controller != null) SystemPromptAssembler.DEFAULT_CAMERA_TAGS
+            else emptyList()
+        val actions =
+            if (gestureDriver != null) actionCatalog.map { it.tag to it.label }
+            else emptyList()
         val system = buildString {
             append(systemPrompt.trim())
-            if (options.emotionProtocol) {
+            if (options.protocolInstructions) {
                 if (isNotEmpty()) append("\n\n")
-                append(options.assembler.emotionProtocolBlock())
+                append(options.assembler.multimodalProtocolBlock(cameras = cameras, actions = actions))
             }
         }
         if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
@@ -332,5 +407,16 @@ class AvatarSession(
 
     private fun emit(event: AvatarEvent) {
         _events.tryEmit(event)
+    }
+
+    companion object {
+        /** `<cam:…>` tag → preset shot (tag values are the enum names lowercased). */
+        private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(
+            "close_up" to CameraShot.CLOSE_UP,
+            "medium_shot" to CameraShot.MEDIUM_SHOT,
+            "full_shot" to CameraShot.FULL_SHOT,
+            "long_shot" to CameraShot.LONG_SHOT,
+            "over_shoulder" to CameraShot.OVER_SHOULDER,
+        )
     }
 }

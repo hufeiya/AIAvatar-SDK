@@ -79,8 +79,8 @@ class CharacterCardStoreTest {
         session.setCharacterCard(card!!)
         assertTrue(session.systemPrompt.contains("一位温柔的向导"))
         assertTrue(session.systemPrompt.contains("深夜的图书馆"))
-        // 情绪协议照常注入
-        assertTrue(session.systemPrompt.contains("Emotion protocol"))
+        // 协议块自任务 8 起在 send 时统一追加（§7.4），systemPrompt 只含人设
+        assertFalse(session.systemPrompt.contains("Multimodal protocol"))
 
         session.clearCharacterCard()
         assertEquals("", session.systemPrompt)

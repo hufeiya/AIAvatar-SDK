@@ -25,9 +25,10 @@
 | 文件 | 职责 |
 |---|---|
 | `api/LlmAdapter.kt` | `streamChat(messages, config): Flow<LlmStreamEvent>`，事件 = TextDelta/Finish/Error |
+| `api/TagCue.kt` + `api/TagExtractor.kt` | 多模态行内标签协议（任务 8）：`TagCue` sealed（Emotion/Action/Camera，只带字符串，映射归 orchestrator）；`ExtractionResult(cleanText, cues)`；接口 `TagExtractor` |
 | `api/TtsAdapter.kt` | `suspend synthesize(text, config): TtsResult`（V1 句级整段返回） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
-| `api/EmotionExtractor.kt` | 流式标记过滤：`feed(delta) → ExtractionResult(cleanText, cues)` |
+| `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
 | `openai/OpenAiCompatibleLlmAdapter.kt` | OkHttp SSE 手解 `data:` 行；`channelFlow + awaitClose{call.cancel()}` 取消即断连 |
 | `openai/OpenAiCompatibleTtsAdapter.kt` | POST `{base}/audio/speech`，response_format 可配（demo 默认 wav） |
@@ -35,14 +36,16 @@
 | `lipsync/WlipsyncProfile.kt` | 解析标定 profile（`src/main/resources/wlipsync/profile.json`，**直接复用 AIRI 的文件**），cosine^100 打分归一化 |
 | `lipsync/VowelDriver.kt` | AIRI vowel-driver.ts 逐常量移植：音量 `min(0.9v,1)^0.7`、winner≤0.7/runner×0.6≤0.35、静音门限 0.04/0.05/160ms、非对称指数平滑升50/降30、死区0.01、输出×0.7。元音槽序 **AA,IH,OU,EE,OH** |
 | `lipsync/WlipsyncLipSyncProcessor.kt` | 组合前端+profile→VisemeTimeline；暴露 `vowelLayout`（音素→元音槽映射） |
-| `emotion/MarkerEmotionExtractor.kt` | 协议 `<\|emotion:happy\|>` / `<\|emotion:happy:0.8\|>`（强度可负，clamp 0..1），跨 delta 缓冲半截标记，flush 丢弃悬尾 |
 
 ### 2.2 `:avatar-orchestrator`（android library，包 `com.neethu.orchestrator`）
 
 | 文件 | 职责 |
 |---|---|
-| `session/AvatarSession.kt` | **门面**：`send/sendAndAwait/interrupt/close/setCharacterCard`；`llmConfig`/`ttsConfig` 属性；`phase: StateFlow` + `events: SharedFlow`。内部组装 extractor→chunker→pipeline，collect LLM 流 |
+| `session/AvatarSession.kt` | **门面**：`send/sendAndAwait/interrupt/close/setCharacterCard`；`llmConfig`/`ttsConfig` 属性；`phase: StateFlow` + `events: SharedFlow`。内部组装 extractor→chunker→pipeline，collect LLM 流；任务 8 起三路分派 TagCue（emo→faceDriver / act→gestureDriver / cam→setCameraShot），`actionCatalog` 可注入属性，`speak()` 也走 extractor（开场白支持标签），Options 加 `protocolInstructions/enableLlmGestures/enableLlmCamera` |
 | `session/ConversationPhase.kt` | IDLE/THINKING/SPEAKING（注意与 corelib 的 `AvatarState` 渲染状态是两回事） |
+| `session/AvatarEvent.kt` | 会话事件流；任务 8 加 `ActionStarted(tag,label)` / `CameraChanged(shot)` |
+| `gesture/ActCatalog.kt` | `ActionEntry(tag,label,assetPath?,filePath?)`——LLM 动作目录条目（任务 8） |
+| `gesture/GestureDriver.kt` | `<act:>` 播放器：目录查名→loadVrmaAnimation(From file)→playVrmaAnimation(loop=false)；单动画槽"最后指令赢"；interrupt 时 stop；open 类可注 fake（任务 8） |
 | `chunker/SentenceChunker.kt` | AIRI tts-chunker 规则：硬标点 `.。?？!！…⋯～~\n\r\t`、软标点 boost=2/min=4/max=12、小数点保护、`...`点串一次切、`*动作*` 剥离（跨 delta 缓冲未闭合段）；词计数 `java.text.BreakIterator`（可注入 WordCounter） |
 | `pipeline/SpeechPipeline.kt` | TTS 并发≤4（Semaphore）、completed 按 sequence 严格有序入队、失败用 failedSequences 跳过前沿不卡队、`awaitTurnComplete()`、cancelTurn 级联 |
 | `audio/PlaybackQueue.kt` / `AudioTrackPlaybackQueue.kt` | maxVoices=1 FIFO；写线程 4096 帧块写；stopAll 从调用线程 pause+flush 即时静音；`ActivePlayback.positionSeconds()` 用 AudioTimestamp 音频时钟（FaceDriver 靠它对口型） |
@@ -51,7 +54,7 @@
 | `face/EmotionBlender.kt` | AIRI expression.ts 组合表(happy=happy0.7+aa0.2 等7种)、easeInOutCubic、起点捕获当前显示值、3s 自动回 neutral、eyeAreaActive 判定 |
 | `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s（gaze/saccade 未做，见任务5） |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
-| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n` + 情绪协议指令块（告诉模型怎么发 `<\|emotion:..\|>`） |
+| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 在 send 时统一追加一次（修掉旧版卡片双重注入） |
 | `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；**Room 版未做**（任务3） |
 
 ### 2.3 `:app` 集成
@@ -77,6 +80,14 @@
   - 调试命令新增 `import_card` / `active_card` / `open_panel` / `list cards`（见 docs/ai-debug-intents.md）
   - 真机验证：PNG(V2)/JSON(V3) 导入激活 ✓、坏卡拒绝 ✓、开场白自动朗读（`*动作*` 剥离、宏替换、按序播放）✓、按人设回答 ✓、系统提示词重写（388/440 chars）✓、重启后卡片与激活态持久化 ✓、面板 UI 截图 ✓、全程无崩溃
   - 未覆盖：SAF 选择器手势流与面板内点按激活/删除（HyperOS 禁止 shell 注入触摸；二者与已验证的 import_card 命令共用同一条落盘/索引/激活路径）
+- **任务 8 已完成（2026-10-03，真机 62fabe84 小米14/HyperOS Android16，硅基流动 DeepSeek-V3 + CosyVoice2）**：多模态行内标记协议——LLM 单流输出同时驱动文字(TTS/口型)/情绪(表情)/动作(VRMA)/镜头(CameraShot)，设计全文见第七节
+  - adapter：`TagCue` sealed + `TagExtractor` 接口 + `InlineTagExtractor`（`<emo:名:强度>/<act:名>/<cam:机位>` 新三标签 + 老协议 `<|emotion|>` 兼容；跨 delta 缓冲/holdback/裸 `<` 防吞段）
+  - orchestrator：AvatarSession 三路分派（映射在本层做，adapter 不碰 corelib）+ `gesture/GestureDriver`（目录可注入，interrupt 时 stop）+ `SystemPromptAssembler.multimodalProtocolBlock(cameras, actions)`（空段省略；顺带修 assemble/buildRequestMessages 双重注入）+ `speak()` 走 extractor（开场白支持标签）+ `AvatarEvent.ActionStarted/CameraChanged`；Options 加 `protocolInstructions/enableLlmGestures/enableLlmCamera`
+  - corelib：`VrmaAnimationEngine` 非循环播完自动 stop+restoreRestPose（原先冻结末帧）+ `AvatarController.getVrmaAnimationDuration()`
+  - app：内置策展 6 动作目录（wave/nod/thank/celebrate/dismiss/salute→assets 对应文件，策展标准见 7.2）+ 外置库文件名关键词匹配回落内置 + 设置加「AI 可控镜头」开关（prefs `ai_llm_camera`，默认开）+ LLM 切机位与手动视角 FAB 共用同一枚徽标
+  - 单测：adapter 32 + orchestrator 51 全绿（新增 InlineTagExtractorTest 15 / AvatarSessionTagsTest 6 / 音频 release 回归 1，重写 assembler 测试）
+  - 真机验证：首轮对话 LLM 自发 `<cam:medium_shot><act:wave><emo:happy:0.8>` 开场、中段 `<cam:close_up><emo:happy:1.0>`——CameraChanged/ActionStarted/EmotionChanged 按序触发（`Loaded VRMA 5.08s, 53 bone tracks` 证实手势真加载，播完自动归位），字幕零标签泄漏，5 句按序 TurnCompleted；第二轮 `ActionStarted celebrate`（VRMA 8.54s）+ 4 次情绪变化 + 机位切换，打断 ✕ 后 23ms PlaybackInterrupted、动作停止，全程零 FATAL/TurnFailed
+  - 顺带修真崩溃：release() 打断停在 wait() 的写线程 → FATAL（见 A.1 第 17 条）
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts
 
 ## 三、关键设计决策（改代码前必读）
@@ -217,6 +228,138 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 4. 流式 TTS(远期): TtsAdapter 加 streaming 变体(Flow<AudioChunk>),对齐 AIRI bidirectional-ws 语义,播放按 chunk 走。
 ```
 
+### 任务 8：多模态行内标记协议（✅ 已完成，2026-10-03，真机 62fabe84，见第七节设计与 2.4 验证）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章与第七节(任务8设计)。
+任务: 让 LLM 单流输出同时驱动 文字(TTS/口型)+情绪(表情)+动作(VRMA)+镜头(CameraShot),行内标记法。
+按第七节的分期 A→D 实施:
+A. adapter: EmotionExtractor 泛化为 TagExtractor,TagCue sealed(Emotion/Action/Camera),
+   InlineTagExtractor 统一解析 <emo:名:强度>/<act:名>/<cam:机位> 与老协议 <|emotion:..|>,
+   跨delta缓冲/holdback/flush 语义照搬 MarkerEmotionExtractor,单测覆盖。
+B. corelib: VrmaAnimationEngine 非循环播完自动 stop+restoreRestPose(现在冻结在末帧);
+   controller 暴露 getVrmaAnimationDuration()。
+C. orchestrator: AvatarSession 三路分派(动作/机位映射在 orchestrator 做,adapter 只出字符串 cue);
+   GestureDriver(目录可注入,play=load+playVrmaAnimation(loop=false),interrupt 时 stop);
+   SystemPromptAssembler 出 multimodalProtocolBlock(可用列表动态注入,空段省略),
+   顺带修 assemble() 与 buildRequestMessages 双重追加协议块的既有问题;
+   speak() 路径也走 extractor(开场白支持标签);AvatarEvent 加 ActionStarted/CameraChanged。
+D. app: 内置策展动作目录(6个对话手势)+外置库关键词匹配回落内置;设置加"AI 可控镜头"开关;
+   装配 actionCatalog;事件收集补新分支。
+验收: 真机(62fabe84)——字幕无标签泄漏/三类标签各触发对应通道(截屏差分)/未知名静默/
+打断后动作立即停/协议遵循率观察/老卡片 <|emotion|> 回归。提交代码,风格 TYPE: feat 中文描述。
+```
+
+## 七、多模态行内标记协议设计（任务 8，2026-10-03 定稿）
+
+> 目标：LLM 单流输出同时携带文字（→TTS/口型）、情绪（→表情）、动作（→VRMA）、镜头（→CameraShot）。
+> 定稿结论：**行内标记法**；解析基础设施扩展现有 `MarkerEmotionExtractor`；**不新建平行管线**——
+> 现有 `LLM流 → extractor → chunker → pipeline` 两级流原样保留，只在分派处扩成三类。
+
+### 7.1 协议定义（取值全部对齐项目实有资产）
+
+| 标签 | 语法 | 取值 | 执行端 |
+|---|---|---|---|
+| 机位 | `<cam:shot>` | `close_up / medium_shot / full_shot / long_shot / over_shoulder`（= `CameraShot` 枚举小写） | `controller.setCameraShot()`（已有平滑 glide） |
+| 动作 | `<act:tag>` | **ActCatalog 动态生成注入 prompt**（模型只见过真实名字） | 新 `GestureDriver` |
+| 情绪 | `<emo:name:强度>` | `EmotionBlender.defs` 现有 7 键：happy/sad/angry/surprised/think/relaxed/neutral，强度 0.0~1.0 | `faceDriver.applyEmotion()`（现有路径） |
+| 语音 | 无标签纯文本 | — | chunker → TTS（零改动） |
+
+- **情绪名不采纳** sorrow/wink 等新词：向现有 defs 对齐（sorrow→sad、surprise→surprised）；wink 依赖模型 morph 参差，可作 V1.5 选项（defs 加一条 + `FaceDriver.send` 的 `availableExpressions` 门控自动兜底）。
+- **机位不采纳** look_down/dynamic_orbit：项目不存在，不教模型不存在的参数。dynamic_orbit 可作 V2（`orbitCamera` 原语已在，需自建运镜循环）。
+- **老协议兼容**：`<|emotion:名[:强度]|>` 继续识别（老卡片/旧提示词零成本过渡），但 prompt 只教新家族。
+
+**协议块由 `SystemPromptAssembler.multimodalProtocolBlock()` 生成**，可用列表参数化、空段整体省略（headless 无 controller 时机位/动作段不出现在 prompt）。
+
+### 7.2 ActCatalog（动作目录动态生成——防胡编的根治）
+
+```kotlin
+data class ActionEntry(val tag: String, val label: String, val assetPath: String? = null, val filePath: String? = null)
+```
+
+- **内置策展起步集**（assets/animations 25 个里过筛，舞蹈/搏击/运动类全部排除；策展标准：**上半身对话手势 + 首尾姿态接近 rest pose**）：
+
+| tag | 文件 | 语义 |
+|---|---|---|
+| wave | Greeting While Standing.vrma | 挥手问候 |
+| nod | Acknowledging Gesture.vrma | 点头认可 |
+| thank | Being Thankful While Standing.vrma | 致谢 |
+| celebrate | Celebrating After A Win.vrma | 庆祝 |
+| dismiss | Dismissing With Back Hand.vrma | 摆手否定 |
+| salute | Formal Military Salute.vrma | 敬礼 |
+
+- **外置动画库**（445 个）开启时按文件名关键词匹配（greeting→wave、acknowledg→nod、thank→thank…），无匹配回落内置 assetPath（assets 始终在包内，手动面板隐藏不影响加载）。
+- `session.actionCatalog` 是公开可注入属性——SDK 集成者可换自己的目录；目录为空时协议块不出动作段。
+- prompt 里模型只见真实名字 + 客户端未知名静默丢弃 = 双保险。
+
+### 7.3 协议细节决策（每条都影响可用性）
+
+1. **跨 delta 缓冲**照搬现有实现：标签可能被 SSE 拦腰截断（`<emo:hap` + `py:0.8>`），尾部未闭合 `<` holdback + 64 字符上限（病态输入防卡死）语义原样继承。
+2. **历史记录保留原始标签**（`replyBuffer` append 原始 delta）：模型在上下文里看到自己上一轮的标签用法 = 免费 few-shot 自我示范，协议遵循率显著更高。字幕 UI 拿的本来就是 clean text。**这是刻意设计，勿当 bug 修掉。**
+3. **未知名静默丢弃**：情绪（EmotionBlender.apply 未知名 return）、动作（目录查不到不播）、机位（映射表查不到不动）——不发错误事件，LLM 偶尔编名字是常态。
+4. **解析器对"正文裸 `<` 在真标签前"要防泄漏**：`a < b <emo:happy> c` 这种片段必须不能把真标签当普通文本透传（实现：段匹配失败时若段内还有下一个 `<`，只透传到该 `<` 并从那里重新评估）。
+5. **密度兜底节流**（可选后置）：同名情绪 ~800ms 内重复忽略，防低质量模型每句刷标签。真机看遵循率再定。
+
+### 7.4 解析与调度架构
+
+```
+LLM SSE delta
+  └→ InlineTagExtractor (adapter·纯JVM，MarkerEmotionExtractor 泛化)
+       ├→ TagCue.Emotion / .Action / .Camera    ← 标签即抽即发(带缓冲语义)
+       └→ cleanText ─→ SentenceChunker ─→ SpeechPipeline   ←【整条不动】
+  └→ AvatarSession 分派（adapter 严禁依赖 corelib，cue 只带字符串，映射在本层做）：
+       Emotion → faceDriver.applyEmotion()      (现有)
+       Action  → gestureDriver.play(tag)        (新)
+       Camera  → controller.setCameraShot(map)  (Options.enableLlmCamera 门控)
+       同步 emit AvatarEvent(字幕/调试/UI 徽标)
+```
+
+各层改动：
+- **adapter**：`api/TagCue.kt`（sealed）；`ExtractionResult.cues: List<TagCue>`；接口更名 `TagExtractor`；`MarkerEmotionExtractor` → `InlineTagExtractor`（一个扫描框架 + emo/act/cam/legacy 四条 matchEntire 正则，IGNORE_CASE）。
+- **corelib**：`VrmaAnimationEngine.update()` 非循环 `elapsed >= duration` 时自动 `stop()`（现在**冻结在末帧**，LLM 动作播完会僵住）；`AvatarController.getVrmaAnimationDuration()`。
+- **orchestrator**：`gesture/ActCatalog.kt` + `gesture/GestureDriver.kt`（`play(tag)` = load + `playVrmaAnimation(loop=false)`；`interrupt()` 联动 `stop()`；session 构造参数可注入 fake 供单测）；`AvatarSession.Options` 加 `enableLlmGestures/enableLlmCamera`；`AvatarEvent` 加 `ActionStarted(tag,label)/CameraChanged(shot)`；**顺带修既有 bug**：卡片激活时 `assemble()` 追加一次协议块、`buildRequestMessages` 又追加一次 = 双重注入——改为 `assemble()` 只拼人设、协议块只在 `buildRequestMessages` 追加一次；`speak()` 路径也走 extractor（开场白支持标签）。
+- **app**：内置策展目录 + 外置关键词匹配；设置加「AI 可控镜头」开关（`ai_llm_camera`，默认开——给用户保住取景主权的后门）；produceState 装配 `actionCatalog`（useExternalAnimations 变化触发重装）；事件收集补新分支（CameraChanged 同步视角徽标）。
+
+### 7.5 时序语义（刻意的取舍）
+
+标签在 **LLM 生成时刻**立即执行，**不对齐**到伴随句子的实际播出时刻。TTS 流水领先行 1~3 句，`<act:wave>` 会比它的语音早 2~5 秒——这是 AIRI 同款语义（现有情绪标记就是这么跑的，任务 1 真机观感"反应快"）。V2 备选：cue 挂到下一个 `SentenceStarted` 再执行（需重建标签→句子归属，复杂度上升，看真机观感再定）。
+
+### 7.6 动作生命周期与已知取舍
+
+- corelib 引擎**单动画槽**（setAnimation 覆盖式）：连续 `<act>` 相互抢占，"最后指令赢"，与相机语义一致；对话中动作天然低频，V1 接受。
+- "自动平滑过渡回 idle"：V1 的归位是 `restoreRestPose()` **瞬时切换**，不是淡出——所以策展标准要求首尾接近 rest pose（大多数手势类 VRMA 结尾在站立位，切换不可见）。真机若见跳变，V2 在引擎加 ~0.3s 末姿态→rest 交叉淡化。
+- VRMA 驱动骨骼、表情驱动 morph，两套通道天然无冲突；全身大动作配特写观感差 → 策展只选手势类 + prompt 引导，不做技术限制。
+
+### 7.7 已解决、勿重复建设的现状
+
+| 设计里的点 | 项目现状 |
+|---|---|
+| 口型 vs 情绪下半脸冲突防护 | **已存在且更精确**：FaceDriver 所有权——说话时口型独占 aa/ih/ou/ee/oh，结束 blend-back 淡入情绪嘴部目标，眼区情绪压制眨眼（决策 2 + A.1 第 15 条） |
+| 流式标签解析器 | MarkerEmotionExtractor 已验证全部边界（跨 delta/holdback/防泄漏/flush 丢悬尾） |
+| `*动作*` 星号动作剥离 | SentenceChunker 已有（卡片常用语法），与新标签并行不悖 |
+| 未知表情名门控 | FaceDriver.send 的 availableExpressions 门控 |
+
+### 7.8 分期与真机验收清单
+
+分期 A（adapter+单测）→ B（corelib，动画面板回归一次，SpringBone 是敏感区）→ C（orchestrator+单测）→ D（app+真机）。
+
+真机（62fabe84，硅基流动 DeepSeek-V3）验收：
+1. 字幕无任何标签泄漏（含裸 `<`、半截标签、老协议）；
+2. 三类标签各触发对应通道：截屏差分（镜头构图变化/动作帧间差/表情变化）；
+3. 未知名静默（字幕不泄漏、无错误条、无崩溃）；
+4. 打断 ✕ 后动作立即停、镜头保持在当前机位；
+5. 协议遵循率：连续 10 轮对话统计漏发/滥发/编名（归因分开：泄漏=解析器 bug，不发/乱发=prompt 问题）；
+6. 老卡片（`<|emotion|>`）与人物卡开场白（speak 路径带标签）回归。
+
+### 7.9 落地记录（2026-10-03，以代码为准的最终出入）
+
+- Options 的协议开关定名 `protocolInstructions`；`GestureDriver` 为 open 类（测试注入 fake，session 构造参数 `gestureDriver` 可覆盖）。
+- 解析器 flush 的悬尾判定用前缀正则 `<(emo|act|cam)\s*(:|$)` + `<|` 开头——容忍流切在冒号前（`<emo`），同时不误吞 "5 < 3"、"<emotional"。
+- §7.3 第 4 条（裸 `<` 防吞段）已实现：段匹配失败时若段内还有下一个 `<`，只透传到该 `<` 并从那里重新评估。
+- `speak()` 最终也走 extractor（设计时原判"开场白无标记"，实现升级为支持标签——卡片开场白可以挥手/微笑）。
+- 老协议 `<|emotion|>` 保留识别；system prompt 只教新家族；历史 assistant 消息保留原始标签（§7.3 第 2 条）。
+- 真机证据（62fabe84，两轮对话）：`chat:` 事件流（CameraChanged MEDIUM_SHOT→ActionStarted wave→EmotionChanged happy 0.8，中段 CLOSE_UP；第二轮 celebrate+4 情绪）、SoulLinkRenderer `Loaded VRMA 5.08s / 8.54s`、截屏（特写机位 + 干净字幕）。协议遵循率初判良好：两轮全部自发正确标签、未编造名字；密度遵循"转折处一个"。
+
 ## 附录 A：观感调参速查（成功路径验证后更新此表）
 
 ### A.1 任务 1 实测新坑（每条都真踩过，2026-10-03）
@@ -237,6 +380,7 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 14. **orchestrator JVM 单测遇到 `android.util.Log` 会抛 "not mocked"**：AvatarSession 的监听器常驻路径上一旦加了 Log 调用，AvatarSessionSpeakTest 就红。已在该模块 build.gradle.kts 加 `testOptions { unitTests.isReturnDefaultValues = true }`（Log 变 no-op），以后在 orchestrator 主代码加日志不必绕道。
 15. **FaceDriver 静止态必须"静默"，零值不能每帧重发**：`send()` 的去重守卫原本带 `&& value != 0f` 例外——说话结束后 else 分支每帧产出 0，守卫永不跳过，于是每帧 `setExpression(vowel, 0)`；而 corelib `VrmExpressionManager.setExpression` 对 `weight <= 0` 的语义是 **`targetWeights.remove(name)`**（见其源码 248-254 行，同名权重是替换、0 是删除），等于说话一结束就把手动设置的嘴部表情（面板 presetExpressions 的 aa/ih/ou/ee/oh）每帧抹掉。说话前 `sent` 缓存为空、零值走 `previous == null` 跳过，所以**只有说过话才复现**。已修：守卫去掉零值例外，静止时送最后一次清零即静默（所有权交还手动表情）；说话期间 viseme 变化超容差照常下发、独占嘴部不变。真机两轮验证：每轮结束后 `set_expression aa 1.0` 截屏差分集中在嘴部且 4 秒保持，第二轮说话口型日志正常。注意裁剪所有权时的行为模型：情绪活跃期（3s auto-reset 内）手动嘴部表情仍会被情绪通道覆盖，这是设计内所有权。
 16. **转换模型的 VRM preset 弱绑定会让口型/情绪整体变弱，解析时必须归一化**：换默认模型到 SK_Sun_PERFORMANCE（ARKit 52 词素 + 生成 preset 的转换模型）后嘴部动作非常小。解析其 GLB 发现全部 preset 绑定权重弱（aa 0.5 / ih·ou 0.2 / ee·oh 0.3 / sad·surprised 0.25 / happy 0.5），而 custom ARKit 词素全是 1.0——这意味着不只口型，LLM 情绪驱动的表情也只有 1/4~1/2 强度（blink 恰好 1.0 所以眨眼正常，最容易漏查）。驱动侧幅度正常（FaceDriver 日志 volume/top 与旧模型一致），纯模型资产问题。已修：`VrmExpressionManager.normalizeBindWeights` 在解析时（VRM 1.0 与 0.x 两条路径）把每个表达式的绑定权重缩放到最强 bind=1.0（比率保持；已全权重的模型恒等、零行为变化，四个仓库模型实测只有 SK_Sun 被放大）。注意副作用：同一 morph 组合、仅幅度不同的 preset（如此模型的 ee=[0.3×jaw,0.3×stretchL,0.3×stretchR] 与 ih=[0.2×同三 morph]）归一化后形状相同——幅度差异本就被 viseme 动态淹没，可接受。真机验证：aa=1.0 从半开变全开（截屏），说话中段嘴部帧间差 6~9%、句间停顿 1.7%。
+17. **release() 打断停在 wait() 的写线程 → FATAL 闪退（任务 8 期间实录于旧构建）**：`AudioTrackPlaybackQueue.release()` 先置 released 再 `writer?.interrupt()`，而 `writeLoop` 的 `lock.wait()` 没有捕获 InterruptedException——写线程正空等队列时 close/rebuild 会话（设置逐字符改动即重建、`AiChatController.ensure` 换配置）会让 `avatar-playback` 线程带未捕获异常死亡（MIUI 上 app 闪退重启）。打断主路径反而正常（写线程多半在 write//drain 里而非 wait 里），所以任务 1/2 冒烟没暴露。已修：wait 包 try/catch，中断即静默退出（released 已先置位，语义就是关停）。单测：构造队列→writer 停稳→release→用默认 UncaughtExceptionHandler 断言无未捕获异常。
 
 ### A.2 调参速查表
 

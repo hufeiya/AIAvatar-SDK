@@ -251,6 +251,14 @@ class AvatarController {
         renderer?.stopVrmaAnimation()
     }
 
+    /**
+     * Duration of the currently loaded VRMA animation in seconds
+     * (0 when none is loaded). Useful for progress UI and tests.
+     */
+    fun getVrmaAnimationDuration(): Float {
+        return renderer?.getVrmaDuration() ?: 0f
+    }
+
     // ── Public API: Spring Bone ──────────────────────────────────────────
 
     /**

@@ -438,11 +438,16 @@ private fun DemoScreen(
     // ── AI 对话：装配 AvatarSession 并订阅其状态 ──────────────────────────
     val scope = rememberCoroutineScope()
     val aiChat = remember { AiChatController(scope, controller) }
-    val session by produceState<AvatarSession?>(initialValue = null, state, uiState.aiPrefs) {
+    val session by produceState<AvatarSession?>(
+        initialValue = null, state, uiState.aiPrefs, uiState.useExternalAnimations,
+    ) {
         // 设置页逐字符提交配置；不等输入停稳就 ensure 会把会话每个按键重建一次，
         // 正在播放/合成的回合被反复杀掉（表现为"还没输完就不出声了"）。
         delay(800)
-        value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)
+        value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)?.also { s ->
+            // 动作目录跟随动画来源（内置策展 / 外置库关键词匹配），喂给协议块与 GestureDriver
+            s.actionCatalog = buildLlmActionCatalog(context, uiState.useExternalAnimations)
+        }
     }
 
     var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
@@ -482,6 +487,14 @@ private fun DemoScreen(
                     }
                     is AvatarEvent.EmotionChanged ->
                         Log.i(AI_LOG_TAG, "chat: EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
+                    is AvatarEvent.ActionStarted ->
+                        Log.i(AI_LOG_TAG, "chat: ActionStarted ${ev.tag} (${ev.label})")
+                    is AvatarEvent.CameraChanged -> {
+                        // 与手动视角 FAB 共用同一枚徽标，LLM 切机位时同步显示
+                        currentShot = ev.shot
+                        shotLabel = ev.shot.label
+                        Log.i(AI_LOG_TAG, "chat: CameraChanged ${ev.shot.name}")
+                    }
                     is AvatarEvent.TurnCompleted ->
                         Log.i(AI_LOG_TAG, "chat: TurnCompleted subtitleLen=${replyText.length}")
                     is AvatarEvent.TurnFailed -> {

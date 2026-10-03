@@ -18,6 +18,8 @@ data class AiChatPrefs(
     val llmModel: String = "",
     val ttsModel: String = "",
     val voice: String = "",
+    /** 允许模型用 <cam:…> 标签切换视角；关闭后镜头主权归用户。 */
+    val llmCamera: Boolean = true,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && llmModel.isNotBlank() &&
@@ -29,6 +31,7 @@ private const val KEY_AI_API_KEY = "ai_apiKey"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_MODEL = "ai_ttsModel"
 private const val KEY_AI_VOICE = "ai_voice"
+private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
 
 fun SharedPreferences.loadAiPrefs(): AiChatPrefs = AiChatPrefs(
     baseUrl = getString(KEY_AI_BASE_URL, "").orEmpty(),
@@ -36,6 +39,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs = AiChatPrefs(
     llmModel = getString(KEY_AI_LLM_MODEL, "").orEmpty(),
     ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
     voice = getString(KEY_AI_VOICE, "").orEmpty(),
+    llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
 )
 
 fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
@@ -45,6 +49,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_LLM_MODEL, p.llmModel.trim())
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
         .putString(KEY_AI_VOICE, p.voice.trim())
+        .putBoolean(KEY_AI_LLM_CAMERA, p.llmCamera)
         .apply()
 }
 
@@ -79,7 +84,10 @@ class AiChatController(
 
         val llm = OpenAiCompatibleLlmAdapter(prefs.baseUrl, prefs.apiKey)
         val tts = OpenAiCompatibleTtsAdapter(prefs.baseUrl, prefs.apiKey)
-        val session = AvatarSession(scope, llm, tts, avatarController)
+        val session = AvatarSession(
+            scope, llm, tts, avatarController,
+            AvatarSession.Options(enableLlmCamera = prefs.llmCamera),
+        )
         session.llmConfig = LlmConfig(
             baseUrl = prefs.baseUrl,
             apiKey = prefs.apiKey,

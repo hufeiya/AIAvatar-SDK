@@ -117,6 +117,9 @@ internal class VrmaAnimationEngine(
     fun isActive(): Boolean = isPlaying && currentAnimation != null
     fun getVrmMetaVersion(): String = vrmMetaVersion
 
+    /** Duration of the currently loaded animation in seconds (0 when none). */
+    fun getDuration(): Float = currentAnimation?.duration ?: 0f
+
     // ── Frame Update ─────────────────────────────────────────────────────
 
     fun update(elapsedSeconds: Float) {
@@ -185,6 +188,15 @@ internal class VrmaAnimationEngine(
                     applyTranslation(tm, instance, pos)
                 }
             }
+        }
+
+        // One-shot playback: restore the rest pose once the animation has run
+        // its full duration instead of freezing on the last frame. LLM-driven
+        // gestures (`<act:…>`) rely on this to return to idle automatically;
+        // curation prefers clips whose last frame is near the rest pose so the
+        // snap is invisible (docs/ai-layer-handoff.md §7.6).
+        if (!isLooping && elapsedSeconds >= anim.duration) {
+            stop()
         }
     }
 
