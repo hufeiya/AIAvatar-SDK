@@ -6,9 +6,14 @@ package com.neethu.orchestrator.chunker
  *
  *  - hard punctuation (`.。?？!！…⋯～~` + newlines) cuts immediately
  *  - soft punctuation (`,，、–—:：;；《》「」`) cuts early only within the
- *    first [Options.boost] sentences and only after [Options.minimumWords] words
- *  - exceeding [Options.maximumWords] forces a cut wherever we are
+ *    first [Options.boost] sentences and only after [Options.minimumWords] words,
+ *    and always once the buffer exceeds [Options.maximumWords] (AIRI's "limit")
+ *  - a cut never happens at a position without punctuation — an unpunctuated
+ *    run waits for the next punctuation mark (or [flush]); cutting mid-run is
+ *    exactly what makes TTS prosody sound broken
  *  - decimal points (`3.14`) never cut; `...` runs are treated as one ellipsis
+ *  - punctuation-only fragments (the stray `！！` after a cut) are dropped
+ *    instead of becoming empty TTS requests and spending the boost budget
  *  - `flush()` emits whatever remains (end of the LLM turn)
  *
  * Word counting uses a pluggable [WordCounter]; the default rides on
@@ -25,6 +30,7 @@ class SentenceChunker(
     data class Options(
         val boost: Int = 2,
         val minimumWords: Int = 4,
+        /** Soft punctuation becomes a cut point once the buffer exceeds this many words. */
         val maximumWords: Int = 12,
         val stripNarrativeActions: Boolean = true,
     )
@@ -92,32 +98,28 @@ class SentenceChunker(
                     // Dot run: skip to its final dot, then cut the whole run.
                     var runEnd = i
                     while (runEnd + 1 < scanEnd && pending[runEnd + 1] == '.') runEnd++
-                    out += cut(runEnd + 1)
+                    emit(out, cut(runEnd + 1))
                     scanEnd = speechEndIndex()
                     i = 0
                     continue
                 }
-                out += cut(i + 1)
+                emit(out, cut(i + 1))
                 scanEnd = speechEndIndex()
                 i = 0
                 continue
             }
 
-            if (
-                ch in SOFT_PUNCTUATION &&
-                chunksEmitted < options.boost &&
-                wordCounter.count(pending.subSequence(0, i + 1)) >= options.minimumWords
-            ) {
-                out += cut(i + 1)
-                scanEnd = speechEndIndex()
-                i = 0
-                continue
-            }
-
-            if (wordCounter.count(pending.subSequence(0, i + 1)) > options.maximumWords) {
-                out += cut(i)
-                scanEnd = speechEndIndex()
-                i = 0
+            if (ch in SOFT_PUNCTUATION) {
+                val words = wordCounter.count(pending.subSequence(0, i + 1))
+                val boostCut = chunksEmitted < options.boost && words >= options.minimumWords
+                val limitCut = words > options.maximumWords
+                if (boostCut || limitCut) {
+                    emit(out, cut(i + 1))
+                    scanEnd = speechEndIndex()
+                    i = 0
+                } else {
+                    i++
+                }
                 continue
             }
 
@@ -125,24 +127,33 @@ class SentenceChunker(
         }
 
         if (final && pending.isNotEmpty()) {
-            out += cut(pending.length)
+            emit(out, cut(pending.length))
         }
         return out
     }
 
     /**
+     * Add a cut sentence to the output unless nothing speakable survived
+     * cleaning (punctuation-only or fully-stripped fragments) — those would
+     * only waste a TTS request and spend the boost budget.
+     */
+    private fun emit(out: MutableList<String>, sentence: String) {
+        if (sentence.none { it.isLetterOrDigit() }) return
+        chunksEmitted++
+        out += sentence
+    }
+
+    /**
      * Cut `pending[0, end)` as one sentence and remove it from the buffer.
-     * Returns the cleaned sentence, or an empty string if nothing speakable.
+     * Returns the cleaned sentence.
      */
     private fun cut(end: Int): String {
         var text = pending.substring(0, end)
         pending.delete(0, end)
-        chunksEmitted++
         if (options.stripNarrativeActions) {
             text = NARRATIVE_SPAN.replace(text, "")
         }
-        text = text.trim()
-        return text
+        return text.trim()
     }
 
     /**

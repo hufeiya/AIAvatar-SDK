@@ -62,14 +62,42 @@ class SentenceChunkerTest {
     }
 
     @Test
-    fun `exceeding maximum words forces a cut`() {
-        val twelve = "甲乙丙丁戊己庚辛壬癸子丑" // exactly 12 countable chars
-        assertEquals(12, cjkCounter.count(twelve))
+    fun `over limit never cuts without punctuation`() {
+        val fourteen = "甲乙丙丁戊己庚辛壬癸子丑寅卯" // 14 countable chars, no punct
+        assertEquals(14, cjkCounter.count(fourteen))
         val c = chunker(maxWords = 12)
-        assertEquals(emptyList<String>(), c.feed(twelve)) // 12 words, no cut yet
-        val out = c.feed("寅卯。") // 13th word forces a cut at 12
-        assertEquals(listOf(twelve, "寅卯。"), out)
+        // Over the limit but there is no punctuation to cut at — the run waits
+        // (cutting mid-run is what made TTS prosody sound broken).
+        assertEquals(emptyList<String>(), c.feed(fourteen))
+        assertEquals(listOf(fourteen), c.flush())
+    }
+
+    @Test
+    fun `over limit cuts at the next soft punctuation even after boost`() {
+        val c = chunker(maxWords = 12)
+        val out = c.feed("一二三四，一二三四，一二三四五六七八九十甲乙丙，丁戊。")
+        assertEquals(
+            listOf("一二三四，", "一二三四，", "一二三四五六七八九十甲乙丙，", "丁戊。"),
+            out,
+        )
+    }
+
+    @Test
+    fun `punctuation only fragments are dropped`() {
+        val c = chunker()
+        val out = c.feed("什么？？？真的。")
+        assertEquals(listOf("什么？", "真的。"), out)
         assertEquals(emptyList<String>(), c.flush())
+    }
+
+    @Test
+    fun `dropped fragments do not spend the boost budget`() {
+        val c = chunker()
+        // "好！" emitted; the two stray "！" dropped instead of becoming TTS requests
+        c.feed("好！！！")
+        val out = c.feed("一二三四，五六。")
+        // comma still boost-cuts: only 1 of the 2 boost slots was spent
+        assertEquals(listOf("一二三四，", "五六。"), out)
     }
 
     @Test

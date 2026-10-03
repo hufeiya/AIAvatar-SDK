@@ -232,6 +232,7 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 9. **HyperOS/Android 16 禁止 shell 注入触摸**：`adb shell input tap` 抛 `SecurityException: Injecting input events requires INJECT_EVENTS`（旧设备的 MIUI 也只有部分机型放行）。UI 驱动改走 `ai_cmd open_panel <面板名>`（本次新增），文件选择器这类必须真手点的就放弃自动化。
 10. **设置页逐字符提交 + 会话即时重建 = "打字把正在播的回复杀掉"**：设置五项是即填即存，`produceState` 以 `aiPrefs` 为 key，每敲一个字符就 close+rebuild 一次会话——打字期间在播的回合反复被打断（用户感知"还没输完就没声/崩了"），且**半截配置会被持久化**（真机实测 prefs 里存着 `...:a` 的残缺音色，重启后继续 400 全灭）。已修：`produceState` 里 `delay(800)` 防抖，输入停稳才重建；注意 run-as 写 prefs 模拟不了"打字中"（SharedPreferences 不重载已运行的进程），只能靠真手测。
 11. **HTTP 200 + 非 WAV body 会让 PcmDecoder 抛谜语 "Not a RIFF file"**：TTS 适配器原本只拦非 2xx；实测硅基流动对残缺音色回的是 `400 Invalid voice`（能正常报错），但网关/代理可能对失败请求回 200 的 HTML/JSON 页面，喂进解码器只剩谜语（本次真机事故的唯一线索，200 来源未能离线复现——疑似网络层劫持）。已修：适配器按声明的 response_format 校验魔数（WAV=RIFF / MP3=ID3或帧同步 / OGG=OggS），不符时抛带 content-type + 24 字节预览的 IOException，真实原因直接进堆栈；MockWebServer 单测覆盖 400 / 200非WAV / 正常WAV / MP3 四条路径。同时 `SentenceFailed` 上了 UI 错误条（"第 N 句语音合成失败：…"，6s 自动清除），句子失败不再静默。
+12. **切分决策只能在标点处做，不能在任何字符位置**：初版 SentenceChunker 把 `maximumWords` 实现成"逐字符扫描一旦超 12 词就在当前位置强制下刀"——这是对 AIRI 的移植偏差（上游只在标点字符处评估 'limit' 切分，无标点的长句一直等到 flush）。中文 12 个词很快就到，长句被腰斩在短语中间，TTS 韵律和字幕都破碎（用户感知"在任意地方断句"）。已修：删除任意位置切分；超限后**软标点也成为切点**（AIRI 'limit' 语义），无标点长句等下一个标点或 flush。顺带修了同源问题：连续标点（`什么？！`）切出的裸 `！` 碎片此前会变成独立 TTS 请求并消耗 boost 预算，现在纯标点/纯动作碎片直接丢弃。
 
 ### A.2 调参速查表
 
@@ -239,8 +240,8 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 |---|---|
 | 打字/改设置时正在播的回复被打断 | 正常（配置变化即重建）；打字过程中不应发生——确认 MainActivity `produceState` 的 800ms 防抖还在 |
 | 全句 TTS 400 Invalid voice / 200 non-wav body | prefs 里 `ai_voice` 多半是半截值（打字被持久化），看错误条或堆栈里的响应预览即可定位 |
-| 句子太碎 | `SentenceChunker.Options(minimumWords↑ / boost↓)` |
-| 句子太迟（等待感） | `maximumWords↓`、软标点 boost↑ |
+| 句子太碎 | `SentenceChunker.Options(minimumWords↑ / boost↓)`（切分只发生在标点处，见 A.1 第 12 条） |
+| 句子太迟（等待感） | `maximumWords↓`（超限后逗号更早成为切点）、软标点 boost↑ |
 | 嘴张不开/太夸张 | 优先查 A.1 第 5 条（电平归一化是否生效，看 `FaceDriver` 日志 volume）；仍需要时再动 `VowelDriver.OUTPUT_GAIN / WINNER_CAP` |
 | 口型拖泥带水 | `RELEASE_RATE↑`（30→更高） |
 | 口型抖动 | `ATTACK_RATE↓` |
