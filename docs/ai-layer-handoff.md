@@ -55,7 +55,7 @@
 | `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s（gaze/saccade 未做，见任务5） |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
 | `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 在 send 时统一追加一次（修掉旧版卡片双重注入） |
-| `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；**Room 版未做**（任务3） |
+| `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；`ConversationDatabase.kt`（Room 实体/DAO/单例库，任务3）+ `RoomConversationStore.kt`（镜像读+异步落库，任务3） |
 
 ### 2.3 `:app` 集成
 
@@ -80,6 +80,15 @@
   - 调试命令新增 `import_card` / `active_card` / `open_panel` / `list cards`（见 docs/ai-debug-intents.md）
   - 真机验证：PNG(V2)/JSON(V3) 导入激活 ✓、坏卡拒绝 ✓、开场白自动朗读（`*动作*` 剥离、宏替换、按序播放）✓、按人设回答 ✓、系统提示词重写（388/440 chars）✓、重启后卡片与激活态持久化 ✓、面板 UI 截图 ✓、全程无崩溃
   - 未覆盖：SAF 选择器手势流与面板内点按激活/删除（HyperOS 禁止 shell 注入触摸；二者与已验证的 import_card 命令共用同一条落盘/索引/激活路径）
+- **任务 3 已完成（2026-10-03，真机 62fabe84）**：Room 会话存储 + 历史裁剪 + 设置页改版（折叠分类/拖拽高度/上下文类别）——
+  - **orchestrator**：加 room 2.6.1 + ksp `2.0.21-1.0.28`（KSP 插件标记在 **Maven Central** 不在 google maven，google maven 查会 404）；`history/ConversationDatabase.kt`（SessionEntity(id,characterId,updatedAt) + MessageEntity(id 自增,sessionId,role,content,createdAt)，同步 DAO，单例 db `avatar_conversations.db`）+ `RoomConversationStore`——同步 `ConversationStore` 接口的 Room 适配：**内存镜像为读路径事实来源**（追加先动镜像再经单线程 IO scope 写库，进程存活期读写有序；仅被杀时最后一笔有毫秒级丢失窗口），首次访问 `runBlocking(Dispatchers.IO)` 懒加载一次；每次追加顺手 upsert 会话行（updatedAt/characterId），上下文列表按最近使用排序
+  - **AvatarSession**：构造参数 `store: ConversationStore = InMemoryConversationStore()` 可注入；`Options.recentTurnLimit(Int?=null)` 裁剪——只发最近 N 条 user/assistant，system 每轮现拼恒置顶不受影响；新增公开 `protocolBlock()`（与请求实际注入的多模态协议块逐字一致，设置页只读展示用）
+  - **app**：会话身份 = `SessionIdentity(prefs, contextId)`——配置**或**上下文变化即重建会话；`ai_context_id` 持久化，重启续用同一上下文；`recentTurnLimit = 40`（Room 历史无限增长，请求只带最近 40 条 ≈20 轮）；设置页改版：①半屏(0.6)⇄全屏拖拽（标题+把手 pointerInput 连续跟手、松手 >0.8 吸附全屏、Animatable 回弹）②四个折叠类别（AI 配置/对话上下文/动画资源/画质设置，默认全展开，chevron 旋转 + expandVertically）③「对话上下文」类别 = 新建按钮 + 历史列表（卡片名·消息数·最近时间·当前徽标·删除，删当前自动新建）+「标签协议提示词（只读）」默认折叠展示
+  - **调试命令**：`contexts` / `new_context` / `select_context <id前缀>`（见 docs/ai-debug-intents.md）
+  - 单测 **117 全绿**（+11：AvatarSessionTrimTest 6——N 条/N+1/只有 system/null 全量/store 注入；RoomConversationStoreTest 5——fake DAO 懒加载/镜像即读+会话 touch/清空/跨实例恢复/最近使用排序，不起 Robolectric）
+  - 真机验证（62fabe84，硅基流动 DeepSeek-V3）：对话后 `run-as` 拉 DB 确认 sessions/messages 落库（历史保留原始标签 ✓）；**force-stop 重启后模型逐字复述重启前的第一句提问**（历史恢复铁证）；new_context 后模型对旧对话"不记得"（上下文隔离 ✓）；select_context 切回后按 4 条历史继续对话；contexts 列表按最近使用排序；全程零 FATAL。设置页截图：拖拽把手/折叠类别/半屏默认渲染 ✓
+  - 已知未覆盖：设置页拖拽手势与折叠点按需真手验证（HyperOS 禁 shell 注入触摸，adb 无法驱动 swipe）；上下文删除按钮未真机点按（与已验证的 DAO deleteFor 同一路径）
+
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
   - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
@@ -169,7 +178,7 @@ API Key: <在这里贴上Key>
 验收: 把任意 SillyTavern 导出的 PNG 卡导入后,提问角色能按人设回答,开场白自动朗读。提交代码,风格 TYPE: feat 中文描述。
 ```
 
-### 任务 3：Room 会话存储 + 历史裁剪
+### 任务 3：Room 会话存储 + 历史裁剪（✅ 已完成，2026-10-03，见第二章 2.4）
 
 ```
 继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
@@ -410,6 +419,7 @@ LLM SSE delta
 16. **转换模型的 VRM preset 弱绑定会让口型/情绪整体变弱，解析时必须归一化**：换默认模型到 SK_Sun_PERFORMANCE（ARKit 52 词素 + 生成 preset 的转换模型）后嘴部动作非常小。解析其 GLB 发现全部 preset 绑定权重弱（aa 0.5 / ih·ou 0.2 / ee·oh 0.3 / sad·surprised 0.25 / happy 0.5），而 custom ARKit 词素全是 1.0——这意味着不只口型，LLM 情绪驱动的表情也只有 1/4~1/2 强度（blink 恰好 1.0 所以眨眼正常，最容易漏查）。驱动侧幅度正常（FaceDriver 日志 volume/top 与旧模型一致），纯模型资产问题。已修：`VrmExpressionManager.normalizeBindWeights` 在解析时（VRM 1.0 与 0.x 两条路径）把每个表达式的绑定权重缩放到最强 bind=1.0（比率保持；已全权重的模型恒等、零行为变化，四个仓库模型实测只有 SK_Sun 被放大）。注意副作用：同一 morph 组合、仅幅度不同的 preset（如此模型的 ee=[0.3×jaw,0.3×stretchL,0.3×stretchR] 与 ih=[0.2×同三 morph]）归一化后形状相同——幅度差异本就被 viseme 动态淹没，可接受。真机验证：aa=1.0 从半开变全开（截屏），说话中段嘴部帧间差 6~9%、句间停顿 1.7%。
 17. **release() 打断停在 wait() 的写线程 → FATAL 闪退（任务 8 期间实录于旧构建）**：`AudioTrackPlaybackQueue.release()` 先置 released 再 `writer?.interrupt()`，而 `writeLoop` 的 `lock.wait()` 没有捕获 InterruptedException——写线程正空等队列时 close/rebuild 会话（设置逐字符改动即重建、`AiChatController.ensure` 换配置）会让 `avatar-playback` 线程带未捕获异常死亡（MIUI 上 app 闪退重启）。打断主路径反而正常（写线程多半在 write//drain 里而非 wait 里），所以任务 1/2 冒烟没暴露。已修：wait 包 try/catch，中断即静默退出（released 已先置位，语义就是关停）。单测：构造队列→writer 停稳→release→用默认 UncaughtExceptionHandler 断言无未捕获异常。
 18. **标签名统一小写 vs 模型 morph 名大小写敏感（直接表情全灭的元凶，任务 8.1）**：`InlineTagExtractor` 沿用老协议把 cue 名 `lowercase()`，而 `AvatarState.Ready.expressions`/`getAvailableExpressions()` 返回的 morph 名是大小写敏感的（SK_Sun 是 ARKit 命名 `blinkLeft/eyeBlinkLeft/browInnerUp…`）——`<emo:blinkLeft:1>` 解析成 `blinkleft` 后被 availableExpressions 门控**静默丢弃**，事件都不发。最坑的是模型明明发了标签（`raw reply` 日志可见），表象却是"模型不遵守协议"。已修：`FaceDriver.resolveExpression` 大小写不敏感还原真实 morph 名（纯函数单测），分派时规范情绪走小写、直接表情走还原名。教训：**"模型不听话"先看 `AvatarSession` 的 `raw reply:` 日志再归因**——这次连试 4 轮提示词工程都无效，实际是客户端丢事件。
+19. **调试钩子读 UI 状态快照会陈旧（任务 3）**：`AiChatDebugHooks` 若捕获 Compose 的列表状态（如设置页用的 `contextList`，只在打开设置页时刷新），`ai_cmd` 在任意时刻执行时读到的是旧值——真机首次验证 `contexts` 返回空列表，实际库里已有会话行（run-as 拉库证实）。已修：`contexts`/`select_context` 钩子改为执行时 `runBlocking + Dispatchers.IO` 实时查库（调试命令在主线程同步执行，几十行的小查询阻塞可忽略）。教训：**给 adb 代理用的查询命令一律实时读数据源，不读 UI 派生状态**。
 
 ### A.2 调参速查表
 

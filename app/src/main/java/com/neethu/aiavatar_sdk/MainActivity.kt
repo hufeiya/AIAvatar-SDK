@@ -62,12 +62,16 @@ import com.neethu.corelib.rememberAvatarController
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.spokenGreeting
+import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -133,6 +137,10 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, C
 
 internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
+private const val KEY_AI_CONTEXT_ID = "ai_context_id"
+
+/** 新上下文的随机 id（UUID；ai_cmd select_context 支持前缀匹配）。 */
+private fun newContextId(): String = java.util.UUID.randomUUID().toString()
 
 /** 读取枚举设置项；名字失效（如改过枚举名）时回落到默认值。 */
 private inline fun <reified T : Enum<T>> SharedPreferences.enumValue(
@@ -236,6 +244,33 @@ internal class DemoUiState(context: Context) {
 
     /** 人物卡库：bytes 落 filesDir/cards，索引/激活卡持久化到 demo_settings。 */
     val cardLibrary = CardLibrary(context)
+
+    // ── 对话上下文（任务 3：Room 持久化的多套对话历史）────────────────────
+
+    /**
+     * 当前上下文 id。会话身份 = AI 配置 + 上下文：新建/切换上下文即重建
+     * AvatarSession（换一条 RoomConversationStore），旧上下文的历史保留在
+     * 库里可随时切回。id 持久化，重启后继续同一上下文。
+     */
+    var contextId by mutableStateOf(prefs.getString(KEY_AI_CONTEXT_ID, null) ?: newContextId())
+        private set
+
+    init {
+        if (prefs.getString(KEY_AI_CONTEXT_ID, null) == null) {
+            prefs.edit().putString(KEY_AI_CONTEXT_ID, contextId).apply()
+        }
+    }
+
+    /** 切换到已有上下文并持久化；会话由 produceState 依 contextId 重建。 */
+    fun switchContext(id: String) {
+        contextId = id
+        prefs.edit().putString(KEY_AI_CONTEXT_ID, id).apply()
+    }
+
+    /** 新建上下文（随机 id）：空历史起步，旧上下文不动。 */
+    fun newContext() {
+        switchContext(newContextId())
+    }
 
     /** 已导入的卡片（镜像 cardLibrary.cards，驱动 UI 重组）。 */
     var cards by mutableStateOf(cardLibrary.cards)
@@ -461,14 +496,35 @@ private fun DemoScreen(
 
     // ── AI 对话：装配 AvatarSession 并订阅其状态 ──────────────────────────
     val scope = rememberCoroutineScope()
-    val aiChat = remember { AiChatController(scope, controller) }
+    val aiChat = remember { AiChatController(scope, controller, context.applicationContext) }
+
+    // Room 会话库（任务 3）：设置页「上下文」类别的数据源
+    val convoDb = remember { ConversationDatabase.getInstance(context) }
+    var contextListVersion by remember { mutableStateOf(0) }
+    val contextList by produceState<List<ConversationContextSummary>>(
+        initialValue = emptyList(), contextListVersion,
+    ) {
+        value = withContext(Dispatchers.IO) { loadContextSummaries(convoDb) }
+    }
+    // 打开设置页时刷新一次（消息数/最近使用时间随对话变化）
+    LaunchedEffect(uiState.activePanel) {
+        if (uiState.activePanel == PanelType.SETTINGS) contextListVersion++
+    }
+
+    // 会话身份 = AI 配置 + 上下文 id：任一变化（含新建/切换上下文）即重建
     val session by produceState<AvatarSession?>(
         initialValue = null, state, uiState.aiPrefs, uiState.useExternalAnimations,
+        uiState.contextId,
     ) {
         // 设置页逐字符提交配置；不等输入停稳就 ensure 会把会话每个按键重建一次，
         // 正在播放/合成的回合被反复杀掉（表现为"还没输完就不出声了"）。
         delay(800)
-        value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)?.also { s ->
+        value = aiChat.ensure(
+            prefs = uiState.aiPrefs,
+            ready = state is AvatarState.Ready,
+            contextId = uiState.contextId,
+            characterId = uiState.activeCardFile,
+        )?.also { s ->
             // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加外置库；
             // 待机 = 持久化选择优先，否则按内置优先级挑中性 idle。模型（重）加载后
             // produceState 因 state 键重跑，这里顺便把 idle 重新挂到新引擎上。
@@ -488,6 +544,12 @@ private fun DemoScreen(
     var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
     var replyText by remember { mutableStateOf("") }
     var chatError by remember { mutableStateOf<String?>(null) }
+
+    // 切换/新建上下文：新会话的历史来自另一条 Room 记录，旧字幕一并清掉
+    LaunchedEffect(uiState.contextId) {
+        replyText = ""
+        chatError = null
+    }
 
     LaunchedEffect(session) {
         val s = session ?: return@LaunchedEffect
@@ -654,6 +716,31 @@ private fun DemoScreen(
                 uiState.idleAnimation = null
                 session?.idleAction = null
                 "idle cleared (one-shots fall back to rest pose)"
+            },
+            contextsSnapshot = {
+                // 实时查库而非 UI 快照：调试命令可能在任意时刻发出，
+                // 期间对话刚写入的会话行必须可见
+                val fresh = runBlocking {
+                    withContext(Dispatchers.IO) { loadContextSummaries(convoDb) }
+                }
+                "active=${uiState.contextId.take(8)} contexts=" +
+                    fresh.joinToString(prefix = "[", postfix = "]") {
+                        "${it.id.take(8)}(${it.characterId ?: "free"}, ${it.messageCount}msg, ${it.updatedAtText})"
+                    }
+            },
+            newContext = {
+                uiState.newContext()
+                "context switched to ${uiState.contextId.take(8)} (fresh, history empty)"
+            },
+            selectContext = { prefix ->
+                val fresh = runBlocking {
+                    withContext(Dispatchers.IO) { loadContextSummaries(convoDb) }
+                }
+                val match = fresh.firstOrNull { it.id.startsWith(prefix.trim(), ignoreCase = true) }
+                    ?: error("no context matches '$prefix' — send ai_cmd contexts to list ids")
+                uiState.switchContext(match.id)
+                "context switched to ${match.id.take(8)} " +
+                    "(${match.characterId ?: "free"}, ${match.messageCount} messages)"
             },
         )
     }
@@ -1028,9 +1115,24 @@ private fun DemoScreen(
                 useExternalAnimations = uiState.useExternalAnimations,
                 externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
                 aiPrefs = uiState.aiPrefs,
+                contexts = contextList,
+                activeContextId = uiState.contextId,
+                protocolPrompt = session?.protocolBlock().orEmpty(),
+                cardNameFor = { characterId -> uiState.cardByFile(characterId)?.card?.name },
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
                 onAiPrefsChange = { uiState.updateAiPrefs(it) },
+                onNewContext = { uiState.newContext() },
+                onSelectContext = { uiState.switchContext(it) },
+                onDeleteContext = { summary ->
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            convoDb.messageDao().deleteFor(summary.id)
+                            convoDb.sessionDao().delete(summary.id)
+                        }
+                        if (summary.id == uiState.contextId) uiState.newContext() else contextListVersion++
+                    }
+                },
                 onDismiss = { uiState.activePanel = PanelType.NONE }
             )
         }

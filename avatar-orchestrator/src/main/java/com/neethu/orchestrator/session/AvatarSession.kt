@@ -74,6 +74,12 @@ class AvatarSession(
     playbackQueue: PlaybackQueue? = null,
     lipSyncProcessor: LipSyncProcessor? = WlipsyncLipSyncProcessor(),
     gestureDriver: GestureDriver? = null,
+    /**
+     * 对话历史存储（任务 3）：默认内存环形（杀进程即失），集成方注入
+     * [com.neethu.orchestrator.history.RoomConversationStore] 即获得跨进程
+     * 持久化与多上下文。
+     */
+    store: ConversationStore = InMemoryConversationStore(),
 ) {
 
     data class Options(
@@ -88,6 +94,12 @@ class AvatarSession(
         val enableLlmGestures: Boolean = true,
         /** Let `<cam:…>` tags switch the preset camera framing. */
         val enableLlmCamera: Boolean = true,
+        /**
+         * LLM 请求只带最近 N 条 user/assistant 历史（system 消息始终在请求
+         * 顶部且不受影响）；null = 全量发送。持久化存储下上下文会无限增长，
+         * 长会话建议设置。
+         */
+        val recentTurnLimit: Int? = null,
     )
 
     /** LLM request parameters; must be set before [send]. */
@@ -149,7 +161,7 @@ class AvatarSession(
     private val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent)
     private val extractor: TagExtractor = InlineTagExtractor()
     private val chunker = SentenceChunker(options.chunkerOptions)
-    private val store: ConversationStore = InMemoryConversationStore()
+    private val store: ConversationStore = store
     private val replyBuffer = StringBuilder()
     private var turnJob: Job? = null
 
@@ -412,43 +424,61 @@ class AvatarSession(
     }
 
     private fun buildRequestMessages(): List<ChatMessage> {
+        val system = systemPromptWithProtocol()
         val list = mutableListOf<ChatMessage>()
-        // Sections of the protocol block that cannot run are omitted so the
-        // prompt never advertises a tag the session would drop.
-        val cameras =
-            if (options.enableLlmCamera && controller != null) SystemPromptAssembler.DEFAULT_CAMERA_TAGS
-            else emptyList()
-        val actionGroups =
-            if (gestureDriver != null) actionCatalog.groupBy { it.category }
-                .map { (category, entries) -> category to entries.map { it.tag } }
-            else emptyList()
-        // The model's own expression names (presets + ARKit morphs) so it can
-        // drive single morphs directly (§7.10).
-        val directExpressions =
-            faceDriver?.availableExpressions?.filter { it.isNotBlank() }?.sorted() ?: emptyList()
-        val system = buildString {
-            append(systemPrompt.trim())
-            if (options.protocolInstructions) {
-                if (isNotEmpty()) append("\n\n")
-                append(
-                    options.assembler.multimodalProtocolBlock(
-                        cameras = cameras,
-                        actionGroups = actionGroups,
-                        directExpressions = directExpressions,
-                    )
-                )
-            }
-        }
         if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
-        list += store.messages()
+        // 历史裁剪（任务 3）：store 里只有 user/assistant，system 每次请求
+        // 现拼现置顶，天然不受 recentTurnLimit 影响。
+        val history = store.messages()
+        list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
         // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
         Log.i(
             "AvatarSession",
-            "system prompt: ${system.length} chars, cameras=${cameras.size}, " +
-                "actions=${actionGroups.sumOf { it.second.size }}, directExpr=${directExpressions.size}",
+            "system prompt: ${system.length} chars, cameras=${currentCameraTags().size}, " +
+                "actions=${currentActionGroups().sumOf { it.second.size }}, " +
+                "directExpr=${currentDirectExpressions().size}, history=${history.size} sent=${trimmedSent(history)}",
         )
         return list
     }
+
+    /** 实际发送的历史条数（观测点用）：null 上限 = 全量。 */
+    private fun trimmedSent(history: List<ChatMessage>): Int =
+        options.recentTurnLimit?.let { minOf(it, history.size) } ?: history.size
+
+    /** system prompt = 人设 + 多模态协议块（协议关闭时只有人设）。 */
+    private fun systemPromptWithProtocol(): String = buildString {
+        append(systemPrompt.trim())
+        if (options.protocolInstructions) {
+            if (isNotEmpty()) append("\n\n")
+            append(protocolBlock())
+        }
+    }
+
+    /**
+     * 多模态协议块，与每次请求实际注入的内容逐字一致——设置页的「协议提示词」
+     * 只读展示走这里，保证 UI 看到的就是模型收到的。
+     */
+    fun protocolBlock(): String {
+        // Sections of the protocol block that cannot run are omitted so the
+        // prompt never advertises a tag the session would drop.
+        return options.assembler.multimodalProtocolBlock(
+            cameras = currentCameraTags(),
+            actionGroups = currentActionGroups(),
+            directExpressions = currentDirectExpressions(),
+        )
+    }
+
+    private fun currentCameraTags(): List<Pair<String, String>> =
+        if (options.enableLlmCamera && controller != null) SystemPromptAssembler.DEFAULT_CAMERA_TAGS
+        else emptyList()
+
+    private fun currentActionGroups(): List<Pair<String, List<String>>> =
+        if (gestureDriver != null) actionCatalog.groupBy { it.category }
+            .map { (category, entries) -> category to entries.map { it.tag } }
+        else emptyList()
+
+    private fun currentDirectExpressions(): List<String> =
+        faceDriver?.availableExpressions?.filter { it.isNotBlank() }?.sorted() ?: emptyList()
 
     private fun emit(event: AvatarEvent) {
         _events.tryEmit(event)

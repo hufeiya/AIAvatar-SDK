@@ -32,6 +32,14 @@ internal class AiChatDebugHooks(
     val setIdle: (String, Boolean) -> String = { _, _ -> "AI chat not wired in this screen" },
     /** ai_cmd idle_off：清除待机，回 rest pose。 */
     val clearIdle: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd contexts：上下文列表快照（含当前）。 */
+    val contextsSnapshot: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd new_context：新建上下文并切换。 */
+    val newContext: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd select_context：按 id 前缀切换上下文；无匹配抛 IllegalStateException。 */
+    val selectContext: (String) -> String = { _ ->
+        throw IllegalStateException("AI chat not wired in this screen")
+    },
 )
 
 /**
@@ -111,6 +119,18 @@ internal suspend fun executeAiCommand(
             }
             "chat_state" -> chat?.snapshot()
                 ?: throw IllegalStateException("AI chat not wired in this screen")
+            "contexts" -> chat?.contextsSnapshot()
+                ?: throw IllegalStateException("AI chat not wired in this screen")
+            "new_context" -> chat?.newContext()
+                ?: throw IllegalStateException("AI chat not wired in this screen")
+            "select_context" -> {
+                val prefix = command.arg
+                    ?: throw IllegalArgumentException(
+                        "select_context expects ai_arg = context id prefix (send ai_cmd contexts to list)"
+                    )
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.selectContext(prefix)
+            }
             "import_card" -> {
                 val arg = command.arg
                     ?: throw IllegalArgumentException(

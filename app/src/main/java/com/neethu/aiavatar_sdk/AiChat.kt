@@ -8,6 +8,8 @@ import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
 import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
 import com.neethu.corelib.AvatarController
+import com.neethu.orchestrator.history.ConversationDatabase
+import com.neethu.orchestrator.history.RoomConversationStore
 import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.CoroutineScope
 
@@ -54,39 +56,61 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
 }
 
 /**
- * Demo 的会话装配器：把 [AiChatPrefs] 变成一条 [AvatarSession]。
- * 配置变化时用 [rebuild] 丢弃旧会话重建（AIRI getProviderInstance 的
- * "凭据变化即重建实例"语义）。
+ * Demo 的会话装配器：把 [AiChatPrefs] + 上下文 id 变成一条 [AvatarSession]。
+ * 配置或上下文变化时用 [rebuild] 丢弃旧会话重建（AIRI getProviderInstance 的
+ * "凭据变化即重建实例"语义）；上下文 id 变化即切换对话历史（任务 3）。
  */
 class AiChatController(
     private val scope: CoroutineScope,
     private val avatarController: AvatarController,
+    /** application context：Room 库单例的持有者。 */
+    private val appContext: Context,
 ) {
+    /** 会话身份：配置 + 上下文。任一变化都触发重建。 */
+    data class SessionIdentity(val prefs: AiChatPrefs, val contextId: String)
+
     var session: AvatarSession? = null
         private set
 
-    /** 当前会话所用的配置；用于判断是否需要重建。 */
-    var builtFor: AiChatPrefs? = null
+    /** 当前会话所用的身份；用于判断是否需要重建。 */
+    var builtFor: SessionIdentity? = null
         private set
 
     /**
-     * 确保存在一个与 [prefs] 匹配、且在模型 [ready] 后启动了面部驱动的会话。
-     * 配置未变且会话存活时是 no-op。
+     * 确保存在一个与 [prefs]/[contextId] 匹配、且在模型 [ready] 后启动了面部
+     * 驱动的会话。身份未变且会话存活时是 no-op。
+     *
+     * @param characterId 信息性字段，随 Room 会话行落库（上下文列表展示用）。
      */
-    fun ensure(prefs: AiChatPrefs, ready: Boolean): AvatarSession? {
+    fun ensure(
+        prefs: AiChatPrefs,
+        ready: Boolean,
+        contextId: String,
+        characterId: String?,
+    ): AvatarSession? {
         if (!prefs.isConfigured) return null
+        val identity = SessionIdentity(prefs, contextId)
         val existing = session
-        if (existing != null && builtFor == prefs) {
+        if (existing != null && builtFor == identity) {
             if (ready && !faceDrivingStarted) existing.startFaceDriving().also { faceDrivingStarted = true }
             return existing
         }
         existing?.close()
 
+        val db = ConversationDatabase.getInstance(appContext)
+        val store = RoomConversationStore.from(db, sessionId = contextId, characterId = characterId)
+
         val llm = OpenAiCompatibleLlmAdapter(prefs.baseUrl, prefs.apiKey)
         val tts = OpenAiCompatibleTtsAdapter(prefs.baseUrl, prefs.apiKey)
         val session = AvatarSession(
             scope, llm, tts, avatarController,
-            AvatarSession.Options(enableLlmCamera = prefs.llmCamera),
+            AvatarSession.Options(
+                enableLlmCamera = prefs.llmCamera,
+                // Room 持久化后上下文可无限增长；请求只带最近 40 条 user/assistant
+                //（≈20 轮），system 提示词（~14.5K chars）本就每次现拼不受影响
+                recentTurnLimit = 40,
+            ),
+            store = store,
         )
         session.llmConfig = LlmConfig(
             baseUrl = prefs.baseUrl,
@@ -109,7 +133,7 @@ class AiChatController(
             faceDrivingStarted = true
         }
         this.session = session
-        builtFor = prefs
+        builtFor = identity
         return session
     }
 

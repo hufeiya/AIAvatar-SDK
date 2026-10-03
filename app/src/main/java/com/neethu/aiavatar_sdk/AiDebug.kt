@@ -133,6 +133,10 @@ fun aiDebugHelp(): String = """
     |                           streams into the subtitle + AIDebug event logs
     |  interrupt_chat           Interrupt the current turn (same as ✕ button)
 |  chat_state               Dump chat phase / subtitle length / last error
+|Contexts (Room-persisted conversation history; needs the AI service configured):
+    |  contexts                 List contexts (id prefix, card, message count) + active
+    |  new_context              Start a fresh context; previous ones stay selectable
+    |  select_context <arg>     Switch to a context by id prefix (see contexts)
 |Cards (no AI service needed to import/activate):
 |  import_card <arg>        Import + activate a card (SillyTavern PNG/JSON).
 |                           arg = absolute path, or path under the app's

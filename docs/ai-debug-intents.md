@@ -49,6 +49,9 @@
 | `send_chat` | `ai_arg`=消息文本 | 发送一条用户消息（等价于聊天条发送），走 LLM 流式→断句→TTS→口型全链路；断句/情绪/回合事件时序打印到 `AIDebug`（`chat:` 前缀） |
 | `interrupt_chat` | — | 打断当前 AI 回合（等价于聊天条 ✕），立即静音并回到 IDLE |
 | `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 |
+| `contexts` | — | 列出全部对话上下文（Room 持久化，按最近使用排序）：id 前 8 位（卡片名/消息数/最近使用时间）+ 当前上下文标记 |
+| `new_context` | — | 新建一个上下文并切换（随机 UUID）；旧上下文历史保留在库里，可随时切回 |
+| `select_context` | `ai_arg`=上下文 id 前缀 | 切换到指定上下文（前缀匹配，不区分大小写），历史从 Room 恢复；无匹配报错。切换会重建会话，正在播放的回合会被打断 |
 | `import_card` | `ai_arg`=文件路径 | 导入并**自动激活**一张酒馆人物卡（SillyTavern PNG/JSON）。arg 为绝对路径或相对应用外部目录（`/sdcard/Android/data/<pkg>/files/`，先 `adb push` 到这里，无需权限）的相对路径；激活即重写系统提示词，已配 TTS 时自动朗读开场白（含 `{{char}}/{{user}}` 宏替换） |
 | `active_card` | — | 输出当前激活卡片：文件名 / name / spec / version / 开场白长度 / 系统提示词长度与前 100 字符（卡片未激活输出 `no active card`） |
 
@@ -98,6 +101,11 @@ adb pull /storage/emulated/0/Android/data/$PKG/files/ai_debug/screenshot_xxx.png
 adb shell am start -n $PKG/.MainActivity --es ai_cmd send_chat --es ai_arg "'你好，请用三句话介绍你自己'"
 adb shell am start -n $PKG/.MainActivity --es ai_cmd chat_state
 adb shell am start -n $PKG/.MainActivity --es ai_cmd interrupt_chat
+
+# 对话上下文（历史 Room 落库，杀进程不丢）：新建 / 列出 / 按 id 前缀切回
+adb shell am start -n $PKG/.MainActivity --es ai_cmd contexts
+adb shell am start -n $PKG/.MainActivity --es ai_cmd new_context
+adb shell am start -n $PKG/.MainActivity --es ai_cmd select_context --es ai_arg 299c0080
 
 # 人物卡：把酒馆卡推到应用外部目录后导入（导入即激活，激活即朗读开场白）
 adb push card.png /sdcard/Android/data/$PKG/files/
