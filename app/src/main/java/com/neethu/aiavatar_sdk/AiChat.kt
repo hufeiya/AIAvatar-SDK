@@ -7,48 +7,97 @@ import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
 import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
+import com.neethu.aiadapter.volcengine.VolcanoEngineTtsAdapter
 import com.neethu.corelib.AvatarController
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.history.RoomConversationStore
 import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.CoroutineScope
 
-/** AI 对话配置（LLM 与 TTS 共用同一个 OpenAI 兼容端点 + Key）。 */
+/**
+ * AI 对话配置（双服务商版）。除 API Key 外全部下拉框选择，模型/音色留空即用
+ * 服务商默认（见 [resolveLlmModel]/[resolveTtsModel]/[resolveVoice]）。
+ *
+ * Key 按服务商分开存（`apiKeyFor`），切服务商互不覆盖；TTS 可独立选服务商
+ * （[ttsSameProvider]=false 时用 [ttsProvider]），key 复用逻辑见 [apiKeyForTts]。
+ */
 data class AiChatPrefs(
-    val baseUrl: String = "",
-    val apiKey: String = "",
+    val provider: AiProvider = AiProvider.SILICONFLOW,
     val llmModel: String = "",
+    val apiKeySiliconflow: String = "",
+    val apiKeyVolcano: String = "",
+    /** TTS 与大模型同服务商（默认勾选）。 */
+    val ttsSameProvider: Boolean = true,
+    /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
+    val ttsProvider: AiProvider = AiProvider.SILICONFLOW,
     val ttsModel: String = "",
+    /** 存储值为完整引用或服务商短名（解析见 [resolveVoice]），留空=默认音色。 */
     val voice: String = "",
     /** 允许模型用 <cam:…> 标签切换视角；关闭后镜头主权归用户。 */
     val llmCamera: Boolean = true,
 ) {
+    /** TTS 实际生效的服务商。 */
+    val ttsProviderResolved: AiProvider
+        get() = if (ttsSameProvider) provider else ttsProvider
+
+    fun apiKeyFor(p: AiProvider): String = when (p) {
+        AiProvider.SILICONFLOW -> apiKeySiliconflow
+        AiProvider.VOLCANO -> apiKeyVolcano
+    }
+
+    /** TTS 生效 key：同服务商（或服务商恰好相同）时直接复用对应 key。 */
+    fun apiKeyForTts(): String = apiKeyFor(ttsProviderResolved)
+
     val isConfigured: Boolean
-        get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && llmModel.isNotBlank() &&
-            ttsModel.isNotBlank() && voice.isNotBlank()
+        get() = apiKeyFor(provider).isNotBlank() && apiKeyForTts().isNotBlank() &&
+            resolveLlmModel(provider, llmModel).isNotBlank() &&
+            resolveTtsModel(ttsProviderResolved, ttsModel).isNotBlank() &&
+            resolveVoice(ttsProviderResolved, voice).isNotBlank()
 }
 
-private const val KEY_AI_BASE_URL = "ai_baseUrl"
-private const val KEY_AI_API_KEY = "ai_apiKey"
+private const val KEY_AI_PROVIDER = "ai_provider"
+private const val KEY_AI_BASE_URL = "ai_baseUrl" // 旧版遗留：仅作迁移推断，不再写入
+private const val KEY_AI_API_KEY = "ai_apiKey" // 旧版遗留：等价于硅基流动 key，仅作迁移
+private const val KEY_AI_API_KEY_SILICONFLOW = "ai_api_key_siliconflow"
+private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
+private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
+private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
 private const val KEY_AI_TTS_MODEL = "ai_ttsModel"
 private const val KEY_AI_VOICE = "ai_voice"
 private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
 
-fun SharedPreferences.loadAiPrefs(): AiChatPrefs = AiChatPrefs(
-    baseUrl = getString(KEY_AI_BASE_URL, "").orEmpty(),
-    apiKey = getString(KEY_AI_API_KEY, "").orEmpty(),
-    llmModel = getString(KEY_AI_LLM_MODEL, "").orEmpty(),
-    ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
-    voice = getString(KEY_AI_VOICE, "").orEmpty(),
-    llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
-)
+/** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
+private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
+    sp.getString(key, null)?.let { name -> runCatching { enumValueOf<T>(name) }.getOrNull() }
+
+fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
+    // 旧版（单服务商时代）只有一份 key + baseUrl：迁移时它就是硅基流动 key，
+    // 服务商按旧端点推断（volces.com→火山，其余→硅基流动）
+    val legacyKey = getString(KEY_AI_API_KEY, "").orEmpty()
+    val legacyBaseUrl = getString(KEY_AI_BASE_URL, "").orEmpty()
+    val sfKey = getString(KEY_AI_API_KEY_SILICONFLOW, null) ?: legacyKey
+    return AiChatPrefs(
+        provider = prefsEnum<AiProvider>(this, KEY_AI_PROVIDER) ?: inferProviderFromBaseUrl(legacyBaseUrl),
+        llmModel = getString(KEY_AI_LLM_MODEL, "").orEmpty(),
+        apiKeySiliconflow = sfKey,
+        apiKeyVolcano = getString(KEY_AI_API_KEY_VOLCANO, "").orEmpty(),
+        ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
+        ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
+        ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
+        voice = getString(KEY_AI_VOICE, "").orEmpty(),
+        llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
+    )
+}
 
 fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
     edit()
-        .putString(KEY_AI_BASE_URL, p.baseUrl.trim())
-        .putString(KEY_AI_API_KEY, p.apiKey.trim())
+        .putString(KEY_AI_PROVIDER, p.provider.name)
         .putString(KEY_AI_LLM_MODEL, p.llmModel.trim())
+        .putString(KEY_AI_API_KEY_SILICONFLOW, p.apiKeySiliconflow.trim())
+        .putString(KEY_AI_API_KEY_VOLCANO, p.apiKeyVolcano.trim())
+        .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
+        .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
         .putString(KEY_AI_VOICE, p.voice.trim())
         .putBoolean(KEY_AI_LLM_CAMERA, p.llmCamera)
@@ -140,8 +189,17 @@ class AiChatController(
         val db = ConversationDatabase.getInstance(appContext)
         val store = RoomConversationStore.from(db, sessionId = contextId, characterId = characterId)
 
-        val llm = OpenAiCompatibleLlmAdapter(prefs.baseUrl, prefs.apiKey)
-        val tts = OpenAiCompatibleTtsAdapter(prefs.baseUrl, prefs.apiKey)
+        val llm = OpenAiCompatibleLlmAdapter(prefs.provider.baseUrl, prefs.apiKeyFor(prefs.provider))
+        val ttsProvider = prefs.ttsProviderResolved
+        val tts = when (ttsProvider) {
+            // 硅基流动走 OpenAI 兼容 /audio/speech（wav 16k，两 TTS 模型实测可用）
+            AiProvider.SILICONFLOW ->
+                OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
+            // 火山 seed-tts-2.0 只提供 V3 双向流式 WebSocket；适配器对外仍是
+            // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
+            AiProvider.VOLCANO ->
+                VolcanoEngineTtsAdapter(prefs.apiKeyForTts())
+        }
         val session = AvatarSession(
             scope, llm, tts, avatarController,
             AvatarSession.Options(
@@ -153,16 +211,16 @@ class AiChatController(
             store = store,
         )
         session.llmConfig = LlmConfig(
-            baseUrl = prefs.baseUrl,
-            apiKey = prefs.apiKey,
-            model = prefs.llmModel,
+            baseUrl = prefs.provider.baseUrl,
+            apiKey = prefs.apiKeyFor(prefs.provider),
+            model = resolveLlmModel(prefs.provider, prefs.llmModel),
             // 略低于默认 0.8：多模态行内标签协议对指令遵循敏感（真机实测
             // 0.8 下模型偶尔完全忽略标签/用括号演戏），0.6 是遵循与创意折中
             temperature = 0.6f,
         )
         session.ttsConfig = TtsConfig(
-            model = prefs.ttsModel,
-            voice = prefs.voice,
+            model = resolveTtsModel(ttsProvider, prefs.ttsModel),
+            voice = resolveVoice(ttsProvider, prefs.voice),
             responseFormat = "wav",
             // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC 前端的
             // 分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）

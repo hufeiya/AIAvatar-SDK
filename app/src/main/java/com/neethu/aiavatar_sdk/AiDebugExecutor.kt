@@ -52,6 +52,10 @@ internal class AiChatDebugHooks(
     val setInputMode: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd show_buttons on|off（无参=翻转）：显隐所有悬浮按钮（切换输入模式外的话题）。 */
     val showButtons: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd set_provider siliconflow|volcano：切大模型服务商（模型清单随之切换）。 */
+    val setProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd set_tts_provider siliconflow|volcano：TTS 独立服务商切换（自动取消同服务商勾选）。 */
+    val setTtsProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
 )
 
 /**
@@ -184,6 +188,14 @@ internal suspend fun executeAiCommand(
             "show_buttons" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.showButtons(command.arg)
+            }
+            "set_provider" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setProvider(command.arg)
+            }
+            "set_tts_provider" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setTtsProvider(command.arg)
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

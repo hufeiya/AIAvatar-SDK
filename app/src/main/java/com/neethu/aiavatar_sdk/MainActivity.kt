@@ -489,6 +489,15 @@ internal class DemoUiState(context: Context) {
     }
 }
 
+/** ai_cmd set_provider / set_tts_provider 的服务商参数解析（含常用别名）。 */
+private fun parseProviderArg(arg: String?): AiProvider = when (arg?.lowercase()) {
+    "siliconflow", "sf", "silicon" -> AiProvider.SILICONFLOW
+    "volcano", "volc", "ark", "bytedance" -> AiProvider.VOLCANO
+    else -> throw IllegalArgumentException(
+        "expects siliconflow|volcano, got '$arg'"
+    )
+}
+
 @Composable
 private fun DemoScreen(
     modifier: Modifier = Modifier,
@@ -694,12 +703,21 @@ private fun DemoScreen(
         if (!granted) chatError = "需要麦克风权限才能按住说话"
     }
 
-    /** 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。 */
+    /**
+     * 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。
+     * ASR 目前仅硅基流动提供（OpenAI 兼容 /audio/transcriptions），key 固定
+     * 复用硅基流动那份——大模型选火山时这里也要有硅基流动 key。
+     */
     fun asrFor(): OpenAiCompatibleAsrAdapter {
-        val p = uiState.aiPrefs
-        check(p.isConfigured) { "请先在设置里配置 AI 服务（⚙️ 设置入口在手动点击模式或点「显示按钮」后可见）" }
-        return OpenAiCompatibleAsrAdapter(p.baseUrl, p.apiKey)
+        val sfKey = uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW)
+        check(sfKey.isNotBlank()) { "语音识别走硅基流动：请先在 ⚙️ 设置里填硅基流动 API Key" }
+        return OpenAiCompatibleAsrAdapter(AiProvider.SILICONFLOW.baseUrl, sfKey)
     }
+
+    /** ASR 模型解析：端点恒为硅基流动（显式配置过的用显式值）。 */
+    fun asrConfig(): AsrConfig = AsrConfig(
+        model = resolveAsrModel(AiProvider.SILICONFLOW.baseUrl, uiState.voicePrefs.asrModel),
+    )
 
     val onHoldStart: () -> Unit = {
         when {
@@ -728,14 +746,9 @@ private fun DemoScreen(
             } else {
                 voiceRecognizing = true
                 scope.launch {
-                    val prefs = uiState.aiPrefs
                     val result = runCatching {
                         withContext(Dispatchers.IO) {
-                            asrFor().transcribe(
-                                file.readBytes(),
-                                mimeForFileName(file.name),
-                                AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
-                            )
+                            asrFor().transcribe(file.readBytes(), mimeForFileName(file.name), asrConfig())
                         }
                     }
                     file.delete()
@@ -823,7 +836,12 @@ private fun DemoScreen(
                 s != null
             },
             snapshot = {
-                "phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"}"
+                val p = uiState.aiPrefs
+                "phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"} " +
+                    "llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} " +
+                    "ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) " +
+                    "ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} " +
+                    "voice=${resolveVoice(p.ttsProviderResolved, p.voice)}"
             },
             importCard = { bytes ->
                 val entry = uiState.importCardBytes(bytes)
@@ -892,13 +910,8 @@ private fun DemoScreen(
             },
             // 与按住说话同一条 ASR 链路，只是音频来自文件（真机无手也能验 ASR）
             transcribeFile = { file ->
-                val prefs = uiState.aiPrefs
                 val bytes = withContext(Dispatchers.IO) { file.readBytes() }
-                val text = asrFor().transcribe(
-                    bytes,
-                    mimeForFileName(file.name),
-                    AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
-                )
+                val text = asrFor().transcribe(bytes, mimeForFileName(file.name), asrConfig())
                 if (text.isBlank()) "recognized: <empty>" else "recognized: $text"
             },
             // MediaRecorder 真录音 N 秒后走 ASR：验证录音配置（AAC/m4a）服务端可收
@@ -910,14 +923,9 @@ private fun DemoScreen(
                 val file = voiceRecorder.stop()
                     ?: error("no valid audio captured (recording too short?)")
                 val sizeKb = file.length() / 1024
-                val prefs = uiState.aiPrefs
                 try {
                     val text = withContext(Dispatchers.IO) {
-                        asrFor().transcribe(
-                            file.readBytes(),
-                            mimeForFileName(file.name),
-                            AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
-                        )
+                        asrFor().transcribe(file.readBytes(), mimeForFileName(file.name), asrConfig())
                     }
                     "file=${sizeKb}KB text=${text.ifBlank { "<empty>" }}"
                 } finally {
@@ -945,6 +953,23 @@ private fun DemoScreen(
                 }
                 if (show != uiState.buttonsVisible) uiState.toggleButtons()
                 "buttons visible=${uiState.buttonsVisible} (mode=${uiState.inputMode.name.lowercase()})"
+            },
+            // 大模型服务商切换（模型清单随服务商走，留空即默认模型；adb 驱动双厂商验证用）
+            setProvider = { arg ->
+                val provider = parseProviderArg(arg)
+                uiState.updateAiPrefs(uiState.aiPrefs.copy(provider = provider))
+                "LLM provider=${provider.name.lowercase()} (${provider.label}) " +
+                    "llmModel=${resolveLlmModel(provider, uiState.aiPrefs.llmModel)} " +
+                    "key=${if (uiState.aiPrefs.apiKeyFor(provider).isNotBlank()) "set" else "MISSING"}"
+            },
+            // TTS 独立服务商切换：自动取消「与大模型同服务商」勾选
+            setTtsProvider = { arg ->
+                val provider = parseProviderArg(arg)
+                uiState.updateAiPrefs(uiState.aiPrefs.copy(ttsSameProvider = false, ttsProvider = provider))
+                "TTS provider=${provider.name.lowercase()} (independent of LLM) " +
+                    "ttsModel=${resolveTtsModel(provider, uiState.aiPrefs.ttsModel)} " +
+                    "voice=${resolveVoice(provider, uiState.aiPrefs.voice)} " +
+                    "key=${if (uiState.aiPrefs.apiKeyFor(provider).isNotBlank()) "set" else "MISSING"}"
             },
         )
     }

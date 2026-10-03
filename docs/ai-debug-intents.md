@@ -48,7 +48,7 @@
 | `screenshot` | — | 渲染一张 PNG 到应用外部目录，绝对路径打印到 logcat（可直接 `adb pull`） |
 | `send_chat` | `ai_arg`=消息文本 | 发送一条用户消息（等价于聊天条发送），走 LLM 流式→断句→TTS→口型全链路；断句/情绪/回合事件时序打印到 `AIDebug`（`chat:` 前缀） |
 | `interrupt_chat` | — | 打断当前 AI 回合（等价于聊天条 ✕），立即静音并回到 IDLE |
-| `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 |
+| `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 / 已解析生效的双厂商配置（llmProvider+llmModel、ttsProvider(same=勾选态)+ttsModel+voice） |
 | `contexts` | — | 列出全部对话上下文（Room 持久化，按最近使用排序）：id 前 8 位（卡片名/消息数/最近使用时间）+ 当前上下文标记 |
 | `new_context` | — | 新建一个上下文并切换（随机 UUID）；旧上下文历史保留在库里，可随时切回 |
 | `select_context` | `ai_arg`=上下文 id 前缀 | 切换到指定上下文（前缀匹配，不区分大小写），历史从 Room 恢复；无匹配报错。切换会重建会话，正在播放的回合会被打断 |
@@ -58,6 +58,8 @@
 | `voice_record` | `ai_arg`=秒数(1\|30) | 用与「按住说话」相同的 MediaRecorder 路径（AAC/m4a/16kHz）真录音 N 秒后自动转写，输出文件大小与识别文本；开始录音前会先打断正在播的回复（半双工）。**需要麦克风权限**：HyperOS 禁 adb 授权（`pm grant`/`install -g`/appops 均无效），首次须真手按住说话弹系统框授权；无权限时报 `录音启动失败：setAudioSource failed` |
 | `set_mode` | `ai_arg`= manual \| text \| voice | 切换输入模式（持久化）：manual=手动点击（完整 UI，全部按钮可见）/ text=打字输入（进入时自动隐藏所有界面按钮）/ voice=语音模式（同左，按住说话）。MIUI 禁触摸注入，用此命令切换后配合 `adb exec-out screencap -p` 验证 UI |
 | `show_buttons` | `ai_arg`= on \| off（省略=翻转） | 显示/隐藏所有悬浮按钮：打字/语音模式进入时按钮自动隐藏，需要换模型/开设置时用它临时显示；不持久化，切模式/重启回到该模式默认（manual=显示） |
+| `set_provider` | `ai_arg`= siliconflow \| volcano | 切换大模型服务商（持久化，设置页下拉框同款语义）：模型清单随服务商切换，存储的模型/音色不在新服务商清单时自动落回该服务商默认（防跨服务商残留）；火山 LLM 需方舟 Ark API Key（与豆包语音的 API Key 是两把钥匙） |
+| `set_tts_provider` | `ai_arg`= siliconflow \| volcano | TTS 独立服务商切换：自动取消「TTS 与大模型同服务商」勾选并切到目标服务商（模型/音色同样按清单校验回落）；硅基流动 TTS 两模型共用 CosyVoice 音色引用，火山只有 seed-tts-2.0 |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。

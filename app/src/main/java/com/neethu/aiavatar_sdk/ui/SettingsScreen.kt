@@ -33,6 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,11 +63,19 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.neethu.aiadapter.openai.SiliconFlowVoiceCatalog
+import com.neethu.aiadapter.openai.TtsVoiceOption
 import com.neethu.aiavatar_sdk.AiChatPrefs
+import com.neethu.aiavatar_sdk.AiProvider
 import com.neethu.aiavatar_sdk.ConversationContextSummary
 import com.neethu.aiavatar_sdk.VoicePrefs
+import com.neethu.aiavatar_sdk.composeVoiceRef
+import com.neethu.aiavatar_sdk.resolveLlmModel
+import com.neethu.aiavatar_sdk.resolveTtsModel
+import com.neethu.aiavatar_sdk.resolveVoice
 import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarRenderSettings
@@ -78,6 +89,42 @@ private const val SECTION_AI = "ai"
 private const val SECTION_CONTEXT = "context"
 private const val SECTION_ANIMATIONS = "animations"
 private const val SECTION_QUALITY = "quality"
+
+/** 下拉框的一个选项：[value] 为存进 prefs 的值，[label] 为显示名。 */
+internal data class DropdownOption(val value: String, val label: String)
+
+/** 服务商下拉的统一选项。 */
+private fun providerOptions(): List<DropdownOption> =
+    AiProvider.entries.map { DropdownOption(it.name, it.label) }
+
+/** 写指定服务商的 API Key（其余服务商的 key 原样保留）。 */
+private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): AiChatPrefs =
+    when (provider) {
+        AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
+        AiProvider.VOLCANO -> prefs.copy(apiKeyVolcano = key)
+    }
+
+/**
+ * 音色下拉选项：接口拉到的音色在前、静态兜底在后（按 value 去重）；
+ * 当前生效值不在清单里（如手填过自定义音色）时追加保底，避免下拉框显示成裸值。
+ */
+internal fun voiceOptionsWithFetched(
+    provider: AiProvider,
+    fetched: List<TtsVoiceOption>,
+    selectedValue: String,
+): List<DropdownOption> {
+    val options = mutableListOf<DropdownOption>()
+    val seen = mutableSetOf<String>()
+    for (voice in fetched.asSequence().map { DropdownOption(composeVoiceRef(provider, it.value), it.label) } +
+        provider.voices.map { DropdownOption(composeVoiceRef(provider, it), it) }
+    ) {
+        if (seen.add(voice.value)) options += voice
+    }
+    if (selectedValue.isNotBlank() && seen.add(selectedValue)) {
+        options += DropdownOption(selectedValue, provider.voiceLabel(selectedValue))
+    }
+    return options
+}
 
 /** 半屏（默认）与全屏两档；拖动 Settings 标题/把手在两档间连续调整。 */
 private const val SHEET_HALF_FRACTION = 0.6f
@@ -133,6 +180,21 @@ internal fun SettingsScreen(
     val toggleSection: (String) -> Unit = { key ->
         expandedSections =
             if (key in expandedSections) expandedSections - key else expandedSections + key
+    }
+
+    // ── 音色清单接口拉取（尽力而为）：硅基流动 TTS 时拉 /audio/voice/list，
+    //    失败/为空由 voiceOptionsWithFetched 落回静态清单；火山无公开接口用静态。
+    val voiceCatalog = remember { SiliconFlowVoiceCatalog() }
+    var fetchedVoices by remember { mutableStateOf<List<TtsVoiceOption>>(emptyList()) }
+    val fetchProvider = aiPrefs.ttsProviderResolved
+    val fetchKey = aiPrefs.apiKeyFor(fetchProvider)
+    LaunchedEffect(fetchProvider, fetchKey) {
+        fetchedVoices =
+            if (fetchProvider == AiProvider.SILICONFLOW && fetchKey.isNotBlank()) {
+                voiceCatalog.fetch(fetchProvider.baseUrl, fetchKey)
+            } else {
+                emptyList()
+            }
     }
 
     Box(
@@ -235,56 +297,104 @@ internal fun SettingsScreen(
                     // ── AI 配置 ───────────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "AI 配置 (AI Chat · OpenAI 兼容)",
+                            title = "AI 配置 (AI Chat · 大模型/语音 双服务商)",
                             expanded = SECTION_AI in expandedSections,
                             onToggle = { toggleSection(SECTION_AI) }
                         ) {
                             SettingsGroupLabel(
-                                if (aiPrefs.isConfigured) "已配置，保存后立即生效" else "填写以下五项后即可对话"
+                                if (aiPrefs.isConfigured) "已配置，保存后立即生效" else "选择服务商、填 API Key 即可对话"
                             )
+                            // ── 大模型 ────────────────────────────────────
+                            SettingsDropdownRow(
+                                title = "大模型服务商",
+                                options = providerOptions(),
+                                selectedValue = aiPrefs.provider.name,
+                            ) { value ->
+                                // 同服务商勾选时 TTS 由 ttsProviderResolved 自动跟随 provider
+                                onAiPrefsChange(aiPrefs.copy(provider = AiProvider.valueOf(value)))
+                            }
                             SettingsTextFieldRow(
-                                title = "API Base URL",
-                                value = aiPrefs.baseUrl,
-                                placeholder = "https://api.openai.com/v1"
-                            ) { onAiPrefsChange(aiPrefs.copy(baseUrl = it)) }
-                            SettingsTextFieldRow(
-                                title = "API Key",
-                                value = aiPrefs.apiKey,
-                                placeholder = "sk-...",
+                                title = "${aiPrefs.provider.label} API Key",
+                                value = aiPrefs.apiKeyFor(aiPrefs.provider),
+                                placeholder = if (aiPrefs.provider == AiProvider.SILICONFLOW) "sk-..." else "粘贴 API Key",
                                 password = true
-                            ) { onAiPrefsChange(aiPrefs.copy(apiKey = it)) }
-                            SettingsTextFieldRow(
-                                title = "LLM 模型",
-                                value = aiPrefs.llmModel,
-                                placeholder = "gpt-4o-mini / deepseek-chat / ..."
+                            ) { onAiPrefsChange(withApiKey(aiPrefs, aiPrefs.provider, it)) }
+                            SettingsDropdownRow(
+                                title = "大模型",
+                                options = aiPrefs.provider.llmModels.map { DropdownOption(it, it) },
+                                selectedValue = resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel),
                             ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
-                            SettingsTextFieldRow(
+
+                            // ── 语音合成（TTS）─────────────────────────────
+                            SettingsCheckRow(
+                                title = "语音合成与 大模型 同服务商",
+                                subtitle = "勾选时 TTS 直接使用上面的大模型服务商；取消可为 TTS 单独选服务商（必要时单独填 Key）",
+                                checked = aiPrefs.ttsSameProvider
+                            ) { onAiPrefsChange(
+                                // 取消勾选瞬间 TTS 行为不跳变：独立服务商初始化为
+                                // 当前生效值，用户再显式改
+                                aiPrefs.copy(ttsSameProvider = it, ttsProvider = aiPrefs.ttsProviderResolved)
+                            ) }
+                            val ttsProvider = aiPrefs.ttsProviderResolved
+                            if (!aiPrefs.ttsSameProvider) {
+                                SettingsDropdownRow(
+                                    title = "TTS 服务商",
+                                    options = providerOptions(),
+                                    selectedValue = ttsProvider.name,
+                                ) { value ->
+                                    onAiPrefsChange(aiPrefs.copy(ttsProvider = AiProvider.valueOf(value)))
+                                }
+                                if (ttsProvider != aiPrefs.provider) {
+                                    SettingsTextFieldRow(
+                                        title = "${ttsProvider.label} API Key（语音合成用）",
+                                        value = aiPrefs.apiKeyFor(ttsProvider),
+                                        placeholder = if (ttsProvider == AiProvider.SILICONFLOW) "sk-..." else "粘贴 API Key",
+                                        password = true
+                                    ) { onAiPrefsChange(withApiKey(aiPrefs, ttsProvider, it)) }
+                                }
+                            }
+                            SettingsDropdownRow(
                                 title = "TTS 模型",
-                                value = aiPrefs.ttsModel,
-                                placeholder = "tts-1 / playai-tts / ..."
+                                options = ttsProvider.ttsModels.map { DropdownOption(it, ttsProvider.ttsModelLabel(it)) },
+                                selectedValue = resolveTtsModel(ttsProvider, aiPrefs.ttsModel),
                             ) { onAiPrefsChange(aiPrefs.copy(ttsModel = it)) }
-                            SettingsTextFieldRow(
+                            SettingsDropdownRow(
                                 title = "音色 Voice",
-                                value = aiPrefs.voice,
-                                placeholder = "alloy /Arabella / ..."
+                                options = voiceOptionsWithFetched(ttsProvider, fetchedVoices, resolveVoice(ttsProvider, aiPrefs.voice)),
+                                selectedValue = resolveVoice(ttsProvider, aiPrefs.voice),
                             ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
-                            SettingsSwitchRow(
-                                title = "AI 可控镜头",
-                                subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
-                                checked = aiPrefs.llmCamera
-                            ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
-                            // 语音输入（任务 4）：ASR 走同一端点的 /audio/transcriptions
-                            SettingsGroupLabel("语音输入（按住说话，OpenAI 兼容 /audio/transcriptions）")
-                            SettingsTextFieldRow(
-                                title = "ASR 模型（留空=按端点自动选择）",
-                                value = voicePrefs.asrModel,
-                                placeholder = "硅基流动=Qwen/Qwen3-ASR-1.7B · 其他=whisper-1"
+
+                            // ── 语音识别（ASR）─────────────────────────────
+                            SettingsGroupLabel("语音输入（按住说话 · ASR 仅硅基流动）")
+                            // 硅基流动 Key 在上面没露过面（LLM 与 TTS 都不走硅基流动）时，
+                            // ASR 需要单独填一份
+                            if (aiPrefs.provider != AiProvider.SILICONFLOW && ttsProvider != AiProvider.SILICONFLOW) {
+                                SettingsTextFieldRow(
+                                    title = "硅基流动 API Key（语音识别用）",
+                                    value = aiPrefs.apiKeySiliconflow,
+                                    placeholder = "sk-...",
+                                    password = true
+                                ) { onAiPrefsChange(withApiKey(aiPrefs, AiProvider.SILICONFLOW, it)) }
+                            }
+                            SettingsDropdownRow(
+                                title = "ASR 模型",
+                                options = listOf(
+                                    DropdownOption("", "自动（推荐）"),
+                                    DropdownOption("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"),
+                                ),
+                                selectedValue = voicePrefs.asrModel,
                             ) { onVoicePrefsChange(voicePrefs.copy(asrModel = it)) }
                             SettingsSwitchRow(
                                 title = "语音直接发送",
                                 subtitle = "松手识别成功即发送；关闭则识别文本先填入输入框，确认后再发",
                                 checked = voicePrefs.autoSend
                             ) { onVoicePrefsChange(voicePrefs.copy(autoSend = it)) }
+
+                            SettingsSwitchRow(
+                                title = "AI 可控镜头",
+                                subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
+                                checked = aiPrefs.llmCamera
+                            ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
                         }
                     }
 
@@ -1019,5 +1129,111 @@ private fun SettingsTextFieldRow(
                 .fillMaxWidth()
                 .padding(top = 4.dp)
         )
+    }
+}
+
+/**
+ * A labeled dropdown row for AI provider/model/voice selection — the only
+ * editable AI configs besides API keys are picks from curated catalogs.
+ * Options open in a [DropdownMenu] anchored under the current value.
+ */
+@Composable
+private fun SettingsDropdownRow(
+    title: String,
+    options: List<DropdownOption>,
+    selectedValue: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.value == selectedValue }?.label ?: selectedValue
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = true }
+                    .padding(top = 6.dp, bottom = 6.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selectedLabel,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "选择$title",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = if (option.value == selectedValue) "${option.label}（当前）" else option.label,
+                                fontWeight = if (option.value == selectedValue) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            if (option.value != selectedValue) onSelect(option.value)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A boolean settings entry with a trailing [Checkbox]（需求明确的勾选框形态）。
+ * The whole row toggles.
+ */
+@Composable
+private fun SettingsCheckRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

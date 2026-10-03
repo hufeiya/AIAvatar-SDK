@@ -27,12 +27,14 @@
 | `api/LlmAdapter.kt` | `streamChat(messages, config): Flow<LlmStreamEvent>`，事件 = TextDelta/Finish/Error |
 | `api/TagCue.kt` + `api/TagExtractor.kt` | 多模态行内标签协议（任务 8）：`TagCue` sealed（Emotion/Action/Camera，只带字符串，映射归 orchestrator）；`ExtractionResult(cleanText, cues)`；接口 `TagExtractor` |
 | `api/TtsAdapter.kt` | `suspend synthesize(text, config): TtsResult`（V1 句级整段返回） |
+| `volcengine/VolcanoEngineTtsAdapter.kt` | 火山「豆包语音合成大模型 2.0」适配（双服务商改造）：V3 双向流式 WebSocket（`wss://openspeech.bytedance.com/api/v3/tts/bidirection`）对外仍是句级整段语义——每次合成开一条连接跑完 StartConnection→StartSession→TaskRequest(整句)→FinishSession→收音频→SessionFinished；鉴权 `X-Api-Key`（豆包语音控制台的 API Key）+ `X-Api-Resource-Id: seed-tts-2.0`；输出恒 PCM 16bit LE（`audio_params.format=pcm`，采样率取 TtsConfig.sampleRate 默认 16k），口型管线免解码直喂；二进制帧 4 字节头 `[ver<<4|hsize, type<<4|flags, ser<<4|comp, 0]` + event(i32) + 可选 conn/session id(u32len+bytes) + payload(u32len)，编解码对齐火山官方 arkitect Python SDK；`endpoint` 参数可注入（MockWebServer ws 测试）；每条消息 30s 看门狗防管道悬挂 |
 | `api/AsrAdapter.kt` + `openai/OpenAiCompatibleAsrAdapter.kt` | 语音输入（任务 4）：`suspend transcribe(audio, mime, config): String`；OpenAI 兼容 `POST {base}/audio/transcriptions`（multipart `model`+`file`，文件名/Content-Type 由 mime 推导，m4a→`audio/mp4`）；language/prompt 缺省不发送（硅基流动只收 file+model，多余字段有 400 风险）；非 2xx 与 200 非 JSON 都带响应预览抛 IOException（A.1 第 11 条同源教训） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
 | `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
 | `openai/OpenAiCompatibleLlmAdapter.kt` | OkHttp SSE 手解 `data:` 行；`channelFlow + awaitClose{call.cancel()}` 取消即断连 |
 | `openai/OpenAiCompatibleTtsAdapter.kt` | POST `{base}/audio/speech`，response_format 可配（demo 默认 wav） |
+| `openai/SiliconFlowVoiceCatalog.kt` | 音色清单接口（双服务商改造）：GET `{base}/audio/voice/list` 返回 `{"result":[…]}`（条目 uri+name）；**永不抛异常**——网络/鉴权/解析任何失败都返回空列表，设置页合并静态兜底音色（实测空账号返回 `{"result":[]}`，空列表是常态） |
 | `lipsync/Dsp.kt` + `MfccFrontend.kt` | **wLipSync/uLipSync MFCC 管线精确移植**：RMS→FIR低通→16k降采样→预加重0.97→汉明窗→峰值归一→FFT→30 Mel→10log10→DCT→取系数1..12 |
 | `lipsync/WlipsyncProfile.kt` | 解析标定 profile（`src/main/resources/wlipsync/profile.json`，**直接复用 AIRI 的文件**），cosine^100 打分归一化 |
 | `lipsync/VowelDriver.kt` | AIRI vowel-driver.ts 逐常量移植：音量 `min(0.9v,1)^0.7`、winner≤0.7/runner×0.6≤0.35、静音门限 0.04/0.05/160ms、非对称指数平滑升50/降30、死区0.01、输出×0.7。元音槽序 **AA,IH,OU,EE,OH** |
@@ -108,6 +110,18 @@
   - **真机验证**：host 用硅基流动 TTS 合成"今天天气真不错，我们一起出去散步吧。"mp3 → push → `transcribe` 识别**逐字一致**（默认模型推断生效）；半双工打断生效（`voice_record` 发起时正在播的回复 PlaybackInterrupted）；三模式 `screencap` 截图：手动=FAB 齐全+输入条、打字/语音=按钮全隐（输入条/按住说话）、左上角下拉框常驻且标签正确；force-stop 重启保持语音模式（prefs `ai_input_mode=VOICE`）；`voice_record` 无权限路径报错清晰
   - **已知未覆盖**：MediaRecorder **成功**链路需真手——HyperOS 麦克风权限墙（见 A.1 第 21 条），首按"按住说话"弹系统框授权后才可录；autoSend=false 确认流程与下拉菜单点选同样需真手（禁触摸注入）
 
+- **双服务商打通 + 设置页全下拉化（2026-10-03，真机 2c3769db，硅基流动+火山引擎）**：用户需求「除 API Key 外所有 AI 配置都是下拉框」+ 火山引擎全量接入——
+  - **adapter**：`volcengine/VolcanoEngineTtsAdapter`（见 2.1 表；协议帧逐字段对齐官方 arkitect SDK，`parseFrame` 的 ptr 必须 `= headerSize*4` 整体定位，逐字节步进差一位就是 StringIndexOutOfBounds）+ `openai/SiliconFlowVoiceCatalog`（永不抛异常的音色清单）
+  - **app 目录收口**：`AiProviders.kt`——`AiProvider` 枚举（端点/LLM 清单/TTS 清单/音色清单/全部默认值）+ `resolveLlmModel/resolveTtsModel/resolveVoice` = **校验+默认**（存储值不在本服务商清单一律落默认，兜住 UI/ai_cmd/旧 prefs 三条写入路径的跨服务商泄漏；真机实测：切火山后 DeepSeek-V3 残留被原样发给 Ark 401，修复后 chat_state 全部正确回落）+ `composeVoiceRef`（硅基流动音色=CosyVoice 引用 `FunAudioLLM/CosyVoice2-0.5B:<短名>`，MOSS-TTSD 实测也收这个格式=两模型音色互认；`speech:` 克隆 URI 原样放行）
+  - **AiChatPrefs 重构**：`provider/llmModel/apiKeySiliconflow/apiKeyVolcano/ttsSameProvider(默认 true)/ttsProvider/ttsModel/voice/llmCamera`；key 按服务商分存互不覆盖；**旧 prefs 迁移**：`ai_baseUrl` 推断服务商（volces.com→火山）、旧 `ai_apiKey`→硅基流动 key，模型/音色原键复用零丢失（真机 2c3769db 原地升级验证逐字段正确）；ASR 固定走硅基流动（key 复用硅基流动那份），LLM/TTS 都不选硅基流动时设置页才单独露「硅基流动 Key（语音识别用）」
+  - **设置页**：大模型服务商/大模型/TTS 服务商/TTS 模型/音色/ASR 模型全部下拉框（`SettingsDropdownRow`），「语音合成与大模型同服务商」Checkbox（默认勾选，取消瞬间 TTS 服务商初始化为当前生效值防跳变），TTS 独立时才显示 TTS 服务商下拉与（服务商不同于 LLM 时的）TTS Key；音色下拉尽力从 `/audio/voice/list` 拉取、失败/为空合并静态兜底
+  - **清单与默认值（host 实测核验后锁进单测）**：硅基流动 LLM=DeepSeek-V4-Flash(默认)/DeepSeek-V3/Qwen3.8-27B（三项均在 /v1/models 在册）；硅基流动 TTS=**fnlp/MOSS-TTSD-v0.5(默认，注意 fnlp/ 前缀，裸 MOSS-TTSD-v0.5 报 Model does not exist)**/CosyVoice2-0.5B，音色 alex/anna(默认)/bella/benjamin/charles/claire；火山 LLM=doubao-seed-2-0-mini-260428(默认) 等 6 个（用户给定，Ark key 未签发无法实测）；火山 TTS=seed-tts-2.0 唯一，音色 zh_female_vv_uranus_bigtts(默认) 等 6 个
+  - **调试命令**：`set_provider siliconflow|volcano` / `set_tts_provider siliconflow|volcano`（自动取消同服务商勾选）/ `chat_state` 扩展输出已解析生效的双厂商配置
+  - **单测 144 全绿**（+22：VolcanoEngineTtsAdapterTest 4——MockWebServer ws 升级扮服务端逐帧断言协议序/speaker+pcm16k 参数/SessionFailed 错误浮出/空音色兜底；SiliconFlowVoiceCatalogTest 5；AiProvidersTest 7——目录锁定的产品默认值/音色引用拼装/跨服务商防泄漏/迁移推断/配置完整性）
+  - **真机验证（2c3769db）**：旧 prefs 原地升级迁移逐字段正确→SF 全链路回归（V3+CosyVoice2 流水/口型/标签照旧）→`set_provider volcano` 401 错误清晰上错误条（key 不是 Ark key，见下）→防泄漏修复后 chat_state 三值正确回落→**SF LLM+火山 TTS 混合链路两轮**：`set_tts_provider volcano` 后整轮对话 TurnCompleted，4 句流水播放、FaceDriver viseme 跟随（volume 峰值 0.82）、PCM 16k 免解码直喂口型管线，字幕零标签泄漏，全程零 FATAL→设置页截图：服务商/模型/Key 下拉+Checkbox+条件显隐（TTS 独立时火山 Key 才出现）+音色下拉 6 项带「（当前）」标记，点开交互正常→ASR 闭环（TTS 合成 wav push→transcribe 逐字一致）→恢复默认配置 force-stop 重启持久化正确
+  - **⚠️ 火山是两把钥匙**：用户给的 `020b5acf-…` 是**豆包语音控制台**的 API Key（TTS WebSocket `X-Api-Key` 实测可用），调方舟 Ark `/chat/completions` 报 `The API key doesn't exist`——火山 LLM 要用必须在设置里填**方舟平台**签发的 API Key（密钥明文都在仓库根 secrets.properties，已 gitignore：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY 占位待用户补）
+  - 已知未覆盖：设置页下拉菜单真手点选（adb 已验证菜单可开、选项/当前标记正确）；火山 LLM 端到端对话（等用户补 Ark key，`set_provider volcano` + `send_chat` 即可复验）；HyperOS 麦克风权限墙照旧（ASR 验证走 `transcribe` 命令）
+
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
   - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
@@ -149,13 +163,14 @@
 
 ## 五、测试与 API 配置现状
 
-- **API 要求**：一个同时提供 OpenAI 兼容 `/chat/completions`(流式) 与 `/audio/speech` 的服务，LLM/TTS 共用同一 Base URL + Key。
-  - 已验证：硅基流动 `https://api.siliconflow.cn/v1`（2026-10-03 实测）：LLM=`deepseek-ai/DeepSeek-V3`（仍在模型列表；流式 SSE 与适配器完全兼容）；TTS=`FunAudioLLM/CosyVoice2-0.5B`，Voice=`FunAudioLLM/CosyVoice2-0.5B:alex`，**必须带 `sample_rate:16000`（数字，传字符串报 400）**，原因见附录 A.1 第 2 条；demo 的 Key 经 run-as 写入 demo_settings（明文本体在仓库根 `secrets.properties`，已 gitignore，勿提交）
-  - 备选：OpenAI 官方（需海外网络，`gpt-4o-mini`+`tts-1`+`alloy`）；或任意 one-api/new-api 网关
-- 填写入口：App ⚙️ 设置 →「AI 对话」→ 五项即填即存。
-- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest`
+- **双服务商（2026-10-03 起）**：设置页全下拉选择，清单与默认值收口在 app 的 `AiProviders.kt`（改清单/默认值只动这一处 + `AiProvidersTest` 锁定的产品决策要同步改）。
+  - **硅基流动** `https://api.siliconflow.cn/v1`（LLM/TTS/ASR 全链路实测）：LLM=`deepseek-ai/DeepSeek-V4-Flash`(默认)/`DeepSeek-V3`/`Qwen/Qwen3.8-27B`；TTS=`fnlp/MOSS-TTSD-v0.5`(默认)/`FunAudioLLM/CosyVoice2-0.5B`——**两模型共用 CosyVoice 音色引用** `FunAudioLLM/CosyVoice2-0.5B:anna`（MOSS 收跨模型引用实测 200），wav/pcm 16k 均可、**mp3 只收 32000/44100**；ASR=`Qwen/Qwen3-ASR-1.7B`（`/audio/transcriptions`，wav 稳、**mp3 偶发 HTTP 500 空 body**——ASR 探针用 wav）
+  - **火山引擎**：LLM=方舟 Ark `https://ark.cn-beijing.volces.com/api/v3`（OpenAI 兼容 chat/completions，模型 doubao-seed-2-0-mini-260428 默认等 6 个；**需方舟 API Key，用户尚未签发**）；TTS=豆包语音 seed-tts-2.0（V3 WebSocket，`X-Api-Key` + `X-Api-Resource-Id: seed-tts-2.0`，**API Key 实测可用**，音色 zh_female_vv_uranus_bigtts 默认等 6 个；两把钥匙分属两个控制台，见 A.1 第 23 条）
+  - 密钥明文：仓库根 `secrets.properties`（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY(待补)；设备侧经 run-as 写入 demo_settings（`ai_api_key_siliconflow`/`ai_api_key_volcano`）
+- 填写入口：App ⚙️ 设置 →「AI 配置」→ 选服务商 + 填 Key 即可对话（模型/音色留空=默认）。
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest`（144 全绿）
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
-- 设备：`62fabe84`（小米14/HyperOS Android16，任务2起；已配硅基流动，注意 HyperOS 禁 shell input）与 `2c3769db`（任务1）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
+- 设备：`2c3769db`（本次双厂商验证机，adb input 可用）与 `62fabe84`（小米14/HyperOS，禁 shell input）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
 ## 六、接下来的工作 —— 任务提示词（按优先级）
 
@@ -441,6 +456,8 @@ LLM SSE delta
 19. **调试钩子读 UI 状态快照会陈旧（任务 3）**：`AiChatDebugHooks` 若捕获 Compose 的列表状态（如设置页用的 `contextList`，只在打开设置页时刷新），`ai_cmd` 在任意时刻执行时读到的是旧值——真机首次验证 `contexts` 返回空列表，实际库里已有会话行（run-as 拉库证实）。已修：`contexts`/`select_context` 钩子改为执行时 `runBlocking + Dispatchers.IO` 实时查库（调试命令在主线程同步执行，几十行的小查询阻塞可忽略）。教训：**给 adb 代理用的查询命令一律实时读数据源，不读 UI 派生状态**。
 20. **"待机优先级表"按文件名先过滤候选集会让不含关键字的条目永远落空（默认 idle 改 Arms Down 时踩）**：`resolveIdleAction` 原实现先 `filter { 文件名含 "idle" }` 再按 IDLE_PREFERENCE 精确匹配——首位换成 "Arms Down" 后它根本不在候选集里，静默落到第二优先级（logcat 里 `Loaded idle VRMA: 6.33s` 而非 0.042s 暴露）。修法：优先级表直接在库全量里精确匹配。**观测点：挂载的 idle 是否符合预期，看 `SoulLinkRenderer` 的 `Loaded idle VRMA: <时长>`——Arms Down 是单帧（0.042s），一眼可辨**。
 21. **HyperOS 麦克风 runtime 权限 adb 三条路全堵（任务 4）**：`pm grant` 报 SecurityException（shell 无 GRANT_RUNTIME_PERMISSIONS）、`adb install -r -g` 后 dumpsys 仍 `granted=false`、`appops set` 包级 allow 但 **uid 级被系统管控恒 ignore**——MediaRecorder `setAudioSource` 直接抛 `setAudioSource failed`。对策：验证 ASR 链路**不需要麦克风**——`ai_cmd transcribe <文件>` 走 file→bytes→适配器，与按住说话完全同一 ASR 路径（host 用 TTS 合成语音 push 进去还能做 TTS→ASR 闭环自校验）；录音链路只能真手首按授权。**顺带的观测坑：`ai_cmd screenshot` 抓的是渲染帧（`controller.captureFrame`，纯 3D 无 Compose UI），验证按钮显隐/聊天条形态必须用 `adb exec-out screencap -p`**。
+22. **双服务商改造期间的三个坑（2026-10-03）**：①MOSS-TTSD 的模型实名是 **`fnlp/MOSS-TTSD-v0.5`**（裸 `MOSS-TTSD-v0.5` 报 `Model does not exist`），且它**不接受裸短音色名**（`anna`→`Invalid voice`），必须用 CosyVoice 引用 `FunAudioLLM/CosyVoice2-0.5B:anna`（跨模型音色互认，实测 200）；MOSS 的 mp3 输出只收 sample_rate 32000/44100，wav/pcm 16k 不受限。②火山语音 WebSocket 的鉴权域按 Resource-Id 分家：`volc.service_type.10029`（老 1.0 大模型 TTS）只认 AppID+AccessToken（`X-Api-App-Key`+`X-Api-Access-Key`，API Key 进去 403/401/400 各样花式拒绝）；**API Key 域的资源号就是字面量 `seed-tts-2.0`**（`X-Api-Key` 头实测 200 出音频）。③火山帧解析 `parseFrame` 的 ptr 必须整体 `= headerSize*4` 定位——逐字节步进少算一个 reserved 字节（ptr 停在 3 而非 4），事件号读偏成垃圾值，MockWebServer 单测首跑即炸（`StringIndexOutOfBounds Range [11, 11+0x32000000)`），**协议解析必须先写帧级单测再上真机**。
+23. **火山是两把钥匙（2026-10-03 实测）**：`020b5acf-…` 这把是**豆包语音控制台**的 API Key（TTS WebSocket `X-Api-Key` 可用），调方舟 Ark `/chat/completions` 返回 `AuthenticationError: The API key doesn't exist`——语音与大模型在火山是两个控制台各自发 Key。App 里火山 LLM 报 401 就是这个原因，把方舟控制台签发的 API Key 填进设置即可；两把 key 在设置页是同一个「火山引擎 API Key」字段（TTS/LLM 共用），填哪把决定哪条链路通。
 
 ### A.2 调参速查表
 
@@ -461,7 +478,9 @@ LLM SSE delta
 | 冷启动就是 T-pose | idle 挂载失败或被清：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`（demo 现在与 AI 会话解耦，模型加载即自动挂，默认 Arms Down）；挂上了仍 T-pose 则查引擎版本是否含"挂 idle 即接管"语义 |
 | 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |
 | 按住说话报"录音启动失败：setAudioSource failed" | 麦克风 runtime 权限未授（HyperOS 禁 adb 授权，见 A.1 第 21 条）；真手首按弹系统框允许一次即可 |
-| 语音识别失败/识别为空 | 先 `ai_cmd transcribe <push 的音频>` 分离"录音问题"vs"ASR 问题"（TTS 合成一段语音 push 进去可闭环自校验）；识别空文本=离麦远/环境静音；ASR 模型确认：baseUrl 含 siliconflow 默认 `Qwen/Qwen3-ASR-1.7B`，可在设置里显式覆盖 |
+| 语音识别失败/识别为空 | 先 `ai_cmd transcribe <push 的音频>` 分离"录音问题"vs"ASR 问题"（TTS 合成一段语音 push 进去可闭环自校验）；识别空文本=离麦远/环境静音；ASR 模型确认：硅基流动默认 `Qwen/Qwen3-ASR-1.7B`（设置可显式覆盖）；**mp3 输入偶发 HTTP 500 空 body 是硅基流动 ASR 端问题，换 wav 重试** |
+| 火山 TTS/LLM 报 401/403 | 看错误条/logcat 里的响应体：Ark `The API key doesn't exist` = 填的是语音 Key 不是方舟 Key（A.1 第 23 条）；TTS 403 = `X-Api-Key` 配了不匹配的 Resource-Id（必须 `seed-tts-2.0`，A.1 第 22 条） |
+| 切服务商后模型/音色不对 | 正常防护路径：存储值不在新服务商清单一律落该服务商默认（`resolveLlmModel/resolveTtsModel/resolveVoice` 校验+默认）；`ai_cmd chat_state` 看"已解析生效"配置核对 |
 
 验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 

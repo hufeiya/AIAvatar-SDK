@@ -132,7 +132,13 @@ fun aiDebugHelp(): String = """
     |  send_chat <arg>          Send ai_arg as the user's chat message; the reply
     |                           streams into the subtitle + AIDebug event logs
     |  interrupt_chat           Interrupt the current turn (same as ✕ button)
-|  chat_state               Dump chat phase / subtitle length / last error
+|  chat_state               Dump chat phase / subtitle length / last error /
+|                           resolved provider/model/voice config
+|Providers (dual-vendor: SiliconFlow + Volcano; LLM/TTS/ASR dropdowns in ⚙️):
+|  set_provider <arg>       Switch LLM provider: siliconflow | volcano
+|                           (model list follows; empty model = vendor default)
+|  set_tts_provider <arg>   Switch TTS provider independently (unchecks
+|                           "same as LLM"): siliconflow | volcano
 |Contexts (Room-persisted conversation history; needs the AI service configured):
     |  contexts                 List contexts (id prefix, card, message count) + active
     |  new_context              Start a fresh context; previous ones stay selectable

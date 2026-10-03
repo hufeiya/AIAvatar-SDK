@@ -1,0 +1,154 @@
+package com.neethu.aiavatar_sdk
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 双服务商目录的解析纯函数：模型/音色默认值、音色引用拼装、旧 prefs 迁移
+ * 推断、配置完整性判定。清单与默认值是设置页全部下拉框的数据源。
+ */
+class AiProvidersTest {
+
+    // ── 目录内容与需求对齐（默认值是产品决策，锁住防手滑改动）──────────
+    @Test
+    fun `catalog matches the product spec`() {
+        val sf = AiProvider.SILICONFLOW
+        assertEquals(
+            listOf("deepseek-ai/DeepSeek-V4-Flash", "deepseek-ai/DeepSeek-V3", "Qwen/Qwen3.8-27B"),
+            sf.llmModels,
+        )
+        assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.defaultLlmModel)
+        assertEquals(listOf("fnlp/MOSS-TTSD-v0.5", "FunAudioLLM/CosyVoice2-0.5B"), sf.ttsModels)
+        assertEquals("fnlp/MOSS-TTSD-v0.5", sf.defaultTtsModel)
+        assertEquals("anna", sf.defaultVoice)
+        assertEquals(listOf("alex", "anna", "bella", "benjamin", "charles", "claire"), sf.voices)
+
+        val volc = AiProvider.VOLCANO
+        assertEquals("doubao-seed-2-0-mini-260428", volc.defaultLlmModel)
+        assertEquals(6, volc.llmModels.size)
+        assertEquals(listOf("seed-tts-2.0"), volc.ttsModels)
+        assertEquals("zh_female_vv_uranus_bigtts", volc.defaultVoice)
+        assertEquals(6, volc.voices.size)
+        assertTrue(volc.voicePrefix == null)
+    }
+
+    @Test
+    fun `tts and llm labels strip org prefixes`() {
+        assertEquals("MOSS-TTSD-v0.5", AiProvider.SILICONFLOW.ttsModelLabel("fnlp/MOSS-TTSD-v0.5"))
+        assertEquals("CosyVoice2-0.5B", AiProvider.SILICONFLOW.ttsModelLabel("FunAudioLLM/CosyVoice2-0.5B"))
+        assertEquals("anna", AiProvider.SILICONFLOW.voiceLabel("FunAudioLLM/CosyVoice2-0.5B:anna"))
+        assertEquals("zh_female_vv_uranus_bigtts", AiProvider.VOLCANO.voiceLabel("zh_female_vv_uranus_bigtts"))
+    }
+
+    // ── 音色引用拼装（MOSS 与 CosyVoice 共用 CosyVoice 引用，真机实测）──
+    @Test
+    fun `voice ref composition for siliconflow`() {
+        // 短名 → 补 CosyVoice 引用前缀（MOSS-TTSD 也收这个格式）
+        assertEquals(
+            "FunAudioLLM/CosyVoice2-0.5B:anna",
+            composeVoiceRef(AiProvider.SILICONFLOW, "anna"),
+        )
+        // 完整引用（旧 prefs 的存储形态）原样
+        assertEquals(
+            "FunAudioLLM/CosyVoice2-0.5B:alex",
+            composeVoiceRef(AiProvider.SILICONFLOW, "FunAudioLLM/CosyVoice2-0.5B:alex"),
+        )
+        // 自定义克隆音色 URI（speech:…）原样
+        assertEquals("speech:my-clone", composeVoiceRef(AiProvider.SILICONFLOW, "speech:my-clone"))
+        assertEquals("", composeVoiceRef(AiProvider.SILICONFLOW, " "))
+    }
+
+    @Test
+    fun `voice resolution falls back to vendor default`() {
+        assertEquals(
+            "FunAudioLLM/CosyVoice2-0.5B:anna",
+            resolveVoice(AiProvider.SILICONFLOW, ""),
+        )
+        assertEquals(
+            "zh_female_vv_uranus_bigtts",
+            resolveVoice(AiProvider.VOLCANO, ""),
+        )
+        assertEquals(
+            "zh_male_m191_uranus_bigtts",
+            resolveVoice(AiProvider.VOLCANO, "zh_male_m191_uranus_bigtts"),
+        )
+    }
+
+    // ── 模型默认值解析 ────────────────────────────────────────────────────
+    @Test
+    fun `model resolution falls back to vendor defaults`() {
+        assertEquals("deepseek-ai/DeepSeek-V4-Flash", resolveLlmModel(AiProvider.SILICONFLOW, ""))
+        assertEquals("deepseek-ai/DeepSeek-V3", resolveLlmModel(AiProvider.SILICONFLOW, "deepseek-ai/DeepSeek-V3"))
+        assertEquals("doubao-seed-2-0-mini-260428", resolveLlmModel(AiProvider.VOLCANO, "  "))
+        assertEquals("seed-tts-2.0", resolveTtsModel(AiProvider.VOLCANO, ""))
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B", resolveTtsModel(AiProvider.SILICONFLOW, "FunAudioLLM/CosyVoice2-0.5B"))
+    }
+
+    // ── 跨服务商防泄漏（真机实测切火山后 DeepSeek-V3 残留被原样发给 Ark）──
+    @Test
+    fun `out-of-catalog stored values fall back to the new vendor defaults`() {
+        // 切火山：硅基流动的模型/音色不再透传，落火山默认
+        assertEquals("doubao-seed-2-0-mini-260428", resolveLlmModel(AiProvider.VOLCANO, "deepseek-ai/DeepSeek-V3"))
+        assertEquals("seed-tts-2.0", resolveTtsModel(AiProvider.VOLCANO, "FunAudioLLM/CosyVoice2-0.5B"))
+        assertEquals(
+            "zh_female_vv_uranus_bigtts",
+            resolveVoice(AiProvider.VOLCANO, "FunAudioLLM/CosyVoice2-0.5B:alex"),
+        )
+        // 反向：火山的值落到硅基流动默认
+        assertEquals("deepseek-ai/DeepSeek-V4-Flash", resolveLlmModel(AiProvider.SILICONFLOW, "doubao-seed-2-1-pro-260915"))
+        assertEquals("fnlp/MOSS-TTSD-v0.5", resolveTtsModel(AiProvider.SILICONFLOW, "seed-tts-2.0"))
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", resolveVoice(AiProvider.SILICONFLOW, "zh_male_m191_uranus_bigtts"))
+    }
+
+    @Test
+    fun `custom clone voice uri survives resolution`() {
+        assertEquals("speech:my-clone", resolveVoice(AiProvider.SILICONFLOW, "speech:my-clone"))
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", resolveVoice(AiProvider.SILICONFLOW, "anna"))
+    }
+
+    // ── 旧 prefs 迁移推断（单服务商时代的 baseUrl → 服务商）───────────────
+    @Test
+    fun `legacy base url infers provider`() {
+        assertEquals(
+            AiProvider.SILICONFLOW,
+            inferProviderFromBaseUrl("https://api.siliconflow.cn/v1"),
+        )
+        assertEquals(
+            AiProvider.VOLCANO,
+            inferProviderFromBaseUrl("https://ark.cn-beijing.volces.com/api/v3"),
+        )
+        assertEquals(AiProvider.SILICONFLOW, inferProviderFromBaseUrl(""))
+    }
+
+    // ── 配置完整性：两个 key 都在才算配置好；模型/音色留空走默认 ──────────
+    @Test
+    fun `isConfigured requires llm and tts keys`() {
+        val base = AiChatPrefs(provider = AiProvider.SILICONFLOW, apiKeySiliconflow = "sk-1")
+        assertTrue(base.isConfigured) // 模型/音色留空 = 默认值，仍算配置完成
+
+        // TTS 独立到火山但火山 key 缺失 → 不算配置完成（会话装配会缺 TTS 凭据）
+        val independentNoVolcanoKey = base.copy(ttsSameProvider = false, ttsProvider = AiProvider.VOLCANO)
+        assertFalse(independentNoVolcanoKey.isConfigured)
+        assertTrue(
+            independentNoVolcanoKey.copy(apiKeyVolcano = "volc-1").isConfigured,
+        )
+    }
+
+    @Test
+    fun `tts provider resolution and key routing`() {
+        val prefs = AiChatPrefs(
+            provider = AiProvider.VOLCANO,
+            apiKeySiliconflow = "sk-1",
+            apiKeyVolcano = "volc-1",
+            ttsSameProvider = true,
+        )
+        assertEquals(AiProvider.VOLCANO, prefs.ttsProviderResolved)
+        assertEquals("volc-1", prefs.apiKeyForTts())
+
+        val independent = prefs.copy(ttsSameProvider = false, ttsProvider = AiProvider.SILICONFLOW)
+        assertEquals(AiProvider.SILICONFLOW, independent.ttsProviderResolved)
+        assertEquals("sk-1", independent.apiKeyForTts())
+    }
+}
