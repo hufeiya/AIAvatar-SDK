@@ -93,6 +93,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
@@ -746,10 +747,17 @@ private fun DemoScreen(
     /** autoSend=false 时的识别文本：经 AiChatBar 填入输入框待确认。 */
     var voicePrefill by remember { mutableStateOf<String?>(null) }
 
+    var micGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!granted) chatError = "需要麦克风权限才能按住说话"
+        micGranted = granted
+        if (!granted) chatError = "需要麦克风权限才能语音输入"
     }
 
     // ── 视频模式（任务 6）：用户相机追踪 + PiP 小窗 + 发送附抓拍 ──────────
@@ -831,6 +839,65 @@ private fun DemoScreen(
         model = resolveAsrModel(AiProvider.SILICONFLOW.baseUrl, uiState.voicePrefs.asrModel),
     )
 
+    // ── 自由说话（连续聆听 + VAD 自动断句，按住/自由按钮切换）─────────────
+    val freeSpeech = remember { FreeSpeechController(context) }
+    var freeHearing by remember { mutableStateOf(false) }
+    // 并发句串行:上一句还在 ASR 时新一句排队,防止识别结果乱序发送
+    val freeAsrChain = remember { kotlinx.coroutines.sync.Mutex() }
+
+    // 回调在采音线程触发,统一 post 回主协程操作 UI/会话
+    freeSpeech.onBargeIn = { scope.launch { session?.interrupt() } }
+    freeSpeech.onHearingChanged = { hearing -> freeHearing = hearing }
+    freeSpeech.onUtterance = { wav ->
+        scope.launch {
+            freeAsrChain.withLock {
+                voiceRecognizing = true
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        asrFor().transcribe(wav, mimeForFileName("utterance.wav"), asrConfig())
+                    }
+                }
+                voiceRecognizing = false
+                result.onSuccess { raw ->
+                    val text = raw.trim()
+                    when {
+                        // 环境噪声切片常识别为空:静默忽略,不刷错误条
+                        text.isEmpty() -> Unit
+                        else -> {
+                            replyText = ""
+                            session?.send(text, videoSnapshotImages())
+                        }
+                    }
+                }.onFailure { chatError = "语音识别失败：${it.message}" }
+            }
+        }
+    }
+    freeSpeech.isAvatarSpeaking = { chatPhase == ConversationPhase.SPEAKING }
+
+    val onToggleFreeTalk: () -> Unit = {
+        val new = !uiState.voicePrefs.freeTalk
+        uiState.updateVoicePrefs(uiState.voicePrefs.copy(freeTalk = new))
+        when {
+            new && !micGranted -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            new && uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isBlank() ->
+                chatError = "自由说话需要硅基流动 API Key（语音识别用），先在 ⚙️ 设置里配置"
+            new -> chatError = "自由说话已开启：直接开口，说完一句自动发送；虚拟人说话时大声即可打断"
+        }
+    }
+
+    // 自由说话生命周期：语音/视频模式 + 开关开 + 麦克风权限 + 有 ASR Key 才跑
+    LaunchedEffect(uiState.inputMode, uiState.voicePrefs.freeTalk, micGranted) {
+        val want = micGranted && uiState.voicePrefs.freeTalk &&
+            (uiState.inputMode == InputMode.VOICE || uiState.inputMode == InputMode.VIDEO) &&
+            uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isNotBlank()
+        if (want) {
+            runCatching { freeSpeech.start(echoCancellation = uiState.inputMode == InputMode.VIDEO) }
+                .onFailure { chatError = "自由说话启动失败：${it.message}" }
+        } else {
+            freeSpeech.stop()
+        }
+    }
+
     val onHoldStart: () -> Unit = {
         when {
             voiceRecording || voiceRecognizing -> Unit
@@ -890,6 +957,7 @@ private fun DemoScreen(
             aiChat.shutdown()
             // 录音中离开组合（切模式/退出）不能留下一个占着麦克风的 MediaRecorder
             voiceRecorder.cancel()
+            freeSpeech.stop()
         }
     }
 
@@ -951,12 +1019,19 @@ private fun DemoScreen(
             },
             snapshot = {
                 val p = uiState.aiPrefs
-                "phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"} " +
-                    "llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} " +
-                    "ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) " +
-                    "ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} " +
-                    "voice=${resolveVoice(p.ttsProviderResolved, p.voice)} vision=${isVisionLlm(p.provider, p.llmModel)}" +
-                    if (uiState.inputMode == InputMode.VIDEO) " video=[${videoTracker.debugStatus()}]" else ""
+                buildString {
+                    append("phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"} ")
+                    append("llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} ")
+                    append("ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) ")
+                    append("ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} ")
+                    append("voice=${resolveVoice(p.ttsProviderResolved, p.voice)} vision=${isVisionLlm(p.provider, p.llmModel)}")
+                    if (uiState.inputMode == InputMode.VIDEO) append(" video=[${videoTracker.debugStatus()}]")
+                    if (uiState.inputMode == InputMode.VOICE || uiState.inputMode == InputMode.VIDEO) {
+                        append(" freeTalk=${uiState.voicePrefs.freeTalk}")
+                        if (freeSpeech.running) append("(listening" + (if (freeHearing) ",hearing)" else ")"))
+                        else append("(off)")
+                    }
+                }
             },
             importCard = { bytes ->
                 val entry = uiState.importCardBytes(bytes)
@@ -1186,6 +1261,20 @@ private fun DemoScreen(
             videoStatusLine = {
                 if (uiState.inputMode == InputMode.VIDEO) videoTracker.debugStatus() else null
             },
+            // ai_cmd voice_free on|off（无参=翻转）：按住说话 ⇄ 自由说话（连续聆听）
+            setVoiceFree = { arg ->
+                val new = when (arg?.lowercase()) {
+                    null -> !uiState.voicePrefs.freeTalk
+                    "on", "true", "1" -> true
+                    "off", "false", "0" -> false
+                    else -> throw IllegalArgumentException(
+                        "voice_free expects on|off (omit ai_arg to toggle), got '$arg'"
+                    )
+                }
+                uiState.updateVoicePrefs(uiState.voicePrefs.copy(freeTalk = new))
+                "freeTalk=$new (mode=${uiState.inputMode.name.lowercase()}, " +
+                    "listening=${freeSpeech.running})"
+            },
         )
     }
 
@@ -1280,7 +1369,7 @@ private fun DemoScreen(
             )
         }
 
-        // AI 对话条（输入区按模式切换：打字 or 按住说话）与回复字幕
+        // AI 对话条（输入区按模式切换：打字 or 按住说话/自由说话）与回复字幕
         AiChatBar(
             phase = chatPhase,
             replyText = replyText,
@@ -1290,6 +1379,9 @@ private fun DemoScreen(
             recording = voiceRecording,
             recognizing = voiceRecognizing,
             voiceAutoSend = uiState.voicePrefs.autoSend,
+            voiceFreeTalk = uiState.voicePrefs.freeTalk,
+            freeHearing = freeHearing,
+            onToggleFreeTalk = onToggleFreeTalk,
             voicePrefill = voicePrefill,
             onVoicePrefillConsumed = { voicePrefill = null },
             onHoldStart = onHoldStart,
@@ -1682,6 +1774,9 @@ private fun AiChatBar(
     recording: Boolean,
     recognizing: Boolean,
     voiceAutoSend: Boolean,
+    voiceFreeTalk: Boolean,
+    freeHearing: Boolean,
+    onToggleFreeTalk: () -> Unit,
     voicePrefill: String?,
     onVoicePrefillConsumed: () -> Unit,
     onHoldStart: () -> Unit,
@@ -1760,21 +1855,43 @@ private fun AiChatBar(
                     )
                 }
                 if ((inputMode == InputMode.VOICE || inputMode == InputMode.VIDEO) && input.isBlank()) {
-                    // 语音/视频模式主形态：整条都是按住说话
-                    HoldToTalk(
-                        recording = recording,
-                        recognizing = recognizing,
-                        enabled = enabled,
-                        onPressStart = onHoldStart,
-                        onPressEnd = onHoldEnd,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp)
-                            .padding(horizontal = 4.dp),
+                    // 语音/视频模式主形态：左侧「按住/自由」切换 + 按住说话条或自由聆听指示
+                    VoiceTalkModeToggle(
+                        free = voiceFreeTalk,
+                        onToggle = onToggleFreeTalk,
+                        modifier = Modifier.padding(end = 2.dp),
                     )
+                    if (voiceFreeTalk) {
+                        FreeListenIndicator(
+                            recognizing = recognizing,
+                            hearing = freeHearing,
+                            enabled = enabled,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .padding(horizontal = 4.dp),
+                        )
+                    } else {
+                        HoldToTalk(
+                            recording = recording,
+                            recognizing = recognizing,
+                            enabled = enabled,
+                            onPressStart = onHoldStart,
+                            onPressEnd = onHoldEnd,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .padding(horizontal = 4.dp),
+                        )
+                    }
                 } else {
                     if (inputMode == InputMode.VOICE || inputMode == InputMode.VIDEO) {
                         // 确认形态（关闭"直接发送"时）：识别文本可改，左侧保留小按住键
+                        VoiceTalkModeToggle(
+                            free = voiceFreeTalk,
+                            onToggle = onToggleFreeTalk,
+                            modifier = Modifier.padding(end = 2.dp),
+                        )
                         HoldToTalk(
                             recording = recording,
                             recognizing = recognizing,
@@ -1907,7 +2024,100 @@ private fun HoldToTalk(
     }
 }
 
-/** 左上角输入模式下拉框：手动点击 / 打字输入 / 语音模式，三模式互斥切换。 */
+/**
+ * 语音/视频模式下按住说话与自由说话的切换按钮（用户需求：一个按钮切换两种
+ * 说话方式）。状态持久化在 [VoicePrefs.freeTalk]，切模式/重启保持。
+ */
+@Composable
+private fun VoiceTalkModeToggle(
+    free: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(14.dp),
+        color = if (free) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+        else Color.Black.copy(alpha = 0.45f),
+        modifier = modifier,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text = if (free) "自由" else "按住",
+                color = if (free) MaterialTheme.colorScheme.onPrimaryContainer else Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "说话",
+                color = if (free) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                else Color.White.copy(alpha = 0.7f),
+                fontSize = 9.sp,
+            )
+        }
+    }
+}
+
+/**
+ * 自由说话聆听指示条：平静=「自由说话中」，VAD 检测到人声=「听到你说话…」
+ * （呼吸色），切片送识别=「识别中…」。点击可关回按住说话。
+ */
+@Composable
+private fun FreeListenIndicator(
+    recognizing: Boolean,
+    hearing: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val bgColor by animateColorAsState(
+        targetValue = when {
+            recognizing -> MaterialTheme.colorScheme.secondaryContainer
+            hearing -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+        },
+        label = "freeListenBg",
+    )
+    val label = when {
+        recognizing -> "识别中…"
+        hearing -> "听到你说话…"
+        enabled -> "自由说话中，直接开口"
+        else -> "未配置 AI 服务"
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .background(bgColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            recognizing -> MaterialTheme.colorScheme.secondary
+                            hearing -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+                    )
+            )
+            Text(
+                text = label,
+                color = if (hearing || recognizing) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/** 左上角输入模式下拉框：手动点击 / 打字输入 / 语音模式 / 视频模式，互斥切换。 */
 @Composable
 private fun InputModeSelector(
     current: InputMode,

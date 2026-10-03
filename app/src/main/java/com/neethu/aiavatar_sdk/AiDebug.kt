@@ -163,6 +163,10 @@ fun aiDebugHelp(): String = """
 |                           there first). Same chain as push-to-talk.
 |  voice_record <arg>       Record ai_arg seconds (1..30) of mic with the same
 |                           MediaRecorder path as push-to-talk, then transcribe
+|  voice_free <arg>         on | off (omit ai_arg to toggle): free-talking
+|                           (continuous listening, VAD auto-segments and sends
+|                           each sentence) vs push-to-talk; works in voice and
+|                           video modes, barge-in interrupts the avatar
 |Modes:
     |  set_mode <arg>           Switch input mode: manual | text | voice | video
     |                           (video = camera call: needs a vision-capable LLM,

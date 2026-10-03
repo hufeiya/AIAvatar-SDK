@@ -57,6 +57,7 @@
 | `active_card` | — | 输出当前激活卡片：文件名 / name / spec / version / 开场白长度 / 系统提示词长度与前 100 字符（卡片未激活输出 `no active card`） |
 | `transcribe` | `ai_arg`=音频文件路径 | 语音识别（任务 4）：把音频文件走与「按住说话」完全相同的 ASR 链路（OpenAI 兼容 `/audio/transcriptions`，模型按设置推断：硅基流动默认 `Qwen/Qwen3-ASR-1.7B`），识别文本打印到 logcat。arg 为绝对路径或相对应用外部目录的相对路径（先 `adb push`）。**不需要麦克风权限**（不走 MediaRecorder），适合无手环境验证 ASR |
 | `voice_record` | `ai_arg`=秒数(1\|30) | 用与「按住说话」相同的 MediaRecorder 路径（AAC/m4a/16kHz）真录音 N 秒后自动转写，输出文件大小与识别文本；开始录音前会先打断正在播的回复（半双工）。**需要麦克风权限**：HyperOS 禁 adb 授权（`pm grant`/`install -g`/appops 均无效），首次须真手按住说话弹系统框授权；无权限时报 `录音启动失败：setAudioSource failed` |
+| `voice_free` | `ai_arg`= on \| off（省略=翻转） | 按住说话 ⇄ 自由说话切换（持久化，语音/视频模式聊天条左侧同款按钮）：自由态=连续聆听，软件 VAD 自动断句（静默 800ms 判句尾），说完一句自动 ASR+发送（视频模式自动附抓拍帧，freeTalk 下 autoSend 设置不生效）；虚拟人说话时**大声**开口=打断当前回复（barge-in，高门限+持续 350ms+600ms 宽限防扬声器残留误触）。`chat_state` 尾部显示 freeTalk=(listening/hearing) 状态 |
 | `set_mode` | `ai_arg`= manual \| text \| voice \| video | 切换输入模式（持久化）：manual=手动点击（完整 UI，全部按钮可见）/ text=打字输入（进入时自动隐藏所有界面按钮）/ voice=语音模式（同左，按住说话）/ video=视频模式（语音模式的一切 + 用户相机 PiP 小窗 + 人脸注视追踪 + 每轮发送附相机抓拍）。**video 有准入门控**：只有多模态（可收图）大模型才能进入，否则 FAIL 并带原因（切模型用 `set_llm_model`）。MIUI 禁触摸注入，用此命令切换后配合 `adb exec-out screencap -p` 验证 UI；首次进入视频模式会弹系统相机权限框，**须真手点允许**（HyperOS 禁 adb 授权，同麦克风） |
 | `video_camera` | `ai_arg`= front \| back（省略=翻转） | 视频模式前后摄切换（立即重绑相机）；相机未启动报错 |
 | `video_snapshot` | — | 探测视频模式的抓拍环形缓存（每 0.5s 一帧 512×512 JPEG(80)，深 3 帧）：输出最清晰一帧的字节数/清晰度/年龄与缓存深度；空=相机刚起，等 1s 再试。只探测不发送——发送路径由 `send_chat`/按住说话自动附帧 |

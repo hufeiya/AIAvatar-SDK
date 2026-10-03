@@ -121,7 +121,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
 }
 
 /**
- * 语音输入配置（任务 4）：ASR 模型 + 松手行为。
+ * 语音输入配置（任务 4）：ASR 模型 + 松手行为 + 说话方式。
  * 刻意不放进 [AiChatPrefs]——会话身份 = AiChatPrefs + 上下文，改 ASR 配置
  * 不该触发会话重建（正在播的回复会被杀掉）。
  */
@@ -130,20 +130,29 @@ data class VoicePrefs(
     val asrModel: String = "",
     /** 松手识别成功后直接发送；关闭则识别文本填入输入框，由用户确认后发送。 */
     val autoSend: Boolean = true,
+    /**
+     * 自由说话（连续聆听）：VAD 自动断句、说完即发（自由态下 [autoSend]
+     * 不生效，发送就是自由说话的意义）；false = 按住说话。聊天条左侧
+     * 「按住/自由」按钮切换。
+     */
+    val freeTalk: Boolean = false,
 )
 
 private const val KEY_AI_ASR_MODEL = "ai_asr_model"
 private const val KEY_AI_VOICE_AUTO_SEND = "ai_voice_auto_send"
+private const val KEY_AI_VOICE_FREE_TALK = "ai_voice_free_talk"
 
 fun SharedPreferences.loadVoicePrefs(): VoicePrefs = VoicePrefs(
     asrModel = getString(KEY_AI_ASR_MODEL, "").orEmpty(),
     autoSend = getBoolean(KEY_AI_VOICE_AUTO_SEND, true),
+    freeTalk = getBoolean(KEY_AI_VOICE_FREE_TALK, false),
 )
 
 fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
     edit()
         .putString(KEY_AI_ASR_MODEL, p.asrModel.trim())
         .putBoolean(KEY_AI_VOICE_AUTO_SEND, p.autoSend)
+        .putBoolean(KEY_AI_VOICE_FREE_TALK, p.freeTalk)
         .apply()
 }
 

@@ -68,6 +68,8 @@ internal class AiChatDebugHooks(
     val videoSnapshot: () -> String = { "AI chat not wired in this screen" },
     /** state 命令的视频状态增量行（相机/人脸/缓存）。 */
     val videoStatusLine: () -> String? = { null },
+    /** ai_cmd voice_free on|off（无参=翻转）：按住说话 ⇄ 自由说话切换。 */
+    val setVoiceFree: (String?) -> String = { _ -> "AI chat not wired in this screen" },
 )
 
 /**
@@ -228,6 +230,10 @@ internal suspend fun executeAiCommand(
             "video_snapshot" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.videoSnapshot()
+            }
+            "voice_free" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setVoiceFree(command.arg)
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
