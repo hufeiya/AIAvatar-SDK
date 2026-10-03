@@ -26,7 +26,7 @@
 | 命令 | 参数 | 作用 |
 |------|------|------|
 | `help` | — | 打印命令表到 logcat |
-| `state` | — | 输出当前状态：模型 / 场景 / 动作 / 表情 / 相机位姿 / FPS / 可用表情列表 |
+| `state` | — | 输出当前状态：模型 / 场景 / 动作 / 表情 / 相机位姿 / 视线（lookAt） / FPS / 可用表情列表 |
 | `list` | `ai_arg`= models \| scenes \| animations \| expressions \| cards | 列出可用资源（调用其他命令前先查有效取值） |
 | `load_model` | `ai_arg`=文件名 | 切换人物（assets/vrms 下的 .glb/.vrm），自动重置表情 |
 | `load_scene` | `ai_arg`=文件名 \| none | 切换场景（assets/scene 下的 .glb）；`none` 移除场景 |
@@ -42,6 +42,7 @@
 | `orbit` | `ai_x` `ai_y` | 相机环绕（屏幕像素，等效单指拖动） |
 | `reset_camera` | — | 相机恢复初始机位 |
 | `camera_shot` | `ai_arg`= closeup \| medium \| full \| long \| over \| off | 平滑运镜到预设机位：closeup 面部特写、medium 中景半身、full 全景全身、long 远景（大动作舞蹈用）、over 反应侧景；`off` 释放回自由相机 |
+| `look_at` | `ai_arg`= camera \| off，或 `ai_x` `ai_y` `ai_z`；省略 `ai_arg` = 查状态 | 视线控制（任务 5）：默认 camera（注视镜头=注视用户，由 FaceDriver 的 SaccadeEngine 每帧加注视抖动）；`ai_x/ai_y/ai_z`=世界坐标注视点（切 POINT 模式，未来人脸追踪同入口，**无 AI 会话也可用**——直接驱动 corelib 视线叠加）；`off`=关闭（头颈眼回动画自身姿态）；无参数=输出当前状态（目标/已施加 yaw/pitch/骨骼绑定），验证明看 yaw 是否非零 |
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
 | `open_panel` | `ai_arg`= none \| models \| animations \| expressions \| scenes \| cards \| settings | 打开/关闭对应底部面板（MIUI 禁止 shell 注入点击，用此命令驱动 UI 面板） |
 | `spring_debug` | `ai_arg`=on \| off | 弹簧骨骼诊断：on 时每秒向 logcat（tag `SpringBone`）输出各弹簧链根/梢关节的骨长 len=当前/静止 与方向 dir，用于真机物理排查 |
@@ -97,6 +98,12 @@ adb shell am start -n $PKG/.MainActivity --es ai_cmd pan --ef ai_x -150 --ef ai_
 adb shell am start -n $PKG/.MainActivity --es ai_cmd orbit --ef ai_x 200 --ef ai_y -100
 adb shell am start -n $PKG/.MainActivity --es ai_cmd reset_camera
 adb shell am start -n $PKG/.MainActivity --es ai_cmd camera_shot --es ai_arg closeup
+
+# 视线（任务 5）：查状态 / 指向世界坐标点 / 回到注视用户 / 关闭
+adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at
+adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --ef ai_x 2.5 --ef ai_y 1.0 --ef ai_z -3.5
+adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --es ai_arg camera
+adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --es ai_arg off
 
 # 截图并拉取
 adb shell am start -n $PKG/.MainActivity --es ai_cmd screenshot

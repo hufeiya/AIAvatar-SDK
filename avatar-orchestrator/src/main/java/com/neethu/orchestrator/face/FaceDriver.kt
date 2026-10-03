@@ -19,7 +19,11 @@ import kotlin.math.abs
  *     smoothed by [VowelDriver] with AIRI's exact constants)
  *  2. emotion morphs ([EmotionBlender], easeInOutCubic, 3 s auto-neutral)
  *  3. blink ([MicroMotionEngine], suppressed when the emotion owns the eye area)
- *  4. merge with AIRI's ownership rules and push into [AvatarController]:
+ *  4. gaze ([SaccadeEngine], AIRI eye-motions port): jitter the fixation point
+ *     around the tracking target (camera eye = the user's face) and write it
+ *     into corelib — the head/neck/eye bone overlay and its smoothing live
+ *     there
+ *  5. merge with AIRI's ownership rules and push into [AvatarController]:
  *     lip-sync owns the mouth (`aa/ih/ou/ee/oh`) while speaking; after speech
  *     ends the emotion re-asserts its mouth targets with a blend-back pass.
  *     Once everything the driver owns is at rest (no playback, no blend-back,
@@ -39,10 +43,19 @@ class FaceDriver(
     private val vowelDriver = VowelDriver()
     private val microMotion = MicroMotionEngine()
     private val blender = EmotionBlender(parentScope)
+    private val saccade = SaccadeEngine()
 
     @Volatile private var activePlayback: ActivePlayback? = null
     private var driverTime = 0f
     private var lipSyncActive = false
+
+    // ── Gaze (look-at) state ─────────────────────────────────────────────
+    // 默认 CAMERA：看着镜头 = 看着用户。未来用户视频系统拿到真实人脸坐标后
+    // 切 POINT 喂 setGazePoint，链路其余不动（AIRI trackingMode 同构）。
+    @Volatile private var gazeMode = GazeMode.CAMERA
+    @Volatile private var gazePoint = FloatArray(3)
+    private var lastGazeWrite: FloatArray? = null
+    private var lastGazeBase: FloatArray? = null
 
     /** Viseme blend-back state: after speech, emotion mouth targets fade in from 0. */
     private var visemeReturnTargets: Map<String, Float>? = null
@@ -119,6 +132,19 @@ class FaceDriver(
         vowelDriver.setPhonemeGroups(groups)
     }
 
+    /** Switch what the avatar looks at (see [GazeMode]). */
+    fun setGazeMode(mode: GazeMode) {
+        gazeMode = mode
+    }
+
+    /**
+     * World-space gaze point for [GazeMode.POINT] — the injection seam for a
+     * future camera-based face tracker (feed the user's face position here).
+     */
+    fun setGazePoint(x: Float, y: Float, z: Float) {
+        gazePoint[0] = x; gazePoint[1] = y; gazePoint[2] = z
+    }
+
     fun applyEmotion(cue: EmotionCue) {
         blender.apply(cue)
     }
@@ -167,6 +193,11 @@ class FaceDriver(
         var blink = microMotion.tickBlink(deltaSeconds)
         if (blender.eyeAreaActive) blink = 0f
 
+        // 3.5 gaze + saccade (AIRI eye-motions): after blink, before the
+        // emotion merge — write the fixation point into corelib; head/neck/eye
+        // bone solving and its smoothing all live there.
+        updateGaze(deltaSeconds)
+
         // 4. merge + send
         val visemeReturn = visemeReturnTargets
         if (visemeReturn != null) {
@@ -192,6 +223,49 @@ class FaceDriver(
     }
 
     private var debugAccum = 0f
+
+    /**
+     * Gaze channel: pick the base target from [gazeMode], let [SaccadeEngine]
+     * jitter a fixation point around it (AIRI eye-motions), and write it into
+     * corelib when it moves. BASE_RETRACK_EPS²: the base (camera eye / tracked
+     * face) moving beyond ~1 cm counts as "the user moved" — the fixation
+     * snaps onto it exactly (AIRI watch(focusPos) → instantUpdate semantics)
+     * and saccades re-jitter from there; smaller drift is ignored so a
+     * handheld camera doesn't cancel every saccade.
+     */
+    private fun updateGaze(dt: Float) {
+        val base: FloatArray? = when (gazeMode) {
+            GazeMode.CAMERA -> controller.getCameraLookAt()?.first
+            GazeMode.POINT -> gazePoint
+            GazeMode.NONE -> null
+        }
+        if (base == null) {
+            if (lastGazeWrite != null) {
+                controller.clearLookAtTarget()
+                lastGazeWrite = null
+                lastGazeBase = null
+            }
+            return
+        }
+        val lb = lastGazeBase
+        if (lb == null || distSq(lb, base) > BASE_RETRACK_EPS_SQ) {
+            saccade.snap(base[0], base[1], base[2])
+            lastGazeWrite = null
+        }
+        lastGazeBase = base.copyOf()
+        saccade.tick(dt, base[0], base[1], base[2])
+        val f = saccade.fixation
+        val lw = lastGazeWrite
+        if (lw == null || distSq(lw, f) > WRITE_EPS_SQ) {
+            controller.setLookAtTarget(f[0], f[1], f[2])
+            lastGazeWrite = f.copyOf()
+        }
+    }
+
+    private fun distSq(a: FloatArray, b: FloatArray): Float {
+        val dx = a[0] - b[0]; val dy = a[1] - b[1]; val dz = a[2] - b[2]
+        return dx * dx + dy * dy + dz * dz
+    }
 
     /**
      * 2 Hz trace of the viseme sampling path while a clip plays (tag
@@ -230,6 +304,12 @@ class FaceDriver(
         private const val BLINK = "blink"
         private const val SEND_EPSILON = 0.004f
         private val EMPTY_SCORES = FloatArray(0)
+
+        /** Base-target movement beyond this (world units²) re-fixates exactly. */
+        private const val BASE_RETRACK_EPS_SQ = 0.01f * 0.01f
+
+        /** Fixation write threshold (world units²) — keep corelib writes rare. */
+        private const val WRITE_EPS_SQ = 0.0001f * 0.0001f
 
         /** Default wLipSync phoneme order used when no explicit layout is bound. */
         private val DEFAULT_PHONEMES = listOf("A", "I", "U", "E", "O", "S")

@@ -282,6 +282,36 @@ class AvatarController {
         renderer?.clearVrmaIdleAnimation()
     }
 
+    // ── Public API: Gaze / Look-At ───────────────────────────────────────
+
+    /**
+     * Track a world-space gaze target. The avatar turns its head/neck (smooth,
+     * clamped to a natural range) and darts its eyes toward [x,y,z] on top of
+     * whatever animation is playing — feed it the camera eye to have the
+     * avatar look at the user, or a face position from a camera tracker.
+     *
+     * ```kotlin
+     * val (eye, _, _) = controller.getCameraLookAt()!!
+     * controller.setLookAtTarget(eye[0], eye[1], eye[2])
+     * ```
+     */
+    fun setLookAtTarget(x: Float, y: Float, z: Float) {
+        renderer?.setLookAtTarget(x, y, z)
+    }
+
+    /** Stop gaze tracking; the head returns to its animated pose. */
+    fun clearLookAtTarget() {
+        renderer?.clearLookAtTarget()
+    }
+
+    /**
+     * Last-frame gaze state (target, applied yaw/pitch offsets, bound bones),
+     * or `null` when no view is attached. Diagnostics surface.
+     */
+    fun getLookAtInfo(): LookAtInfo? {
+        return renderer?.lookAtInfo()
+    }
+
     // ── Public API: Spring Bone ──────────────────────────────────────────
 
     /**

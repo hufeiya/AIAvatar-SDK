@@ -139,6 +139,11 @@ fun aiDebugHelp(): String = """
 |                           (model list follows; empty model = vendor default)
 |  set_tts_provider <arg>   Switch TTS provider independently (unchecks
 |                           "same as LLM"): siliconflow | volcano
+|Gaze (look-at; default = camera, the avatar watches the user):
+|  look_at                  No ai_arg = dump gaze state (target + applied yaw/pitch)
+|  look_at <arg>            ai_arg = camera (watch the user/lens) | off (release);
+|                           or ai_x/ai_y/ai_z = world-space target point
+|                           (works with or without an AI session)
 |Contexts (Room-persisted conversation history; needs the AI service configured):
     |  contexts                 List contexts (id prefix, card, message count) + active
     |  new_context              Start a fresh context; previous ones stay selectable

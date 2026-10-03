@@ -55,7 +55,8 @@
 | `audio/PcmDecoder.kt` | WAV 纯 Kotlin 解析（16bit PCM/8bit/32f、立体声下混）+ MP3/OGG 走 MediaExtractor+MediaCodec(MediaDataSource) |
 | `face/FaceDriver.kt` | Choreographer 每帧混合：口型(时间线采样+VowelDriver 状态机)→情绪→眨眼；**所有权规则**：说话中口型独占嘴部、结束后 viseme 从 0 淡入情绪目标(blend-back)、眼区情绪压制眨眼；`controller.setExpressionTransitionDuration(0)` 后全部缓动自绘 |
 | `face/EmotionBlender.kt` | AIRI expression.ts 组合表(happy=happy0.7+aa0.2 等7种)、easeInOutCubic、起点捕获当前显示值、3s 自动回 neutral、eyeAreaActive 判定 |
-| `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s（gaze/saccade 未做，见任务5） |
+| `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s |
+| `face/SaccadeEngine.kt` | 视线 saccade（任务 5）：AIRI eye-motions.ts 精确移植——注视点 0.8-4.8s 分段均匀换点 + ±0.25 抖动 + snap 重注视；`GazeMode`(CAMERA 默认/POINT/NONE)，FaceDriver.tick 写 corelib，头颈眼骨骼解算与平滑在 corelib `VrmLookAtEngine` |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
 | `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 在 send 时统一追加一次（修掉旧版卡片双重注入） |
 | `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；`ConversationDatabase.kt`（Room 实体/DAO/单例库，任务3）+ `RoomConversationStore.kt`（镜像读+异步落库，任务3） |
@@ -122,6 +123,14 @@
   - **⚠️ 火山是两把钥匙 → 已按两字段落地**：`020b5acf-…`（豆包语音控制台，TTS WebSocket `X-Api-Key`）与 `ark-…`（方舟控制台，大模型）实测**互不通用**（互调 401/403）。AiChatPrefs 拆为 `apiKeyVolcano`（方舟·大模型）+ `apiKeyVolcanoTts`（豆包语音·合成），设置页在选火山 TTS 时**恒显**豆包语音 Key 字段（勾「同服务商」也要单填）；旧单字段遗留值按形态迁移（`ark-` 前缀→方舟，UUID 形→豆包语音，`splitLegacyVolcanoKey`）。方舟 key 用户已补签：**火山全链路真机打通**——doubao-seed-2-0-mini + seed-tts-2.0 四句流水/口型/标签协议（cam+emo+act 三路全触发）全过；`doubao-seedream-5-0-pro-260628` 是图像生成模型，chat 返回 RPM 配额限制（保留在清单，对话链路勿选它）。密钥明文在仓库根 secrets.properties（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY
   - 已知未覆盖：设置页下拉菜单真手点选（adb 已验证菜单可开、选项/当前标记正确）；火山 LLM 端到端对话（等用户补 Ark key，`set_provider volcano` + `send_chat` 即可复验）；HyperOS 麦克风权限墙照旧（ASR 验证走 `transcribe` 命令）
 
+- **任务 5 已完成（2026-10-03，真机 2c3769db）**：视线系统（gaze + saccade，设计见第六节任务 5 提示词与 A.1 第 24 条）——
+  - **corelib**：`internal/VrmLookAtEngine`（骨骼解算）+ `internal/GazeMath`（纯函数四元数/方向数学，JVM 可测）+ 公开 `LookAtInfo`。API：`controller.setLookAtTarget(x,y,z)`（世界坐标注视目标）/ `clearLookAtTarget()` / `getLookAtInfo()`。每帧在「动画写完骨骼局部变换之后、蒙皮矩阵传播之前」运行（渲染循环新增单次 `updateBoneMatrices()` 收口点）：读头骨世界位姿（先 `commitLocalTransformTransaction()` 保证世界变换反映本帧动画），解算「当前脸朝向→目标方向」的附加旋转，限幅（头+颈 yaw ±55°/pitch ±35°，相对**动画朝向**而非 rest——与点头/摇头类 VRMA 手势安全叠加），按 颈 0.35 / 头 0.65 分摊平滑分量（exp(-dt·7)≈300ms 收敛），**眼骨携带未平滑余量**（clamp ±25°）——眼神先到、头颈跟进的人类 saccade 分层；增益和恒为 1 故头颈收敛后眼回中。偏移=世界系旋转转父骨骼空间局部偏移 `L'=inv(P)·D·P·L`（⚠ getParent 返回 entity 必须 getInstance 往返，见记忆 filament-1683-api-constraints），与 VRMA/待机/拖拽完全可叠加；关闭时恢复 4 骨 rest 局部变换。脸方向在绑定时刻从「头骨静止世界四元数」反推为头局部向量（`faceLocalDir`）——**不假设骨骼轴约定**：实测 SK_Sun 头骨脸朝局部 −Y、10.vrm 朝 +Z，同一套代码两个模型都正确。
+  - **orchestrator**：`face/SaccadeEngine`（AIRI `useIdleEyeSaccades`+`randomSaccadeInterval`/eye-motions.ts 精确移植：分段均匀间隔 0.8-4.8s（400ms 一档、首档概率 0.075）+ 注视点 ±0.25 世界单位抖动（仅 x/y，z 恒等于基准）+ `snap()`（基准移动时精确贴住，AIRI watch(focusPos)→instantUpdate 语义；先检查后累加的计时语义照搬））+ `face/GazeMode`（CAMERA=注视相机眼位=注视用户（**默认**，未来视频系统把真实人脸坐标喂 `setGazePoint` 切 POINT 即可、链路零改动）/ POINT / NONE）。`FaceDriver.tick` 新增 3.5 步（眨眼之后、情绪合并之前）：`updateGaze(dt)`——基准目标移动 >1cm 视作"用户动了"触发 snap，注视点变化写 corelib（双 epsilon 去重，静止零写入）。
+  - **app**：`ai_cmd look_at`（无参=查状态输出 target+yaw/pitch+骨骼绑定；`camera|off`；`ai_x/ai_y/ai_z`=世界坐标点——**会话内外都可用**：有会话切 FaceDriver GazeMode，无会话直接驱动 controller）；`state` 命令输出增 lookAt 行；help 同步（docs/ai-debug-intents.md 已补）。
+  - **单测 162 全绿**（+14：GazeMathTest 9——yaw/pitch 符号约定锁死/往返/quatFromTo 含反平行边界/父系变换恒等式 `P·L'==D·P·L` 探测向量校验/竖直目标退化安全；SaccadeEngineTest 5——首帧即注视/间隔不跟随基准/snap 不动计时器/400s 蒙特卡洛间隔全落 0.8-4.8s 表范围/抖动幅度界内）。
+  - 真机验证（2c3769db，默认模型 SK_Sun）：启动即注视镜头（FaceDriver 默认 CAMERA，closeup 下 yaw+14.9°/pitch+15.8° 跟随运镜）；`look_at` 侧方点 (2.5,1.0,-3.5) 头颈链准确转到限幅 yaw=+55.0°（截图侧脸朝向正确、眼无斜视）；`look_at off` yaw/pitch 归零、`camera` 恢复；挥手 VRMA 播放中视线叠加照常跟踪（截图：手势姿态+头朝镜头+发梢弹簧自然，SpringBone 诊断 len=rest 零爆炸）；换模型 10.vrm↔SK_Sun 重绑正确（两种头骨轴约定 faceLocal 分别 (0,0.01,1.0)/(0.03,-1.0,0.05)）；全对话链路（LLM 标签+口型+视线同开）TurnCompleted 后视线保持；全程零 FATAL。截图存 /tmp/gaze_{front,side,gesture}.png（会话产物，未入库）。
+  - 已知未覆盖：设置页无视线开关（demo 默认开，SDK 侧 `session.faceDriver.setGazeMode` 即可关；UI 开关随视频系统一起做）；点击注视（AIRI mouse 模式）未做——移动端触摸被相机手势占用，等视频系统的脸位置作为唯一 POINT 源更合理。
+
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
   - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
@@ -168,7 +177,7 @@
   - **火山引擎**：LLM=方舟 Ark `https://ark.cn-beijing.volces.com/api/v3`（OpenAI 兼容 chat/completions；6 个模型 chat 实测 5 通——doubao-seed-2-0-mini(默认)/2-1-turbo/2-1-pro/deepseek-v4-flash-ga/seed-character 均回包，**seedream-5-0-pro 是图像模型 chat 报 RPM 限额**）；TTS=豆包语音 seed-tts-2.0（V3 WebSocket，`X-Api-Key` + `X-Api-Resource-Id: seed-tts-2.0`，音色 zh_female_vv_uranus_bigtts 默认等 6 个）；两把 key 分字段存储见 2.4 双服务商条目
   - 密钥明文：仓库根 `secrets.properties`（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY(待补)；设备侧经 run-as 写入 demo_settings（`ai_api_key_siliconflow`/`ai_api_key_volcano`）
 - 填写入口：App ⚙️ 设置 →「AI 配置」→ 选服务商 + 填 Key 即可对话（模型/音色留空=默认）。
-- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest`（144 全绿）
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（162 全绿，任务 5 起 corelib 也有纯 JVM 单测）
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - 设备：`2c3769db`（本次双厂商验证机，adb input 可用）与 `62fabe84`（小米14/HyperOS，禁 shell input）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
@@ -242,7 +251,7 @@ API Key: <在这里贴上Key>
 验收: 真机按住说话→识别文本→发送→回复正常。提交代码。
 ```
 
-### 任务 5：视线系统（corelib lookAt + saccade，难度最高，放后）
+### 任务 5：视线系统（✅ 已完成，2026-10-03，见第二章 2.4）
 
 ```
 继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第三章(设计决策2)与记忆 filament-camera-programmatic-control。
@@ -458,6 +467,7 @@ LLM SSE delta
 21. **HyperOS 麦克风 runtime 权限 adb 三条路全堵（任务 4）**：`pm grant` 报 SecurityException（shell 无 GRANT_RUNTIME_PERMISSIONS）、`adb install -r -g` 后 dumpsys 仍 `granted=false`、`appops set` 包级 allow 但 **uid 级被系统管控恒 ignore**——MediaRecorder `setAudioSource` 直接抛 `setAudioSource failed`。对策：验证 ASR 链路**不需要麦克风**——`ai_cmd transcribe <文件>` 走 file→bytes→适配器，与按住说话完全同一 ASR 路径（host 用 TTS 合成语音 push 进去还能做 TTS→ASR 闭环自校验）；录音链路只能真手首按授权。**顺带的观测坑：`ai_cmd screenshot` 抓的是渲染帧（`controller.captureFrame`，纯 3D 无 Compose UI），验证按钮显隐/聊天条形态必须用 `adb exec-out screencap -p`**。
 22. **双服务商改造期间的三个坑（2026-10-03）**：①MOSS-TTSD 的模型实名是 **`fnlp/MOSS-TTSD-v0.5`**（裸 `MOSS-TTSD-v0.5` 报 `Model does not exist`），且它**不接受裸短音色名**（`anna`→`Invalid voice`），必须用 CosyVoice 引用 `FunAudioLLM/CosyVoice2-0.5B:anna`（跨模型音色互认，实测 200）；MOSS 的 mp3 输出只收 sample_rate 32000/44100，wav/pcm 16k 不受限。②火山语音 WebSocket 的鉴权域按 Resource-Id 分家：`volc.service_type.10029`（老 1.0 大模型 TTS）只认 AppID+AccessToken（`X-Api-App-Key`+`X-Api-Access-Key`，API Key 进去 403/401/400 各样花式拒绝）；**API Key 域的资源号就是字面量 `seed-tts-2.0`**（`X-Api-Key` 头实测 200 出音频）。③火山帧解析 `parseFrame` 的 ptr 必须整体 `= headerSize*4` 定位——逐字节步进少算一个 reserved 字节（ptr 停在 3 而非 4），事件号读偏成垃圾值，MockWebServer 单测首跑即炸（`StringIndexOutOfBounds Range [11, 11+0x32000000)`），**协议解析必须先写帧级单测再上真机**。
 23. **火山是两把钥匙（2026-10-03 实测，已按两字段落地）**：豆包语音控制台 key（`020b5acf-…`，TTS WebSocket `X-Api-Key` 可用）与方舟 Ark key（`ark-…`，chat/completions 可用）**互不通用**（互调 401/403——语音域按 Resource-Id 分鉴权域，Ark 域按 Bearer key 查表）。初版两把 key 共用一个「火山引擎 API Key」字段是设计缺陷：用户同时要火山 LLM+TTS 时必然断一头。已拆 `apiKeyVolcano`/`apiKeyVolcanoTts` 两字段，选火山 TTS 时豆包语音 Key 字段恒显（勾「同服务商」也要单填，下拉框旁的文案讲清楚）；旧单字段值按 `ark-` 前缀形态迁移（`splitLegacyVolcanoKey` 纯函数+单测）。另：`doubao-seedream-5-0-pro-260628` 是图像生成模型，chat/completions 返回 `ModelAccountRpmRateLimitExceeded`（账户对该模型 RPM 配额为 0 的表现），排查"火山某个模型报 RPM 超限"先想到这一条。
+24. **视线系统的三个坑（任务 5，2026-10-03）**：①**脸方向不能假设骨骼轴**：头骨局部系因模型而异（10.vrm 脸朝头局部 +Z，SK_Sun 朝 −Y——`VrmLookAt: bound` 日志的 `faceLocal=` 可辨）。必须在绑定时刻用 `inv(头rest世界四元数)·(0,0,1)` 反推 faceLocalDir（VRM 模型静止面朝世界 +Z：1.0 天然如此，0.x 被 renderer 翻转 180° 后如此，故绑定必须放在翻转**之后**）；直接给头骨叠欧拉角必有一个模型头反着转。②**读世界变换前必须 `commitLocalTransformTransaction()`**：VRMA 每帧只写局部变换，不提交就读头骨世界位姿会拿到上一帧的陈旧值（写完偏移再 `updateBoneMatrices()` 传播蒙皮，渲染循环里 updateBoneMatrices 从两个动画分支收口成 gaze 之后的一次）。③**眼骨余量分层依赖增益和=1**：头 0.65+颈 0.35 平滑分量，眼骨补 `目标角−平滑角`——头颈收敛后眼自然回中；改增益时两处必须同步改，否则注视点永远差一截（无眼骨模型没有补足通道，落点天然略短，可接受）。
 
 ### A.2 调参速查表
 
@@ -481,6 +491,9 @@ LLM SSE delta
 | 语音识别失败/识别为空 | 先 `ai_cmd transcribe <push 的音频>` 分离"录音问题"vs"ASR 问题"（TTS 合成一段语音 push 进去可闭环自校验）；识别空文本=离麦远/环境静音；ASR 模型确认：硅基流动默认 `Qwen/Qwen3-ASR-1.7B`（设置可显式覆盖）；**mp3 输入偶发 HTTP 500 空 body 是硅基流动 ASR 端问题，换 wav 重试** |
 | 火山 TTS/LLM 报 401/403 | 看错误条/logcat 里的响应体：Ark `The API key doesn't exist` = 填的是语音 Key 不是方舟 Key（A.1 第 23 条）；TTS 403 = `X-Api-Key` 配了不匹配的 Resource-Id（必须 `seed-tts-2.0`，A.1 第 22 条） |
 | 切服务商后模型/音色不对 | 正常防护路径：存储值不在新服务商清单一律落该服务商默认（`resolveLlmModel/resolveTtsModel/resolveVoice` 校验+默认）；`ai_cmd chat_state` 看"已解析生效"配置核对 |
+| 视线不动/想验证视线 | `ai_cmd look_at`（无参）看 target/yaw/pitch（yaw 非零=在生效）；`look_at camera` 回注视用户、`look_at off` 关闭、`ai_x/ai_y/ai_z` 指向世界点看头是否转向限幅 |
+| 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
+| 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
 
 验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 

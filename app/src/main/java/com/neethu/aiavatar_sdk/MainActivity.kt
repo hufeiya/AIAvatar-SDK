@@ -70,6 +70,7 @@ import com.neethu.corelib.rememberAvatarController
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.spokenGreeting
+import com.neethu.orchestrator.face.GazeMode
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
@@ -970,6 +971,48 @@ private fun DemoScreen(
                     "ttsModel=${resolveTtsModel(provider, uiState.aiPrefs.ttsModel)} " +
                     "voice=${resolveVoice(provider, uiState.aiPrefs.voice)} " +
                     "ttsKey=${if (uiState.aiPrefs.apiKeyForTts().isNotBlank()) "set" else "MISSING"}"
+            },
+            // 视线控制：会话存在时切 FaceDriver 的 GazeMode（SaccadeEngine 接管
+            // 每帧写入）；无会话时直接驱动 controller（corelib 视线叠加不依赖会话）
+            lookAt = { arg, x, y, z ->
+                when (arg?.lowercase()) {
+                    "off", "none" -> {
+                        session?.faceDriver?.setGazeMode(GazeMode.NONE)
+                        controller.clearLookAtTarget()
+                        "gaze off (head returns to the animation pose)"
+                    }
+                    "camera", "user", "lens" -> {
+                        val fd = session?.faceDriver
+                        if (fd != null) {
+                            fd.setGazeMode(GazeMode.CAMERA)
+                        } else {
+                            // 无会话：写一次相机眼位快照（有会话时 FaceDriver 每帧写）
+                            controller.getCameraLookAt()?.first?.let {
+                                controller.setLookAtTarget(it[0], it[1], it[2])
+                            }
+                        }
+                        "gaze mode = camera (tracking the user's position)"
+                    }
+                    null -> controller.getLookAtInfo()?.toString()
+                        ?: "gaze state unavailable (renderer not attached)"
+                    else -> {
+                        if (x == null && y == null && z == null) {
+                            throw IllegalArgumentException(
+                                "look_at expects camera|off, no ai_arg (state), or ai_x/ai_y/ai_z, got '$arg'"
+                            )
+                        }
+                        val px = x ?: 0f; val py = y ?: 0f; val pz = z ?: 0f
+                        session?.faceDriver?.let { fd ->
+                            fd.setGazePoint(px, py, pz)
+                            fd.setGazeMode(GazeMode.POINT)
+                        }
+                        controller.setLookAtTarget(px, py, pz)
+                        "look-at target = (%.2f, %.2f, %.2f)%s".format(
+                            px, py, pz,
+                            if (session?.faceDriver != null) " (FaceDriver POINT mode)" else " (controller, no session)",
+                        )
+                    }
+                }
             },
         )
     }

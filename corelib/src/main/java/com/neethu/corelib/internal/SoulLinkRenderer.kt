@@ -42,6 +42,7 @@ import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.LightingRig
+import com.neethu.corelib.LookAtInfo
 import com.neethu.corelib.ToneMappingMode
 
 /**
@@ -106,6 +107,9 @@ internal class SoulLinkRenderer(
 
     // Expression (morph target / blend shape) support
     private var expressionManager: VrmExpressionManager? = null
+
+    // Gaze (look-at) bone overlay support
+    private var lookAtEngine: VrmLookAtEngine? = null
 
     // Spring bone physics support
     internal var springBoneManager: VrmSpringBoneManager? = null
@@ -262,7 +266,6 @@ internal class SoulLinkRenderer(
                 if (vrma.consumeIdleSwap()) pendingSpringReset = true
                 val elapsed = (frameTimeNanos - vrmaStartTime).toDouble() / 1_000_000_000.0
                 vrma.update(elapsed.toFloat())
-                animator?.updateBoneMatrices()
             } else {
                 animator?.let { anim ->
                     if (currentAnimationIndex >= 0 && currentAnimationIndex < anim.animationCount) {
@@ -276,10 +279,20 @@ internal class SoulLinkRenderer(
                         }
 
                         anim.applyAnimation(currentAnimationIndex, time)
-                        anim.updateBoneMatrices()
                     }
                 }
             }
+
+            // Gaze overlay: rides on top of the animated pose — reads the
+            // post-animation head world transform and adds clamped head/neck/
+            // eye rotation toward the look-at target — so it must run after
+            // the animation has written bone locals and before skin matrices
+            // propagate. (The single updateBoneMatrices below covers both
+            // animation branches; the spring-bone block re-runs it later.)
+            val gazeDt = if (lastFrameTimeNanos == 0L) 0.016f
+            else ((frameTimeNanos - lastFrameTimeNanos).coerceAtLeast(0L)) / 1_000_000_000.0f
+            lookAtEngine?.update(gazeDt.coerceIn(0.001f, 0.05f))
+            animator?.updateBoneMatrices()
 
             // Update expression morph weights each frame (with smooth transitions)
             expressionManager?.update(frameTimeNanos)
@@ -736,6 +749,7 @@ internal class SoulLinkRenderer(
             vrmaEngine = null
             idleSource = null
             expressionManager = null
+            lookAtEngine = null
             springBoneManager = null
             animator = null
 
@@ -811,6 +825,17 @@ internal class SoulLinkRenderer(
                 // (chest falls back spine → upperChest is tried first).
                 headEntity = resolveHumanoidEntity(asset, bytes, "head")
                 chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
+
+                // Gaze overlay engine — bound after the VRM 0.x root flip so the
+                // captured rest orientation already faces the camera (+Z).
+                lookAtEngine = VrmLookAtEngine(modelViewer.engine).also { gaze ->
+                    gaze.bind(
+                        headEntity,
+                        resolveHumanoidEntity(asset, bytes, "neck"),
+                        resolveHumanoidEntity(asset, bytes, "leftEye"),
+                        resolveHumanoidEntity(asset, bytes, "rightEye"),
+                    )
+                }
 
                 // A pending shot re-frames the freshly loaded character to the
                 // same framing (shot survives model switches until cancelled).
@@ -971,6 +996,26 @@ internal class SoulLinkRenderer(
     fun setExpressionTransitionDuration(durationMs: Long) {
         expressionManager?.setTransitionDuration(durationMs)
     }
+
+    // ── Gaze (Look-At) API ───────────────────────────────────────────────
+
+    /**
+     * Track a world-space gaze target (typically the camera eye — where the
+     * user's face is). The gaze overlay adds clamped, smoothed head/neck
+     * rotation and snappy eye-bone rotation toward the target on top of
+     * whatever animation is playing.
+     */
+    fun setLookAtTarget(x: Float, y: Float, z: Float) {
+        lookAtEngine?.setTarget(x, y, z)
+    }
+
+    /** Stop tracking; the driven bones return to their rest locals. */
+    fun clearLookAtTarget() {
+        lookAtEngine?.clearTarget()
+    }
+
+    /** Last-frame gaze state for diagnostics. */
+    fun lookAtInfo(): LookAtInfo? = lookAtEngine?.info()
 
     /**
      * @return the number of animations in the current model, or 0 if no model is loaded.
