@@ -89,6 +89,13 @@
   - 真机验证（62fabe84，硅基流动 DeepSeek-V3）：对话后 `run-as` 拉 DB 确认 sessions/messages 落库（历史保留原始标签 ✓）；**force-stop 重启后模型逐字复述重启前的第一句提问**（历史恢复铁证）；new_context 后模型对旧对话"不记得"（上下文隔离 ✓）；select_context 切回后按 4 条历史继续对话；contexts 列表按最近使用排序；全程零 FATAL。设置页截图：拖拽把手/折叠类别/半屏默认渲染 ✓
   - 已知未覆盖：设置页拖拽手势与折叠点按需真手验证（HyperOS 禁 shell 注入触摸，adb 无法驱动 swipe）；上下文删除按钮未真机点按（与已验证的 DAO deleteFor 同一路径）
 
+- **默认待机 Arms Down + 冷启动即待机（2026-10-03，真机 62fabe84，用户反馈"默认不要 T-pose、idle 用 Arms Down 不要 look around"）**：
+  - **冷启动 T-pose 根因**：引擎 `setIdleAnimation` 只挂槽位不启动播放，idle 只在"一次性动作播完"或 `stop()` 时接管——冷启动谁都不触发，模型停在绑定姿态。已改接管语义：挂 idle 时无动作在播 → **立即进入待机循环**；展示旧 idle 时挂新 idle → 热切换从第 0 帧起播；展示 idle 时挂 null → 回 rest pose；动作播放中不打断（播完/stop 自然回新 idle）
+  - **`resolveIdleAction` 二级坑**：候选集先按文件名含 "idle" 过滤，而 **"Arms Down" 文件名不含 idle** 永远进不了候选——IDLE_PREFERENCE 首位改 Arms Down 后仍会静默落到第二优先级。已修：优先级表直接在库全量里按文件名精确匹配，含 idle 的任意文件作末位兜底
+  - **idle 与 AI 会话解耦**：原来 idle 挂在 `session.idleAction`（AI 会话建立后才生效，未配 AI 时冷启动必 T-pose）。app 改为 `applyIdle` 直挂 controller（`LaunchedEffect(state)` 模型每次加载后按持久化值/内置优先级挂载），面板长按与 `ai_cmd set_idle/idle_off` 同改；`session.idleAction` API 保留（SDK 集成者用），demo 不再走
+  - **renderer 同源去重**：`idleSource` 记录已挂来源，重复 `setVrmaIdleAnimation(同路径)` 直接返回（否则 produceState/LaunchedEffect 重组反复重解析+从头起播，待机莫名词跳）；模型重载时随引擎重建清空
+  - `Arms Down.vrma` 是 0.0417s **单帧静态姿势**（循环即恒定垂臂站立）；真机验证：冷启动截图即垂臂站姿、LLM 两手势（挥手+握拳）播完回 Arms Down、`set_idle` 换 Look Around 立即转头（6.33s clip 热切换）再切回 Arms Down，全程零 FATAL
+
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
   - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
@@ -420,6 +427,7 @@ LLM SSE delta
 17. **release() 打断停在 wait() 的写线程 → FATAL 闪退（任务 8 期间实录于旧构建）**：`AudioTrackPlaybackQueue.release()` 先置 released 再 `writer?.interrupt()`，而 `writeLoop` 的 `lock.wait()` 没有捕获 InterruptedException——写线程正空等队列时 close/rebuild 会话（设置逐字符改动即重建、`AiChatController.ensure` 换配置）会让 `avatar-playback` 线程带未捕获异常死亡（MIUI 上 app 闪退重启）。打断主路径反而正常（写线程多半在 write//drain 里而非 wait 里），所以任务 1/2 冒烟没暴露。已修：wait 包 try/catch，中断即静默退出（released 已先置位，语义就是关停）。单测：构造队列→writer 停稳→release→用默认 UncaughtExceptionHandler 断言无未捕获异常。
 18. **标签名统一小写 vs 模型 morph 名大小写敏感（直接表情全灭的元凶，任务 8.1）**：`InlineTagExtractor` 沿用老协议把 cue 名 `lowercase()`，而 `AvatarState.Ready.expressions`/`getAvailableExpressions()` 返回的 morph 名是大小写敏感的（SK_Sun 是 ARKit 命名 `blinkLeft/eyeBlinkLeft/browInnerUp…`）——`<emo:blinkLeft:1>` 解析成 `blinkleft` 后被 availableExpressions 门控**静默丢弃**，事件都不发。最坑的是模型明明发了标签（`raw reply` 日志可见），表象却是"模型不遵守协议"。已修：`FaceDriver.resolveExpression` 大小写不敏感还原真实 morph 名（纯函数单测），分派时规范情绪走小写、直接表情走还原名。教训：**"模型不听话"先看 `AvatarSession` 的 `raw reply:` 日志再归因**——这次连试 4 轮提示词工程都无效，实际是客户端丢事件。
 19. **调试钩子读 UI 状态快照会陈旧（任务 3）**：`AiChatDebugHooks` 若捕获 Compose 的列表状态（如设置页用的 `contextList`，只在打开设置页时刷新），`ai_cmd` 在任意时刻执行时读到的是旧值——真机首次验证 `contexts` 返回空列表，实际库里已有会话行（run-as 拉库证实）。已修：`contexts`/`select_context` 钩子改为执行时 `runBlocking + Dispatchers.IO` 实时查库（调试命令在主线程同步执行，几十行的小查询阻塞可忽略）。教训：**给 adb 代理用的查询命令一律实时读数据源，不读 UI 派生状态**。
+20. **"待机优先级表"按文件名先过滤候选集会让不含关键字的条目永远落空（默认 idle 改 Arms Down 时踩）**：`resolveIdleAction` 原实现先 `filter { 文件名含 "idle" }` 再按 IDLE_PREFERENCE 精确匹配——首位换成 "Arms Down" 后它根本不在候选集里，静默落到第二优先级（logcat 里 `Loaded idle VRMA: 6.33s` 而非 0.042s 暴露）。修法：优先级表直接在库全量里精确匹配。**观测点：挂载的 idle 是否符合预期，看 `SoulLinkRenderer` 的 `Loaded idle VRMA: <时长>`——Arms Down 是单帧（0.042s），一眼可辨**。
 
 ### A.2 调参速查表
 
@@ -437,6 +445,7 @@ LLM SSE delta
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
 | 模型不发标签/用（括号）演戏 | 先看 `AvatarSession` 的 `raw reply:` 日志区分"没发"vs"发了被丢弃"（A.1 第 18 条）；检查 `system prompt:` 行三段清单是否注入；示例是否在提示词末尾；温度是否 ≤0.6 |
 | 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
+| 冷启动就是 T-pose | idle 挂载失败或被清：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`（demo 现在与 AI 会话解耦，模型加载即自动挂，默认 Arms Down）；挂上了仍 T-pose 则查引擎版本是否含"挂 idle 即接管"语义 |
 | 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |
 
 验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。

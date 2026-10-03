@@ -96,6 +96,14 @@ internal class SoulLinkRenderer(
     private var vrmaEngine: VrmaAnimationEngine? = null
     private var vrmaStartTime: Long = 0L
 
+    /**
+     * 当前已挂载 idle 的来源（assets 路径或文件绝对路径）；null = 无。
+     * 用于同源去重——produceState/LaunchedEffect 在重组时会反复用同一来源
+     * 调 setVrmaIdleAnimation，不去重会每次重新解析并从头起播（待机莫名词跳）。
+     * 模型重载时随引擎一并清空（引擎重建，idle 槽丢失）。
+     */
+    private var idleSource: String? = null
+
     // Expression (morph target / blend shape) support
     private var expressionManager: VrmExpressionManager? = null
 
@@ -726,6 +734,7 @@ internal class SoulLinkRenderer(
             stopAnimation()
             stopVrmaAnimation()
             vrmaEngine = null
+            idleSource = null
             expressionManager = null
             springBoneManager = null
             animator = null
@@ -1031,6 +1040,7 @@ internal class SoulLinkRenderer(
      * the model falls back to its rest pose. Does not interrupt playback.
      */
     fun setVrmaIdleAnimation(assetsPath: String): Boolean {
+        if (idleSource == assetsPath) return true
         return try {
             val assets = surfaceView.context.assets
             assets.open(assetsPath).use { input ->
@@ -1044,6 +1054,7 @@ internal class SoulLinkRenderer(
 
     /** Same as [setVrmaIdleAnimation] but from an absolute file path. */
     fun setVrmaIdleAnimationFromFile(path: String): Boolean {
+        if (idleSource == path) return true
         return try {
             val file = java.io.File(path)
             if (!file.isFile) {
@@ -1062,6 +1073,7 @@ internal class SoulLinkRenderer(
 
     /** Drop the idle; one-shots and stops return to the rest pose again. */
     fun clearVrmaIdleAnimation() {
+        idleSource = null
         vrmaEngine?.setIdleAnimation(null)
     }
 
@@ -1069,6 +1081,7 @@ internal class SoulLinkRenderer(
         val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
         return if (animation != null) {
             vrmaEngine?.setIdleAnimation(animation)
+            idleSource = source
             android.util.Log.i("SoulLinkRenderer",
                 "Loaded idle VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
             true

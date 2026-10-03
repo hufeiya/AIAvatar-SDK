@@ -51,6 +51,9 @@ internal class VrmaAnimationEngine(
     private var isLooping = true
     private var targetHipsY: Float = 1.0f
 
+    /** 最近一帧的渲染时钟（setIdleAnimation 热切换/立即接管时用来归零相位）。 */
+    private var lastElapsedSeconds = 0f
+
     // Idle takeover: when set, a finished one-shot (or manual stop) switches
     // to the looping idle animation instead of the rest pose — the VRM rest
     // pose is the A-pose, which reads as "arms spread" (§7.10).
@@ -121,8 +124,40 @@ internal class VrmaAnimationEngine(
 
     fun setAnimation(animation: VrmaParser.VrmaAnimation) { currentAnimation = animation }
 
-    /** Set the looping idle the engine returns to after one-shots / stops (null = rest pose). */
-    fun setIdleAnimation(animation: VrmaParser.VrmaAnimation?) { idleAnimation = animation }
+    /**
+     * Set the looping idle the engine returns to after one-shots / stops
+     * (null = rest pose).
+     *
+     * 接管语义：
+     * - 挂上 idle 时没有任何动作在播（模型加载后/冷启动）→ **立即进入待机
+     *   循环**，否则模型会一直停在绑定姿态（T-pose）；
+     * - 正在展示旧 idle 时挂新 idle → 立即热切换并从第 0 帧起播；
+     * - 正在展示 idle 时挂 null → 停止播放并回 rest pose；
+     * - 正在播动作时不打断——播完或 [stop] 自然回到新 idle。
+     */
+    fun setIdleAnimation(animation: VrmaParser.VrmaAnimation?) {
+        val showingIdle = isPlaying && idleTakeover
+        idleAnimation = animation
+        when {
+            animation == null -> {
+                if (showingIdle) {
+                    isPlaying = false
+                    currentAnimation = null
+                    idleTakeover = false
+                    restoreRestPose()
+                }
+            }
+            !isPlaying || showingIdle -> {
+                currentAnimation = animation
+                isPlaying = true
+                isLooping = true
+                idleTakeover = true
+                idleAnchor = lastElapsedSeconds
+                idleSwapPending = true
+            }
+            // else: 动作播放中——只更新槽位，播完/stop 后接管
+        }
+    }
     fun getIdleDuration(): Float = idleAnimation?.duration ?: 0f
 
     fun play(loop: Boolean = true) { isPlaying = true; isLooping = loop; idleTakeover = false }
@@ -162,6 +197,7 @@ internal class VrmaAnimationEngine(
     // ── Frame Update ─────────────────────────────────────────────────────
 
     fun update(elapsedSeconds: Float) {
+        lastElapsedSeconds = elapsedSeconds
         val anim = currentAnimation ?: return
         if (!isPlaying || anim.duration <= 0f) return
 

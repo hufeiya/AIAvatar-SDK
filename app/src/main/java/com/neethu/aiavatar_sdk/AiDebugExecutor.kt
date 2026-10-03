@@ -78,7 +78,7 @@ internal suspend fun executeAiCommand(
             }
             "set_idle" -> setIdleCommand(uiState, command, chat)
             "idle_off" -> chat?.clearIdle?.invoke()
-                ?: "no AI chat session — configure the AI service first"
+                ?: "idle not wired in this screen"
             "move" -> moveCommand(controller, command)
             "zoom" -> zoomCommand(controller, command)
             "pan" -> panCommand(controller, command)
@@ -295,7 +295,7 @@ private fun setIdleCommand(
 ): String {
     val name = resolveAssetFile(command.arg, uiState.animationFiles, "animations", listOf(".vrma"))
     return chat?.setIdle?.invoke(name, uiState.useExternalAnimations)
-        ?: "no AI chat session — configure the AI service first"
+        ?: "idle not wired in this screen"
 }
 
 private fun moveCommand(controller: AvatarController, command: AiDebugCommand): String {

@@ -62,6 +62,7 @@ import com.neethu.corelib.rememberAvatarController
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.spokenGreeting
+import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
@@ -471,6 +472,29 @@ private fun DemoScreen(
         controller.loadModel("vrms/${uiState.selectedModel}")
     }
 
+    // ── 待机动作：直接挂到渲染控制器，与 AI 会话解耦 ──────────────────────
+    // 模型每次（重）加载后按持久化选择（否则内置优先级 Arms Down 优先）挂
+    // idle；引擎在无动作播放时会立即进入待机循环，冷启动不再是 T-pose，
+    // 未配置 AI 服务也同样有待机。同源重复挂载由 renderer 去重（不重解析）。
+    val applyIdle: (ActionEntry?) -> Unit = { entry ->
+        val assetPath = entry?.assetPath
+        val filePath = entry?.filePath
+        when {
+            entry == null -> controller.clearVrmaIdleAnimation()
+            assetPath != null -> controller.setVrmaIdleAnimation(assetPath)
+            filePath != null -> controller.setVrmaIdleAnimationFromFile(filePath)
+        }
+    }
+    LaunchedEffect(state) {
+        applyIdle(
+            resolveIdleAction(
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_IDLE_ANIMATION, null),
+                uiState.assetAnimationPaths(context),
+            )
+        )
+    }
+
     // Load the selected scene whenever it changes
     LaunchedEffect(uiState.selectedScene) {
         uiState.selectedScene?.let { scene ->
@@ -525,19 +549,14 @@ private fun DemoScreen(
             contextId = uiState.contextId,
             characterId = uiState.activeCardFile,
         )?.also { s ->
-            // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加外置库；
-            // 待机 = 持久化选择优先，否则按内置优先级挑中性 idle。模型（重）加载后
-            // produceState 因 state 键重跑，这里顺便把 idle 重新挂到新引擎上。
+            // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加
+            // 外置库。待机不在这里挂——它属于渲染控制器而非 AI 会话（见上方
+            // LaunchedEffect(state) 的 applyIdle），未配置 AI 也有待机。
             val assetPaths = uiState.assetAnimationPaths(context)
             val externalFiles =
                 if (uiState.useExternalAnimations) uiState.externalAnimationAbsolutePaths(context)
                 else emptyList()
             s.actionCatalog = buildLlmActionCatalog(assetPaths, externalFiles)
-            s.idleAction = resolveIdleAction(
-                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getString(KEY_IDLE_ANIMATION, null),
-                assetPaths,
-            )
         }
     }
 
@@ -698,8 +717,6 @@ private fun DemoScreen(
                 }
             },
             setIdle = { relativePath, external ->
-                val s = session
-                    ?: return@AiChatDebugHooks "no AI chat session — idle will apply once configured"
                 val root = uiState.externalAnimationsRoot(context)
                 val entry = idleEntryFor(relativePath, external, root)
                     ?: return@AiChatDebugHooks "cannot resolve idle entry for $relativePath"
@@ -707,14 +724,14 @@ private fun DemoScreen(
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit().putString(KEY_IDLE_ANIMATION, prefValue).apply()
                 uiState.idleAnimation = prefValue
-                s.idleAction = entry
+                applyIdle(entry)
                 "idle set to ${entry.label} (${entry.tag})"
             },
             clearIdle = {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit().remove(KEY_IDLE_ANIMATION).apply()
                 uiState.idleAnimation = null
-                session?.idleAction = null
+                applyIdle(null)
                 "idle cleared (one-shots fall back to rest pose)"
             },
             contextsSnapshot = {
@@ -1026,7 +1043,7 @@ private fun DemoScreen(
                         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                             .edit().putString(KEY_IDLE_ANIMATION, prefValue).apply()
                         uiState.idleAnimation = prefValue
-                        session?.idleAction = entry
+                        applyIdle(entry)
                         Toast.makeText(context, "待机动作：${entry.label}", Toast.LENGTH_SHORT).show()
                     }
                 }

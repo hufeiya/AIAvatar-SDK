@@ -63,8 +63,13 @@ fun buildLlmActionCatalog(
     return entries.sortedWith(compareBy({ categoryRank(it.category) }, { it.tag }))
 }
 
-/** 内置待机优先级：中性站立 idle 优先于情绪化/倚靠姿态（§7.10）。 */
+/**
+ * 内置待机优先级（§7.10）：`Arms Down` 是单帧静态站姿（0.042s 单帧，循环即
+ * 恒定垂臂站立），最接近"数字人安静站着"的预期故排最前；其余为带微动作的
+ * 中性 idle。用户长按/ai_cmd 另选时持久化值优先于此表。
+ */
 private val IDLE_PREFERENCE = listOf(
+    "Arms Down",
     "Idle Stand Looking Around",
     "Standing Idle",
     "Female Idle",
@@ -95,7 +100,8 @@ fun idlePrefValueFor(relativePath: String, external: Boolean, externalRoot: File
 
 /**
  * Resolve the idle entry: persisted value wins（跨重启保持用户选择），
- * 否则按 [IDLE_PREFERENCE] 在内置库里挑第一个命中的中性 idle，
+ * 否则按 [IDLE_PREFERENCE] 在内置全量库里按文件名精确挑第一个命中的
+ * （注意 "Arms Down" 文件名不含 "idle"，不能先按名字过滤候选集），
  * 再否则任选一个文件名含 "idle" 的；都没有 → null（回落 rest pose）。
  */
 fun resolveIdleAction(persisted: String?, assetPaths: List<String>): ActionEntry? {
@@ -110,11 +116,12 @@ fun resolveIdleAction(persisted: String?, assetPaths: List<String>): ActionEntry
         }
         return idleEntryFor(p, external = false, externalRoot = null)
     }
-    val idleFiles = assetPaths.filter { it.substringAfterLast('/').contains("idle", ignoreCase = true) }
     val chosen = IDLE_PREFERENCE.firstNotNullOfOrNull { key ->
-        idleFiles.firstOrNull {
+        assetPaths.firstOrNull {
             it.substringAfterLast('/').removeSuffix(".vrma").equals(key, ignoreCase = true)
         }
-    } ?: idleFiles.firstOrNull() ?: return null
+    } ?: assetPaths.firstOrNull {
+        it.substringAfterLast('/').contains("idle", ignoreCase = true)
+    } ?: return null
     return idleEntryFor(chosen, external = false, externalRoot = null)
 }
