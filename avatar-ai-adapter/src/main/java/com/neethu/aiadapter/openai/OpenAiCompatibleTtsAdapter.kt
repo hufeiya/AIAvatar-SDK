@@ -35,6 +35,7 @@ class OpenAiCompatibleTtsAdapter(
                 put("input", text)
                 put("voice", config.voice)
                 put("response_format", config.responseFormat)
+                config.sampleRate?.let { put("sample_rate", it) }
                 put("speed", config.speed)
                 config.extraParams.forEach { (k, v) -> put(k, v) }
             }.toString()

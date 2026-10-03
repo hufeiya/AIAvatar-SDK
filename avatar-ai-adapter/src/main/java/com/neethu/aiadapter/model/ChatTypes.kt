@@ -61,6 +61,14 @@ data class TtsConfig(
      * The [com.neethu.aiadapter.api.TtsAdapter] echoes this back in [TtsResult.format].
      */
     val responseFormat: String = "wav",
+    /**
+     * Requested output sample rate in Hz (OpenAI-compatible extension, e.g.
+     * SiliconFlow `sample_rate`); `null` = provider default. Set this to the
+     * wLipSync target rate (16 kHz) when the lip-sync pipeline expects
+     * calibration-matched input — the fractional-resample path degrades MFCC
+     * matching on non-integer ratios (measured, see docs/ai-layer-handoff.md).
+     */
+    val sampleRate: Int? = null,
     /** Sample rate of [TtsAudioFormat.RAW_PCM_16LE] results (OpenAI pcm is 24 kHz). */
     val rawPcmSampleRate: Int = 24_000,
     val extraParams: Map<String, String> = emptyMap(),

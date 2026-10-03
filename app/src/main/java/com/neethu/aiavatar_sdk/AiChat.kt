@@ -89,6 +89,9 @@ class AiChatController(
             model = prefs.ttsModel,
             voice = prefs.voice,
             responseFormat = "wav",
+            // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC 前端的
+            // 分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
+            sampleRate = 16_000,
         )
         if (ready) {
             session.startFaceDriving()

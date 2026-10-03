@@ -116,10 +116,15 @@ class VowelDriver {
             }
         }
 
-        val silent = amplitude < SILENCE_AMPLITUDE ||
-            (winner < 0 || winnerWeight < SILENCE_WEIGHT) ||
-            (timeSeconds - lastActiveTime > SILENCE_HOLDOUT_S)
+        // AIRI parity (vowel-driver.ts:100-105): the two silence conditions are
+        // evaluated FIRST, lastActiveTime is refreshed when currently audible,
+        // and only THEN the 160 ms holdout latches — a loud frame after a long
+        // pause re-opens the mouth because it refreshes lastActiveTime before
+        // the holdout check runs. Folding the holdout into the initial `silent`
+        // expression (as an earlier draft did) latches silence forever.
+        var silent = amplitude < SILENCE_AMPLITUDE || (winner < 0 || winnerWeight < SILENCE_WEIGHT)
         if (!silent) lastActiveTime = timeSeconds
+        if (timeSeconds - lastActiveTime > SILENCE_HOLDOUT_S) silent = true
 
         val target = FloatArray(VOWEL_COUNT)
         if (!silent && winner >= 0) {

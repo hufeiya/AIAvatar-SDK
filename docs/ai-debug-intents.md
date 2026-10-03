@@ -43,6 +43,9 @@
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
 | `spring_debug` | `ai_arg`=on \| off | 弹簧骨骼诊断：on 时每秒向 logcat（tag `SpringBone`）输出各弹簧链根/梢关节的骨长 len=当前/静止 与方向 dir，用于真机物理排查 |
 | `screenshot` | — | 渲染一张 PNG 到应用外部目录，绝对路径打印到 logcat（可直接 `adb pull`） |
+| `send_chat` | `ai_arg`=消息文本 | 发送一条用户消息（等价于聊天条发送），走 LLM 流式→断句→TTS→口型全链路；断句/情绪/回合事件时序打印到 `AIDebug`（`chat:` 前缀） |
+| `interrupt_chat` | — | 打断当前 AI 回合（等价于聊天条 ✕），立即静音并回到 IDLE |
+| `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。
@@ -85,6 +88,11 @@ adb shell am start -n $PKG/.MainActivity --es ai_cmd camera_shot --es ai_arg clo
 adb shell am start -n $PKG/.MainActivity --es ai_cmd screenshot
 adb logcat -d -s AIDebug | grep screenshot      # 取绝对路径
 adb pull /storage/emulated/0/Android/data/$PKG/files/ai_debug/screenshot_xxx.png
+
+# AI 对话（需先在 ⚙️ 设置里配置 AI 服务）；事件时序（断句/情绪/回合）看 AIDebug 的 chat: 行
+adb shell am start -n $PKG/.MainActivity --es ai_cmd send_chat --es ai_arg "'你好，请用三句话介绍你自己'"
+adb shell am start -n $PKG/.MainActivity --es ai_cmd chat_state
+adb shell am start -n $PKG/.MainActivity --es ai_cmd interrupt_chat
 
 # 不知道有哪些命令时
 adb shell am start -n $PKG/.MainActivity --es ai_cmd help

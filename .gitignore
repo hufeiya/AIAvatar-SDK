@@ -32,3 +32,6 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Local secrets (API keys) — never commit
+secrets.properties

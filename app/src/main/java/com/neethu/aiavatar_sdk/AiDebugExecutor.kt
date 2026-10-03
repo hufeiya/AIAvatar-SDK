@@ -14,6 +14,19 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 /**
+ * Chat-side hooks the debug executor needs, wired to [DemoScreen]'s AI chat
+ * state (same code path as the chat bar's send/interrupt buttons). `send` and
+ * `interrupt` return `false` when no session exists yet (AI service
+ * unconfigured or the model still loading).
+ */
+internal class AiChatDebugHooks(
+    val send: (String) -> Boolean,
+    val interrupt: () -> Boolean,
+    /** One-line snapshot of phase / subtitle / error for `chat_state`. */
+    val snapshot: () -> String,
+)
+
+/**
  * Executes [AiDebugCommand]s on the main thread for [DemoScreen], logging a
  * result line for every command under [AI_LOG_TAG] so that an adb-connected
  * agent can read the outcome with `adb logcat -d -s AIDebug`.
@@ -23,6 +36,7 @@ internal suspend fun executeAiCommand(
     controller: AvatarController,
     uiState: DemoUiState,
     command: AiDebugCommand,
+    chat: AiChatDebugHooks? = null,
 ) {
     val result: String = try {
         when (command.name) {
@@ -67,6 +81,24 @@ internal suspend fun executeAiCommand(
                 else "spring bone debug log disabled"
             }
             "screenshot" -> screenshotCommand(context, controller)
+            "send_chat" -> {
+                val text = command.arg
+                    ?: throw IllegalArgumentException("send_chat expects ai_arg = the message text")
+                if (chat?.send(text) != true) {
+                    throw IllegalStateException(
+                        "no AI chat session — configure the AI service in settings first"
+                    )
+                }
+                "message queued: \"$text\" (reply events stream to AIDebug)"
+            }
+            "interrupt_chat" -> {
+                if (chat?.interrupt() != true) {
+                    throw IllegalStateException("no AI chat session to interrupt")
+                }
+                "interrupt requested"
+            }
+            "chat_state" -> chat?.snapshot()
+                ?: throw IllegalStateException("AI chat not wired in this screen")
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
             )

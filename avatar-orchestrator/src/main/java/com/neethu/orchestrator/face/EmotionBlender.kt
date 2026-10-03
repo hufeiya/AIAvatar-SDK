@@ -50,11 +50,27 @@ class EmotionBlender(
     private var progress = 1f
     private var duration = 0.4f
     private var resetJob: Job? = null
+    private var currentEmotion: String? = null
 
-    /** True while the current emotion owns non-viseme (eye area) morphs → suppresses blink. */
+    /**
+     * True while the current emotion owns non-viseme (eye area) morphs →
+     * suppresses blink. AIRI parity (`isEmoteActive`): `neutral` is not an
+     * active emotion, so after the 3 s auto-reset blinking must resume; during
+     * the blend-back transition suppression persists only while the captured
+     * pre-transition eye weights are still fading out. Forgetting the neutral
+     * check latches blink off forever after the first emotion (seen on
+     * device, task-1 verification).
+     */
     val eyeAreaActive: Boolean
-        get() = targets.any { (name, value) ->
-            name !in VISEME_SET && value > 0.01f
+        get() {
+            val emotion = currentEmotion
+            if (emotion != null && emotion != "neutral") {
+                return targets.any { (name, value) -> name !in VISEME_SET && value > 0.001f }
+            }
+            if (progress < 1f) { // still blending back to neutral
+                return startValues.any { (name, value) -> name !in VISEME_SET && value > 0.001f }
+            }
+            return false
         }
 
     /** Blend duration of the active emotion (used for the viseme blend-back pass). */
@@ -73,6 +89,7 @@ class EmotionBlender(
         val def = defs[cue.name] ?: return
         resetJob?.cancel()
         resetJob = null
+        currentEmotion = cue.name
 
         startValues = owned.associateWith { currentValue(it) }
         val intensity = cue.intensity.coerceIn(0f, 1f)

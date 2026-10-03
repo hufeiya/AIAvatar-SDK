@@ -36,13 +36,23 @@ class AudioTrackPlaybackQueue : PlaybackQueue {
         private val timestamp = AudioTimestamp()
 
         override fun positionSeconds(): Float {
-            // Prefer the audio-clock anchor; fall back to the frame counter.
-            if (track.getTimestamp(timestamp)) {
-                val elapsedNs = System.nanoTime() - timestamp.nanoTime
-                val frames = timestamp.framePosition + elapsedNs * item.sampleRateHz / 1_000_000_000.0
-                return (frames / item.sampleRateHz).toFloat().coerceIn(0f, item.pcm.size.toFloat() / item.sampleRateHz)
+            // The writer thread may release this track concurrently (natural end
+            // or interrupt) while FaceDriver still holds us as `activePlayback`;
+            // sampling a released track throws IllegalStateException on MIUI,
+            // so fall back to "fully played" (viseme mouth closes) instead of
+            // crashing the Choreographer.
+            val frames = try {
+                if (track.getTimestamp(timestamp)) {
+                    val elapsedNs = System.nanoTime() - timestamp.nanoTime
+                    timestamp.framePosition + elapsedNs * item.sampleRateHz / 1_000_000_000.0
+                } else {
+                    track.playbackHeadPosition.toDouble()
+                }
+            } catch (_: IllegalStateException) {
+                return item.pcm.size.toFloat() / item.sampleRateHz
             }
-            return (track.playbackHeadPosition.toFloat() / item.sampleRateHz)
+            return (frames / item.sampleRateHz).toFloat()
+                .coerceIn(0f, item.pcm.size.toFloat() / item.sampleRateHz)
         }
     }
 

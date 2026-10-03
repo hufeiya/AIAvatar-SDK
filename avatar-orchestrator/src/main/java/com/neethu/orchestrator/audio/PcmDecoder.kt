@@ -54,8 +54,14 @@ object PcmDecoder {
                     if (size > 16) buf.skip(size - 16)
                 }
                 "data" -> {
-                    data = bytes.copyOfRange(buf.position, min(buf.position + size, bytes.size))
-                    buf.skip(size)
+                    // Streaming WAV writers (SiliconFlow CosyVoice2) put a bogus
+                    // placeholder in the data size field (0xFFFFFF00) while the
+                    // audio runs to EOF — fall back to "rest of file" whenever
+                    // the header lies.
+                    val start = buf.position
+                    val take = if (size in 1..bytes.size - start) size else bytes.size - start
+                    data = bytes.copyOfRange(start, start + take)
+                    buf.skip(take)
                 }
                 else -> buf.skip(size)
             }

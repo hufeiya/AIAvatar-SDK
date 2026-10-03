@@ -50,6 +50,34 @@ class WlipsyncLipSyncProcessor(
             )
             start += windowSize
         }
+
+        normalizeClipLevel(frames)
         return VisemeTimeline(frames, pcm16.size.toFloat() / sampleRateHz, sampleRateHz)
+    }
+
+    /**
+     * Per-clip input gain, the uLipSync "profile gain" concept: TTS engines
+     * ship very different output levels (CosyVoice2 speech peaks around RMS
+     * 0.08 full-scale, while the vowel-driver constants assume mic-level
+     * input ~0.3-1.0), which would leave the mouth barely open. Scales the
+     * frame volumes so the 95th-percentile loud frame maps to
+     * [TARGET_P95_VOLUME]; silence stays silent, capped so near-silent clips
+     * are not blown up.
+     */
+    private fun normalizeClipLevel(frames: MutableList<PhonemeFrame>) {
+        if (frames.isEmpty()) return
+        val loud = frames.map { it.volume }.sorted()
+        val p95 = loud[((loud.size - 1) * 0.95f).toInt().coerceAtLeast(0)]
+        if (p95 < 1e-4f) return
+        val gain = min(TARGET_P95_VOLUME / p95, MAX_INPUT_GAIN)
+        if (gain <= 1.001f) return
+        for (i in frames.indices) {
+            frames[i] = PhonemeFrame(frames[i].timeSeconds, frames[i].volume * gain, frames[i].phonemeScores)
+        }
+    }
+
+    private companion object {
+        const val TARGET_P95_VOLUME = 0.75f
+        const val MAX_INPUT_GAIN = 12f
     }
 }

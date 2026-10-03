@@ -1,5 +1,6 @@
 package com.neethu.orchestrator.session
 
+import android.util.Log
 import com.neethu.aiadapter.api.EmotionExtractor
 import com.neethu.aiadapter.api.LipSyncProcessor
 import com.neethu.aiadapter.api.LlmAdapter
@@ -115,6 +116,7 @@ class AvatarSession(
         }
         pipeline.listener = object : SpeechPipeline.Listener {
             override fun onSentenceFailed(sequence: Int, text: String, error: Throwable) {
+                Log.e("AvatarSession", "sentence #$sequence failed", error)
                 emit(AvatarEvent.SentenceFailed(sequence, text, error.message ?: "TTS failed"))
             }
         }

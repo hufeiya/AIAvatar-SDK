@@ -359,12 +359,8 @@ private fun DemoScreen(
         }
     }
 
-    // AI debug interface: execute queued Intent commands for the screen's lifetime
-    LaunchedEffect(aiCommands) {
-        for (command in aiCommands) {
-            executeAiCommand(context, controller, uiState, command)
-        }
-    }
+    // AI debug interface: the executor loop lives below, after the AI chat
+    // state it hooks into, so `send_chat` can drive the same session as the UI.
 
     // Apply render settings to the controller; material enhancements cannot be
     // reverted in place (material params have no read-back), so turning them
@@ -396,14 +392,26 @@ private fun DemoScreen(
         launch {
             s.events.collect { ev ->
                 when (ev) {
-                    is AvatarEvent.SentenceStarted -> replyText += ev.text
-                    is AvatarEvent.TurnFailed -> chatError = ev.error.message ?: "对话失败"
-                    is AvatarEvent.SentenceQueued,
-                    is AvatarEvent.SentenceEnded,
-                    is AvatarEvent.SentenceFailed,
-                    is AvatarEvent.EmotionChanged,
-                    is AvatarEvent.TurnCompleted,
-                    is AvatarEvent.PlaybackInterrupted -> Unit
+                    is AvatarEvent.SentenceQueued ->
+                        Log.i(AI_LOG_TAG, "chat: SentenceQueued #${ev.sequence} \"${ev.text}\"")
+                    is AvatarEvent.SentenceStarted -> {
+                        replyText += ev.text
+                        Log.i(AI_LOG_TAG, "chat: SentenceStarted #${ev.sequence}")
+                    }
+                    is AvatarEvent.SentenceEnded ->
+                        Log.i(AI_LOG_TAG, "chat: SentenceEnded #${ev.sequence}")
+                    is AvatarEvent.SentenceFailed ->
+                        Log.w(AI_LOG_TAG, "chat: SentenceFailed #${ev.sequence}: ${ev.message}")
+                    is AvatarEvent.EmotionChanged ->
+                        Log.i(AI_LOG_TAG, "chat: EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
+                    is AvatarEvent.TurnCompleted ->
+                        Log.i(AI_LOG_TAG, "chat: TurnCompleted subtitleLen=${replyText.length}")
+                    is AvatarEvent.TurnFailed -> {
+                        chatError = ev.error.message ?: "对话失败"
+                        Log.e(AI_LOG_TAG, "chat: TurnFailed: ${ev.error.message}")
+                    }
+                    is AvatarEvent.PlaybackInterrupted ->
+                        Log.i(AI_LOG_TAG, "chat: PlaybackInterrupted")
                 }
             }
         }
@@ -418,6 +426,35 @@ private fun DemoScreen(
 
     DisposableEffect(Unit) {
         onDispose { aiChat.shutdown() }
+    }
+
+    // AI debug hooks: adb commands drive the same chat path as the chat bar
+    val chatHooks = remember {
+        AiChatDebugHooks(
+            send = { text ->
+                val s = session
+                if (s != null) {
+                    replyText = ""
+                    s.send(text)
+                }
+                s != null
+            },
+            interrupt = {
+                val s = session
+                if (s != null) s.interrupt()
+                s != null
+            },
+            snapshot = {
+                "phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"}"
+            },
+        )
+    }
+
+    // AI debug interface: execute queued Intent commands for the screen's lifetime
+    LaunchedEffect(aiCommands) {
+        for (command in aiCommands) {
+            executeAiCommand(context, controller, uiState, command, chatHooks)
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {

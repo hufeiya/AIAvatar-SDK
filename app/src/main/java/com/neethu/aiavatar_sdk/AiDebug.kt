@@ -123,6 +123,11 @@ fun aiDebugHelp(): String = """
     |                           closeup | medium | full | long | over | off (release)
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
     |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
+    |Chat (requires the AI service configured in ⚙️ settings):
+    |  send_chat <arg>          Send ai_arg as the user's chat message; the reply
+    |                           streams into the subtitle + AIDebug event logs
+    |  interrupt_chat           Interrupt the current turn (same as ✕ button)
+    |  chat_state               Dump chat phase / subtitle length / last error
     |Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |

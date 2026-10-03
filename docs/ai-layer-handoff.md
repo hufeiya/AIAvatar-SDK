@@ -63,8 +63,14 @@
 
 ### 2.4 验证状态
 
-- **48 单测全绿**：adapter 20（emotion 9 / vowel 5 / processor 3 / profile 3）+ orchestrator 28（chunker 12 / card 7 / assembler 4 / pipeline 5）
-- **真机冒烟通过**（设备 `2c3769db`）：安装无崩溃 60FPS；聊天条/设置面板渲染正常；**send→LLM 真实请求→异常→TurnFailed 事件→UI 错误条** 全链路已验证（设备直连不了 api.openai.com 属网络问题）。**成功路径（音频+口型）待真实 API Key 验证**
+- **50 单测全绿**：adapter 22（emotion 9 / vowel 6 / processor 4 / profile 3）+ orchestrator 28（chunker 12 / card 7 / assembler 4 / pipeline 5）
+- **任务 1 已完成（2026-10-03，真机 2c3769db，硅基流动 DeepSeek-V3 + CosyVoice2）**：成功路径全链路验证通过——
+  - ①断句流水：LLM 首句 ~2s 出声，N 句播放时 N+1/N+2 已在合成，句间无缝（前句 Ended 10ms 后下句 Started）
+  - ②口型：FaceDriver 采样日志（tag `FaceDriver`，2Hz）确认 viseme 跟随语音（ih/ou/oh 交替，峰值 0.47）；截图帧间嘴部差分 17-19
+  - ③情绪：`<|emotion:..|>` 标记正确提取（happy/relaxed/think/surprised），字幕无标记泄漏，表情可见且 3s 回落
+  - ④眨眼：自动眨眼每 1-6s 一次（14s 抓到 2 次），情绪回落不压制眨眼
+  - ⑤打断：`interrupt_chat` 后 45ms 内 PlaybackInterrupted，AudioTrack 立即消失（dumpsys 验证），无崩溃
+  - 过程中修了 4 个真 bug + 1 个观测坑，见附录 A.1；调试命令 send_chat/interrupt_chat/chat_state 见 docs/ai-debug-intents.md
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts
 
 ## 三、关键设计决策（改代码前必读）
@@ -91,7 +97,7 @@
 ## 五、测试与 API 配置现状
 
 - **API 要求**：一个同时提供 OpenAI 兼容 `/chat/completions`(流式) 与 `/audio/speech` 的服务，LLM/TTS 共用同一 Base URL + Key。
-  - 推荐：硅基流动 `https://api.siliconflow.cn/v1`（国内直连，注册送额度）：LLM=`deepseek-ai/DeepSeek-V3` 或免费 `Qwen/Qwen2.5-7B-Instruct`；TTS=`FunAudioLLM/CosyVoice2-0.5B`，Voice=`FunAudioLLM/CosyVoice2-0.5B:alex`
+  - 已验证：硅基流动 `https://api.siliconflow.cn/v1`（2026-10-03 实测）：LLM=`deepseek-ai/DeepSeek-V3`（仍在模型列表；流式 SSE 与适配器完全兼容）；TTS=`FunAudioLLM/CosyVoice2-0.5B`，Voice=`FunAudioLLM/CosyVoice2-0.5B:alex`，**必须带 `sample_rate:16000`（数字，传字符串报 400）**，原因见附录 A.1 第 2 条；demo 的 Key 经 run-as 写入 demo_settings（明文本体在仓库根 `secrets.properties`，已 gitignore，勿提交）
   - 备选：OpenAI 官方（需海外网络，`gpt-4o-mini`+`tts-1`+`alloy`）；或任意 one-api/new-api 网关
 - 填写入口：App ⚙️ 设置 →「AI 对话」→ 五项即填即存。
 - 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest`
@@ -207,15 +213,30 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 
 ## 附录 A：观感调参速查（成功路径验证后更新此表）
 
+### A.1 任务 1 实测新坑（每条都真踩过，2026-10-03）
+
+1. **硅基流动 CosyVoice2 的 WAV 头是流式占位值**：`data` 块 size 字段写死 `0xFFFFFF00`（=-256），RIFF size 也是负数，音频实际延伸到文件尾。PcmDecoder 按 size 切片会 `copyOfRange(174, -82)` 抛 `"174 > -82"`（JDK copyOfRange 的越界消息格式），每句 TTS 全灭。已修：size 非法（≤0 或超剩余字节）时按"到文件尾"取。
+2. **CosyVoice2 默认输出 24kHz，会踩 wLipSync 的分数降采样路径**：24k→16k（1.5 倍率）走 `downSample` 线性插值分支，实测语音帧的 MFCC cosine^100 得分全部塌缩为 0（静音帧反而完美匹配 S 模板），口型死。上游 C 代码该分支 AIRI 从未用过（浏览器 AudioContext 恒 48k，整数 skip）。**修法：TTS 请求直接要 `sample_rate:16000`**（硅基流动支持；OpenAI 不认识该字段，故做成 `TtsConfig.sampleRate: Int?` 可选，仅非空时发送）。不要给 8k 输入——`inputWindowSize` 会算出非 2 的幂窗口，FFT 越界。
+3. **VowelDriver 静音保持的移植顺序错误（口型永久锁死）**：AIRI 原文是三步——先算 `silent = amplitude<0.04 || winnerWeight<0.05`，再 `if(!silent) lastActiveAt=now`，**最后**才补 `if(now-lastActiveAt>160ms) silent=true`。响亮帧恢复时会先刷新 lastActiveAt 再查保持，所以长停顿后能重新开口。初版把保持条件并进了第一行 `silent` 表达式，导致静默 160ms 后 lastActiveTime 永不更新→永远静音（真机表现为 top=none 恒成立）。已按上游语义修复并加回归测试。
+4. **MIUI 上采样已 release 的 AudioTrack 直接崩溃**：写线程句末 `track.release()` 置空 `activePlayback` 与主线程 Choreographer 的 `FaceDriver.tick → positionSeconds()` 存在竞态，MIUI 抛 `IllegalStateException: Unable to retrieve AudioTrack pointer for getPosition()` 且是 FATAL（app 闪退重启、视口黑屏）。已修：`TrackPlayback.positionSeconds()` 全程 try/catch，异常时返回"已播完"（口型自然闭合）。另：AvatarSession 对 SentenceFailed 补了堆栈日志（tag AvatarSession），此类问题以后直接看堆栈。
+5. **CosyVoice2 输出电平很低**（帧 RMS p95≈0.08 满量程），VowelDriver 的 AIRI 常量按麦克风级输入（0.3~1.0）标定，直接喂进去口型只开 15%。已修：`WlipsyncLipSyncProcessor.analyze` 末尾按整段 clip 做 p95 音量归一化（目标 0.75，增益上限 12 倍，静音不动）——uLipSync "profile gain" 的等价物，provider 无关。修后响亮帧 viseme 达 0.47（AIRI 文档示例 0.49）。
+6. **观测坑：相机每次重启 app 都复位到默认全身景**。截图差分验证口型/表情前必须先 `ai_cmd camera_shot closeup`，且差分坐标要按当前取景重新标定——本次在全身景下按旧特写坐标量了半天"鼻子"，误判表情系统全坏，浪费近一小时。`set_expression jawOpen` + closeup 全帧差分 2.0 才是可信信号。
+7. **adb run-as 写文件的引号坑**：`adb shell run-as PKG sh -c 'cat > shared_prefs/xx.xml'` 会被 adb 拆词，重定向落在 device shell（cwd=/）报 `can't create file`。正确写法：`adb shell "run-as PKG sh -c 'cat > /data/data/PKG/shared_prefs/xx.xml'" < local_file`（外层双引号 + 绝对路径）。
+
+### A.2 调参速查表
+
 | 现象 | 调哪里 |
 |---|---|
 | 句子太碎 | `SentenceChunker.Options(minimumWords↑ / boost↓)` |
 | 句子太迟（等待感） | `maximumWords↓`、软标点 boost↑ |
-| 嘴张不开/太夸张 | `VowelDriver.OUTPUT_GAIN` / `WINNER_CAP` |
+| 嘴张不开/太夸张 | 优先查 A.1 第 5 条（电平归一化是否生效，看 `FaceDriver` 日志 volume）；仍需要时再动 `VowelDriver.OUTPUT_GAIN / WINNER_CAP` |
 | 口型拖泥带水 | `RELEASE_RATE↑`（30→更高） |
 | 口型抖动 | `ATTACK_RATE↓` |
 | 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
 | 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
+| 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
+
+验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 
 ## 附录 B：记忆索引（新会话自动加载）
 

@@ -1,5 +1,6 @@
 package com.neethu.orchestrator.face
 
+import android.util.Log
 import android.view.Choreographer
 import com.neethu.aiadapter.api.EmotionCue
 import com.neethu.aiadapter.api.VisemeTimeline
@@ -122,6 +123,7 @@ class FaceDriver(
                 viseme = vowelDriver.update(frame.volume, frame.phonemeScores, t, deltaSeconds)
             }
             lipSyncActive = viseme.any { it > VowelDriver.DEAD_ZONE }
+            debugTick(deltaSeconds, t, frame?.volume ?: -1f, viseme)
         } else {
             // decay the smoothing state so the mouth closes naturally
             viseme = vowelDriver.update(0f, EMPTY_SCORES, driverTime, deltaSeconds)
@@ -168,6 +170,25 @@ class FaceDriver(
         if (visemeReturn != null && visemeReturnProgress >= 1f) visemeReturnTargets = null
     }
 
+    private var debugAccum = 0f
+
+    /**
+     * 2 Hz trace of the viseme sampling path while a clip plays (tag
+     * `FaceDriver`): `t` should sweep the clip duration, `volume` track the
+     * audio envelope and `top` follow the spoken vowels. Primary tool for
+     * tuning VowelDriver constants on a device (task-1 appendix in
+     * docs/ai-layer-handoff.md).
+     */
+    private fun debugTick(dt: Float, t: Float, volume: Float, viseme: FloatArray) {
+        debugAccum += dt
+        if (debugAccum < 0.5f) return
+        debugAccum = 0f
+        val top = viseme.withIndex().maxByOrNull { it.value }
+        val topStr = if (top == null || top.value <= VowelDriver.DEAD_ZONE) "none"
+        else "${VowelDriver.VOWEL_NAMES[top.index]}=${top.value}"
+        Log.d(TAG, "t=$t volume=$volume top=$topStr")
+    }
+
     private fun send(name: String, value: Float) {
         if (availableExpressions.isNotEmpty() && name !in availableExpressions) return
         val previous = sent[name]
@@ -178,6 +199,7 @@ class FaceDriver(
     }
 
     companion object {
+        private const val TAG = "FaceDriver"
         private const val BLINK = "blink"
         private const val SEND_EPSILON = 0.004f
         private val EMPTY_SCORES = FloatArray(0)

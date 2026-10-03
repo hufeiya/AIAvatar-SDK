@@ -91,6 +91,20 @@ class VowelDriverTest {
         assertTrue(immediate[0] >= 0f)
         assertTrue("post-holdout weight must collapse: ${later[0]}", later[0] < 0.05f)
     }
+
+    @Test
+    fun `loud frame after long silence reopens the mouth`() {
+        // AIRI semantics (vowel-driver.ts:100-105): a loud+sharp frame refreshes
+        // lastActiveTime BEFORE the 160 ms holdout check, so speech resumes even
+        // after an arbitrarily long pause. Folding the holdout into the initial
+        // silent check latches silence forever (regression seen on device).
+        val d = driver()
+        var t = 0f
+        repeat(60) { d.update(0.5f, scores(0), t, 1f / 60); t += 1f / 60 }
+        d.update(0f, FloatArray(6), 5f, 1f / 60) // 3 s gap with no audio
+        val resumed = d.update(0.5f, scores(0), 5.016f, 1f / 60)
+        assertTrue("mouth must reopen after silence: ${resumed.toList()}", resumed[0] > 0.1f)
+    }
 }
 
 class WlipsyncProfileTest {
@@ -153,6 +167,21 @@ class WlipsyncLipSyncProcessorTest {
         assertTrue(timeline.frames.isNotEmpty())
         assertTrue(timeline.frames.all { it.volume <= 1.0f })
         assertTrue(timeline.frames.any { it.volume > 0.1f })
+    }
+
+    @Test
+    fun `quiet clips are boosted to the target speech level`() {
+        val processor = WlipsyncLipSyncProcessor()
+        val sampleRate = 24000
+        val n = sampleRate / 2
+        // quiet 220 Hz tone: RMS ≈ 0.17 full scale — typical TTS level
+        val pcm = ShortArray(n) { i -> (sin(2.0 * PI * 220 * i / sampleRate) * 5500).toInt().toShort() }
+        val timeline = processor.analyze(pcm, sampleRate)
+        val p95 = timeline.frames.map { it.volume }.sorted().last()
+        assertTrue("p95 volume should sit at the target level: $p95", p95 in 0.7f..0.85f)
+        // silence in the same clip must stay silent even with the clip gain
+        val silentTail = processor.analyze(ShortArray(sampleRate / 2), sampleRate)
+        assertTrue(silentTail.frames.all { it.volume < 0.01f })
     }
 
     @Test
