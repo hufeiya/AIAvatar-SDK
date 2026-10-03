@@ -439,6 +439,9 @@ private fun DemoScreen(
     val scope = rememberCoroutineScope()
     val aiChat = remember { AiChatController(scope, controller) }
     val session by produceState<AvatarSession?>(initialValue = null, state, uiState.aiPrefs) {
+        // 设置页逐字符提交配置；不等输入停稳就 ensure 会把会话每个按键重建一次，
+        // 正在播放/合成的回合被反复杀掉（表现为"还没输完就不出声了"）。
+        delay(800)
         value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)
     }
 
@@ -472,8 +475,11 @@ private fun DemoScreen(
                     }
                     is AvatarEvent.SentenceEnded ->
                         Log.i(AI_LOG_TAG, "chat: SentenceEnded #${ev.sequence}")
-                    is AvatarEvent.SentenceFailed ->
+                    is AvatarEvent.SentenceFailed -> {
+                        // 上错误条：静默失败的句子只会让人以为"没出声/崩了"
+                        chatError = "第 ${ev.sequence + 1} 句语音合成失败：${ev.message}"
                         Log.w(AI_LOG_TAG, "chat: SentenceFailed #${ev.sequence}: ${ev.message}")
+                    }
                     is AvatarEvent.EmotionChanged ->
                         Log.i(AI_LOG_TAG, "chat: EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
                     is AvatarEvent.TurnCompleted ->

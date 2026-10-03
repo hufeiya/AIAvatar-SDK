@@ -60,7 +60,43 @@ class OpenAiCompatibleTtsAdapter(
                     "opus", "ogg" -> TtsAudioFormat.OGG
                     else -> TtsAudioFormat.UNKNOWN
                 }
+                // 有些网关/代理对失败请求也回 HTTP 200（HTML/JSON 页面），直接喂给
+                // 解码器只会得到谜语（如 "Not a RIFF file"）——按声明的格式校验魔数，
+                // 不匹配时带上响应预览报错，让真实原因出现在堆栈里。
+                if (formatMagicMismatch(format, bytes)) {
+                    val preview = bytes.preview()
+                    throw IOException(
+                        "TTS returned non-${config.responseFormat} body " +
+                            "(HTTP ${response.code}, ${bytes.size}B, " +
+                            "content-type=${response.header("Content-Type").orEmpty()}): $preview"
+                    )
+                }
                 TtsResult(bytes, format, config.rawPcmSampleRate)
             }
         }
+
+    /** True when the body's magic bytes contradict the declared [TtsAudioFormat]. */
+    private fun formatMagicMismatch(format: TtsAudioFormat, bytes: ByteArray): Boolean = when (format) {
+        TtsAudioFormat.WAV -> !bytes.startsWithMagic("RIFF")
+        TtsAudioFormat.MP3 -> !bytes.startsWithMagic("ID3") && !bytes.hasMp3FrameSync()
+        TtsAudioFormat.OGG -> !bytes.startsWithMagic("OggS")
+        else -> false
+    }
+
+    private fun ByteArray.startsWithMagic(magic: String): Boolean {
+        if (size < magic.length) return false
+        for (i in magic.indices) if (this[i] != magic[i].code.toByte()) return false
+        return true
+    }
+
+    /** MPEG frame sync: 0xFF followed by a byte whose top 3 bits are 111. */
+    private fun ByteArray.hasMp3FrameSync(): Boolean =
+        size >= 2 && this[0] == 0xFF.toByte() && (this[1].toInt() and 0xE0) == 0xE0
+
+    /** First bytes as printable ASCII (non-printables as '.') for error messages. */
+    private fun ByteArray.preview(): String {
+        val head = take(24).toByteArray()
+        val text = head.joinToString("") { if (it.toInt() in 32..126) it.toInt().toChar().toString() else "." }
+        return "\"$text\""
+    }
 }

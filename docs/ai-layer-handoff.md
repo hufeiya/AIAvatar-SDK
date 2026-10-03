@@ -230,11 +230,15 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 7. **adb run-as 写文件的引号坑**：`adb shell run-as PKG sh -c 'cat > shared_prefs/xx.xml'` 会被 adb 拆词，重定向落在 device shell（cwd=/）报 `can't create file`。正确写法：`adb shell "run-as PKG sh -c 'cat > /data/data/PKG/shared_prefs/xx.xml'" < local_file`（外层双引号 + 绝对路径）。
 8. **coroutines-test 1.9.0 的 `advanceUntilIdle()` 不投递 SharedFlow 挂起恢复**：runTest 里 `backgroundScope` 订阅 `MutableSharedFlow` 后同步 `tryEmit`，`testScheduler.advanceUntilIdle()` 实测收不到（订阅协程仍挂起），`testScheduler.runCurrent()` 才可靠投递。AvatarSessionSpeakTest 已按此写法（注释也写在测试里），以后写事件流单测别再用 advanceUntilIdle 泵。
 9. **HyperOS/Android 16 禁止 shell 注入触摸**：`adb shell input tap` 抛 `SecurityException: Injecting input events requires INJECT_EVENTS`（旧设备的 MIUI 也只有部分机型放行）。UI 驱动改走 `ai_cmd open_panel <面板名>`（本次新增），文件选择器这类必须真手点的就放弃自动化。
+10. **设置页逐字符提交 + 会话即时重建 = "打字把正在播的回复杀掉"**：设置五项是即填即存，`produceState` 以 `aiPrefs` 为 key，每敲一个字符就 close+rebuild 一次会话——打字期间在播的回合反复被打断（用户感知"还没输完就没声/崩了"），且**半截配置会被持久化**（真机实测 prefs 里存着 `...:a` 的残缺音色，重启后继续 400 全灭）。已修：`produceState` 里 `delay(800)` 防抖，输入停稳才重建；注意 run-as 写 prefs 模拟不了"打字中"（SharedPreferences 不重载已运行的进程），只能靠真手测。
+11. **HTTP 200 + 非 WAV body 会让 PcmDecoder 抛谜语 "Not a RIFF file"**：TTS 适配器原本只拦非 2xx；实测硅基流动对残缺音色回的是 `400 Invalid voice`（能正常报错），但网关/代理可能对失败请求回 200 的 HTML/JSON 页面，喂进解码器只剩谜语（本次真机事故的唯一线索，200 来源未能离线复现——疑似网络层劫持）。已修：适配器按声明的 response_format 校验魔数（WAV=RIFF / MP3=ID3或帧同步 / OGG=OggS），不符时抛带 content-type + 24 字节预览的 IOException，真实原因直接进堆栈；MockWebServer 单测覆盖 400 / 200非WAV / 正常WAV / MP3 四条路径。同时 `SentenceFailed` 上了 UI 错误条（"第 N 句语音合成失败：…"，6s 自动清除），句子失败不再静默。
 
 ### A.2 调参速查表
 
 | 现象 | 调哪里 |
 |---|---|
+| 打字/改设置时正在播的回复被打断 | 正常（配置变化即重建）；打字过程中不应发生——确认 MainActivity `produceState` 的 800ms 防抖还在 |
+| 全句 TTS 400 Invalid voice / 200 non-wav body | prefs 里 `ai_voice` 多半是半截值（打字被持久化），看错误条或堆栈里的响应预览即可定位 |
 | 句子太碎 | `SentenceChunker.Options(minimumWords↑ / boost↓)` |
 | 句子太迟（等待感） | `maximumWords↓`、软标点 boost↑ |
 | 嘴张不开/太夸张 | 优先查 A.1 第 5 条（电平归一化是否生效，看 `FaceDriver` 日志 volume）；仍需要时再动 `VowelDriver.OUTPUT_GAIN / WINNER_CAP` |
