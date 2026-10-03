@@ -92,6 +92,7 @@ class SystemPromptAssembler(
         /** Mirrors [com.neethu.corelib.CameraShot]; mapping lives in AvatarSession. */
         val DEFAULT_CAMERA_TAGS = listOf(
             "close_up" to "面部特写",
+            "macro" to "面部微距（比特写更近，面部充满画面）",
             "medium_shot" to "中景半身",
             "full_shot" to "全身",
             "long_shot" to "远景",

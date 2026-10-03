@@ -1538,6 +1538,14 @@ internal class SoulLinkRenderer(
                 yaw = 0f,
                 pitch = toRadians(6f),
             )
+            CameraShot.MACRO -> ShotPose(
+                // 面部微距：比特写更贴近（~0.6× 距离），枢轴同样压在面部
+                // （头骨略往胸口方向带一点，头骨在 VRM 里常位于颅顶）
+                pivot = lerp3(head, chest, 0.18f),
+                distance = 0.9f * span,
+                yaw = 0f,
+                pitch = toRadians(4f),
+            )
             CameraShot.MEDIUM_SHOT -> ShotPose(
                 pivot = lerp3(head, hips, 0.45f),
                 distance = 1.85f * span,

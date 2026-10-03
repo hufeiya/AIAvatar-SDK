@@ -163,6 +163,8 @@ class AvatarSession(
     private val chunker = SentenceChunker(options.chunkerOptions)
     private val store: ConversationStore = store
     private val replyBuffer = StringBuilder()
+    /** 标签剥离后的正文（与 [replyBuffer] 同步累积，LlmPrompt 日志的"解析后"一路）。 */
+    private val cleanBuffer = StringBuilder()
     private var turnJob: Job? = null
 
     init {
@@ -269,6 +271,7 @@ class AvatarSession(
             extractor.reset()
             chunker.reset()
             replyBuffer.setLength(0)
+            cleanBuffer.setLength(0)
             pipeline.beginTurn()
             store.appendUser(text)
             try {
@@ -281,6 +284,7 @@ class AvatarSession(
                 }
                 // Drain the extractor tail, then any chunker remainder.
                 val tail = extractor.flush()
+                cleanBuffer.append(tail.cleanText)
                 if (tail.cleanText.isNotEmpty()) {
                     chunker.feed(tail.cleanText).forEach { submitSentence(it, ttsCfg) }
                 }
@@ -289,6 +293,10 @@ class AvatarSession(
                 pipeline.awaitTurnComplete()
                 // 观测点：原始回复（含标签）——排查"模型没发标签/标签被丢弃"先看这行
                 Log.i("AvatarSession", "raw reply: ${replyBuffer}")
+                // 需求 5：原始与解析后的完整回复落到专用 tag（分段+单行化，方便排查）
+                Log.i(PROMPT_TAG, "=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch ===")
+                logChunked(PROMPT_TAG, "RESPONSE raw", replyBuffer.toString())
+                logChunked(PROMPT_TAG, "RESPONSE clean", cleanBuffer.toString())
                 store.appendAssistant(replyBuffer.toString())
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
@@ -378,6 +386,7 @@ class AvatarSession(
     private fun handleDelta(delta: String, ttsCfg: TtsConfig) {
         replyBuffer.append(delta)
         val result = extractor.feed(delta)
+        cleanBuffer.append(result.cleanText)
         dispatchCues(result.cues)
         if (result.cleanText.isNotEmpty()) {
             chunker.feed(result.cleanText).forEach { submitSentence(it, ttsCfg) }
@@ -434,8 +443,22 @@ class AvatarSession(
         emit(AvatarEvent.SentenceQueued(sequence, sentence))
     }
 
+    /**
+     * 每轮请求注入当前镜头视角（需求 2：任何模式的提示词都告知大模型所在
+     * 视角，让 <cam:> 建议与描述符合用户实际看到的取景）。headless（无
+     * controller）不注入。位置刻意放在人设之后、协议块之前——协议块的
+     * few-shot 示例必须保持在提示词最末（近因效应，§7.10）。
+     */
+    private fun currentViewLine(): String? {
+        val c = controller ?: return null
+        val shot = c.getActiveCameraShot()
+        return if (shot != null) "【当前镜头视角】${shot.label}（${shot.name}），用户正以这个机位看着你。"
+        else "【当前镜头视角】自由视角（FREE），用户正手动控制镜头。"
+    }
+
     private fun buildRequestMessages(turnImages: List<String>): List<ChatMessage> {
-        val system = systemPromptWithProtocol()
+        val viewLine = currentViewLine()
+        val system = systemPromptWithProtocol(viewLine)
         val list = mutableListOf<ChatMessage>()
         if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
         // 历史裁剪（任务 3）：store 里只有 user/assistant，system 每次请求
@@ -447,6 +470,16 @@ class AvatarSession(
         if (turnImages.isNotEmpty() && list.lastOrNull()?.role == ChatRole.USER) {
             list[list.size - 1] = list.last().copy(images = turnImages)
         }
+        // 需求 4：提示词落到专用 tag（LlmPrompt），分段绕开 logcat 单条上限
+        val lastUser = list.lastOrNull()?.takeIf { it.role == ChatRole.USER }
+        Log.i(
+            PROMPT_TAG,
+            "=== REQUEST model=${llmConfig?.model} view=${viewLine ?: "n/a"} " +
+                "system=${system.length}ch history=${history.size} sent=${trimmedSent(history)} " +
+                "images=${turnImages.size} ===",
+        )
+        lastUser?.let { Log.i(PROMPT_TAG, "REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
+        logChunked(PROMPT_TAG, "REQUEST system", system)
         // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
         Log.i(
             "AvatarSession",
@@ -462,9 +495,13 @@ class AvatarSession(
     private fun trimmedSent(history: List<ChatMessage>): Int =
         options.recentTurnLimit?.let { minOf(it, history.size) } ?: history.size
 
-    /** system prompt = 人设 + 多模态协议块（协议关闭时只有人设）。 */
-    private fun systemPromptWithProtocol(): String = buildString {
+    /** system prompt = 人设 + 当前视角行 + 多模态协议块（协议关闭时只有前两者）。 */
+    private fun systemPromptWithProtocol(viewLine: String?): String = buildString {
         append(systemPrompt.trim())
+        if (viewLine != null) {
+            if (isNotEmpty()) append("\n\n")
+            append(viewLine)
+        }
         if (options.protocolInstructions) {
             if (isNotEmpty()) append("\n\n")
             append(protocolBlock())
@@ -501,14 +538,39 @@ class AvatarSession(
         _events.tryEmit(event)
     }
 
+    /**
+     * 长文本按 ~3.2K 字符分段打日志（logcat 单条有上限），换行换成字面 `\n`
+     * 让每段保持单行——`adb logcat -s LlmPrompt` 可整段读回。
+     */
+    private fun logChunked(tag: String, header: String, body: String) {
+        if (body.isEmpty()) {
+            Log.i(tag, "$header <empty>")
+            return
+        }
+        val chunkSize = 3_200
+        val parts = (body.length + chunkSize - 1) / chunkSize
+        var start = 0
+        var part = 1
+        while (start < body.length) {
+            val end = minOf(start + chunkSize, body.length)
+            Log.i(tag, "$header [$part/$parts] ${body.substring(start, end).replace("\n", "\\n")}")
+            start = end
+            part++
+        }
+    }
+
     companion object {
+        /** 提示词/回复的专用排查日志 tag（需求 4/5）：`adb logcat -s LlmPrompt`。 */
+        private const val PROMPT_TAG = "LlmPrompt"
+
         /** `<cam:…>` tag → preset shot (tag values are the enum names lowercased). */
-        private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(
-            "close_up" to CameraShot.CLOSE_UP,
-            "medium_shot" to CameraShot.MEDIUM_SHOT,
-            "full_shot" to CameraShot.FULL_SHOT,
-            "long_shot" to CameraShot.LONG_SHOT,
-            "over_shoulder" to CameraShot.OVER_SHOULDER,
-        )
+    private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(
+        "close_up" to CameraShot.CLOSE_UP,
+        "macro" to CameraShot.MACRO,
+        "medium_shot" to CameraShot.MEDIUM_SHOT,
+        "full_shot" to CameraShot.FULL_SHOT,
+        "long_shot" to CameraShot.LONG_SHOT,
+        "over_shoulder" to CameraShot.OVER_SHOULDER,
+    )
     }
 }

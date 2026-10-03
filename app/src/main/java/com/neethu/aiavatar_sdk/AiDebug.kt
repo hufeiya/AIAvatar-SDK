@@ -123,7 +123,9 @@ fun aiDebugHelp(): String = """
     |  orbit                    Camera orbit. ai_x/ai_y = screen pixels (drag equivalent)
     |  reset_camera             Restore the initial camera pose
     |  camera_shot <arg>        Frame a preset shot with a smooth transition:
-    |                           closeup | medium | full | long | over | off (release)
+    |                           closeup | macro | medium | full | long | over
+    |                           | off (release). Video mode defaults to closeup
+    |                           on entry and returns to it after each turn
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
 |  open_panel <arg>         Open a bottom panel: none | models | animations |
 |                           expressions | scenes | cards | settings

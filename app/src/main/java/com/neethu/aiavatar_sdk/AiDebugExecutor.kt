@@ -425,6 +425,7 @@ private fun orbitCommand(controller: AvatarController, command: AiDebugCommand):
 private fun cameraShotCommand(controller: AvatarController, arg: String?): String {
     val shot = when (arg?.lowercase()) {
         "closeup", "close_up", "cu" -> CameraShot.CLOSE_UP
+        "macro", "macro_shot", "mc" -> CameraShot.MACRO
         "medium", "ms" -> CameraShot.MEDIUM_SHOT
         "full", "fs" -> CameraShot.FULL_SHOT
         "long", "ls", "wide" -> CameraShot.LONG_SHOT
@@ -434,7 +435,7 @@ private fun cameraShotCommand(controller: AvatarController, arg: String?): Strin
             return "camera shot released (free camera)"
         }
         else -> throw IllegalArgumentException(
-            "camera_shot expects closeup|medium|full|long|over|off, got '$arg'"
+            "camera_shot expects closeup|macro|medium|full|long|over|off, got '$arg'"
         )
     }
     controller.setCameraShot(shot)

@@ -19,6 +19,13 @@ enum class CameraShot(val label: String) {
     CLOSE_UP("面部特写 CU"),
 
     /**
+     * 面部微距 — tighter than CLOSE_UP: the pivot stays on the face and the
+     * camera dollies to ~0.6× of the close-up distance, so the face fills
+     * the frame. Exposed to the LLM as `<cam:macro>`.
+     */
+    MACRO("面部微距 MC"),
+
+    /**
      * 中景半身 — waist-up to head, the standard streamer framing.
      * Look-at is bound between head and hips.
      */

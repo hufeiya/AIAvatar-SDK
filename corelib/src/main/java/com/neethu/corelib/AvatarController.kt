@@ -456,6 +456,7 @@ class AvatarController {
      * hard cut. Available shots:
      *
      *  - [CameraShot.CLOSE_UP] — 面部特写, chest-up to head (look-at on the head bone)
+     *  - [CameraShot.MACRO] — 面部微距, face-filling close-up (~0.6× of close-up distance)
      *  - [CameraShot.MEDIUM_SHOT] — 中景半身, waist-up (standard streamer framing)
      *  - [CameraShot.FULL_SHOT] — 全景全身, head to feet
      *  - [CameraShot.LONG_SHOT] — 远景, full body with wide margin for big dance moves

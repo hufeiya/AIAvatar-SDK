@@ -149,6 +149,13 @@
   - **端到端闭环（2026-10-04 真机，权限就绪后）**：PiP 实时画面（screencap 裁 PiP 区域 std=52 非黑、圆角+边框+前后摄钮正常）；`state` 输出 `video: active=true lens=front face=(x,y) area=0.14 age=30ms ring=3 best=27552B sharpness=3976.1`；**多模态回合**：`send_chat "描述一下你现在通过摄像头看到的画面"` → logcat `multimodal turn: 1 image(s)` + `system prompt: ... images=1` → 模型回复**准确描述真实场景**（圆框眼镜/吸顶灯/空调出风口格栅/白色书架/关着的门，与 PiP 截图一致），自发 `<cam:close_up><emo:…><act:…>` 标签全通道触发，8 句流水播完 TurnCompleted。
   - **观测点补注**：①视频模式下 `look_at` 手动命令会被追踪器 33ms 内覆盖（视频模式视线归追踪器所有，设计内）；②冷启动后立刻采 state 可能读到 yaw/pitch=0 的瞬态（首帧未收敛），连采 2-3 次再看；③`raw reply:` 日志多行回复首行可能显示为空（回复以 `\n<cam:…>` 开头），grep -A 续行才见全文。
   - **剩余待真手**：PiP 拖动手感与前后摄真手点按（adb 禁注入；`video_camera` 命令侧已可驱动）；注视幅度的观感调参（`FacePointProjector` 构造参数 maxLateralDegrees/maxVerticalDegrees，见 A.2）。
+  - **四轮·六项修改（2026-10-04 用户需求，真机 62fabe84 全验，209 单测 +3）**：
+    1. **视频模式进入默认面部特写**：进模式的 effect 里 `setCameraShot(CLOSE_UP)`+徽标同步。
+    2. **每轮请求注入当前视角**：`AvatarSession.currentViewLine()` 实时读 `controller.getActiveCameraShot()`（活动机位=`【当前镜头视角】面部特写 CU（CLOSE_UP），用户正以这个机位看着你。`，无预设=自由视角 FREE），拼在人设之后、协议块之前——**few-shot 示例必须保持提示词最末**（§7.10 近因效应），单测锁死该顺序；headless 不注入。LLM 因此知道自己在什么取景下说话，`<cam:>` 建议与画面描述不再凭空。
+    3. **新增 MACRO 面部微距机位**：corelib `CameraShot.MACRO`（"面部微距 MC"）+ renderer ShotPose（pivot=face、distance=0.9×span≈特写的 0.62 倍，面部充满画面）；协议标签 `<cam:macro>` 进 DEFAULT_CAMERA_TAGS/`CAMERA_SHOTS`/`camera_shot` 命令（macro|mc），视角 FAB 轮换自动含它。
+    4+5. **专用排查日志 tag `LlmPrompt`**：请求侧=`=== REQUEST model/view/system 长度/history/sent/images ===` 头行 + `REQUEST user:` 行 + system 全文分段（[i/n]，**换行字面化为 \n 保持单行**，logcat 单条上限绕开）；响应侧=`=== RESPONSE raw/clean 长度 ===` + raw（含标签）与 clean（标签剥离正文，新增 cleanBuffer 与 replyBuffer 同步累积）各分段。旧的 AvatarSession `raw reply:` 行保留作时序标记，**完整内容一律看 LlmPrompt**（`adb logcat -s LlmPrompt`）。
+    6. **视频模式回合结束自动回特写**：TurnCompleted 后等最后一条 LLM 手势播完（ActionStarted 时按 `getVrmaAnimationDuration()` 推算 `gestureEndsAtMs`，+400ms 归位缓冲）再 `setCameraShot(CLOSE_UP)`，等待后复查仍在视频模式才动镜头；打断（TurnFailed/PlaybackInterrupted）**不**回特写——打断即用户接管镜头。
+  - 真机证据：进视频模式 `cameraShot=CLOSE_UP`；`camera_shot macro` → `cameraShot=MACRO`（截图面部充满画面）；发消息后 REQUEST 头行实时读到 `view=【当前镜头视角】面部微距 MC（MACRO）`；RESPONSE `raw=331ch clean=181ch` 分段可读；模型对着微距抓拍回复"这张是正脸怼镜头，仰拍角度把发际线和头顶全拍出来了"（视角提示词+抓拍的联动效果）；回合结束 `cameraShot=CLOSE_UP`；零 FATAL。
   - **三轮调参（2026-10-04 用户反馈"幅度太大"）**：投影器从**世界单位线性映射改为角度语义**——脸贴画面边缘 = 水平 22°/垂直 15° 转角上限（`maxLateralDegrees`/`maxVerticalDegrees`），乘以当前相机到人物的实际距离换算偏移，特写/全景手感一致（首版固定偏移 1.4/1.0 世界单位，特写机位距离 ~1 时边缘脸=50°+ 直接打到 ±55° 限幅："扭头扭过去了"）；"凑近画面"的前伸深度项钳制在距离的 20% 以内（`maxAlongFraction`，深度项缩短注视基线会放大转角，是"低头低太多"的另一半成因）。单测按"头部处量到的转角"锁死：边缘脸在 d=1 与 d=4 机位下都必须 ≈22°。修后真机采样 yaw ±19°/pitch ±9° 内随位置成比例。
 
 - **任务 9.1 自由说话已完成（2026-10-04，真机 62fabe84）**：语音/视频模式新增**自由说话**（连续聆听，此前只有按住说话），聊天条左侧「按住/说话」药丸一键切换（持久化 `VoicePrefs.freeTalk`=`ai_voice_free_talk`，切模式/重启保持）。
@@ -518,7 +525,7 @@ LLM SSE delta
 | 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
 | 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
-| 模型不发标签/用（括号）演戏 | 先看 `AvatarSession` 的 `raw reply:` 日志区分"没发"vs"发了被丢弃"（A.1 第 18 条）；检查 `system prompt:` 行三段清单是否注入；示例是否在提示词末尾；温度是否 ≤0.6 |
+| 模型不发标签/用（括号）演戏 | 先看 **`LlmPrompt` 的 RESPONSE raw 段**（`adb logcat -s LlmPrompt`）区分"没发"vs"发了被丢弃"（A.1 第 18 条）；REQUEST 段核对 system 三段清单与【当前镜头视角】行是否注入；示例是否在提示词末尾；温度是否 ≤0.6 |
 | 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
 | 冷启动就是 T-pose | idle 挂载失败或被清：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`（demo 现在与 AI 会话解耦，模型加载即自动挂，默认 Arms Down）；挂上了仍 T-pose 则查引擎版本是否含"挂 idle 即接管"语义 |
 | 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |

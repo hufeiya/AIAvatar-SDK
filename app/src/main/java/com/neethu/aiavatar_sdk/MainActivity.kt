@@ -568,6 +568,9 @@ private fun DemoScreen(
             shotLabel = null
         }
     }
+    // 最近一次 LLM 手势的预计结束时刻（ActionStarted 时按动画时长推算）——
+    // 视频模式回合结束回面部特写时要等它播完（需求 6）
+    var gestureEndsAtMs by remember { mutableStateOf(0L) }
 
     val expressionList = remember(state) {
         DemoUiState.resolveExpressions(state)
@@ -711,16 +714,34 @@ private fun DemoScreen(
                     }
                     is AvatarEvent.EmotionChanged ->
                         Log.i(AI_LOG_TAG, "chat: EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
-                    is AvatarEvent.ActionStarted ->
+                    is AvatarEvent.ActionStarted -> {
                         Log.i(AI_LOG_TAG, "chat: ActionStarted ${ev.tag} (${ev.label})")
+                        // 手势刚加载开播,动画时长即到点时刻(视频模式回特写要等它)
+                        gestureEndsAtMs = System.currentTimeMillis() +
+                            (controller.getVrmaAnimationDuration() * 1000).toLong() + 400
+                    }
                     is AvatarEvent.CameraChanged -> {
                         // 与手动视角 FAB 共用同一枚徽标，LLM 切机位时同步显示
                         currentShot = ev.shot
                         shotLabel = ev.shot.label
                         Log.i(AI_LOG_TAG, "chat: CameraChanged ${ev.shot.name}")
                     }
-                    is AvatarEvent.TurnCompleted ->
+                    is AvatarEvent.TurnCompleted -> {
                         Log.i(AI_LOG_TAG, "chat: TurnCompleted subtitleLen=${replyText.length}")
+                        // 需求 6:视频模式回合结束(语音+手势都到点)自动回面部特写
+                        if (uiState.inputMode == InputMode.VIDEO) {
+                            launch {
+                                val waitMs = gestureEndsAtMs - System.currentTimeMillis()
+                                if (waitMs > 0) delay(waitMs)
+                                // 等待期间用户可能已切走视频模式,复查再动镜头
+                                if (uiState.inputMode == InputMode.VIDEO) {
+                                    controller.setCameraShot(CameraShot.CLOSE_UP)
+                                    currentShot = CameraShot.CLOSE_UP
+                                    shotLabel = CameraShot.CLOSE_UP.label
+                                }
+                            }
+                        }
+                    }
                     is AvatarEvent.TurnFailed -> {
                         chatError = ev.error.message ?: "对话失败"
                         Log.e(AI_LOG_TAG, "chat: TurnFailed: ${ev.error.message}")
@@ -787,10 +808,14 @@ private fun DemoScreen(
         return listOfNotNull(videoTracker.snapshotDataUrl())
     }
 
-    // 进出视频模式：进入时补申请相机权限；离开时停相机并把视线交回默认
+    // 进出视频模式：进入时补申请相机权限并默认面部特写机位；离开时停相机并把视线交回默认
     LaunchedEffect(uiState.inputMode) {
         if (uiState.inputMode == InputMode.VIDEO) {
             if (!cameraGranted) cameraPermission.launch(Manifest.permission.CAMERA)
+            // 需求 1：视频模式默认面部特写（视频通话的取景）
+            controller.setCameraShot(CameraShot.CLOSE_UP)
+            currentShot = CameraShot.CLOSE_UP
+            shotLabel = CameraShot.CLOSE_UP.label
         } else {
             videoTracker.stop()
             session?.faceDriver?.setGazeMode(GazeMode.CAMERA)
