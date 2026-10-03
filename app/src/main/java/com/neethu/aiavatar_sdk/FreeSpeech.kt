@@ -299,14 +299,14 @@ class FreeSpeechController(
                                 onHearingChanged?.invoke(true)
                             }
                             if (event == SpeechVad.Event.BargeIn) {
-                                Log.i(TAG, "barge-in")
+                                Log.i(TAG, "[InfoStreamDectect] barge-in")
                                 onBargeIn?.invoke()
                             }
                         }
                         SpeechVad.Event.SpeechEnded -> {
                             if (segment.size() > 0) {
                                 val wav = WavEncoder.encode(segment.toByteArray(), sampleRateHz)
-                                Log.i(TAG, "utterance ${wav.size}B")
+                                Log.i(TAG, "[InfoStreamDectect] utterance ${wav.size}B")
                                 onUtterance?.invoke(wav)
                             }
                             segment.reset()

@@ -544,7 +544,7 @@ LLM SSE delta
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
 | 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
 
-验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
+验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。**问答链路日志统一前缀 `[InfoStreamDectect] `（2026-10-04，用户排查等待时长用，拼写保留用户原样）**：覆盖 LlmPrompt 的 REQUEST/RESPONSE 全部行、AvatarSession 的 multimodal turn/system prompt/raw reply/clip/sentence failed 行、AIDebug 的 `chat:` 事件流、FreeSpeech 的 utterance/barge-in——`adb logcat | grep InfoStreamDectect` 即得完整时序（REQUEST 时间戳→首条 SentenceQueued=LLM 出句耗时，SentenceQueued→SentenceStarted=TTS 合成耗时，首句 Started−REQUEST=用户感知的等待下限）。
 
 ## 附录 B：记忆索引（新会话自动加载）
 

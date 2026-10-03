@@ -697,25 +697,27 @@ private fun DemoScreen(
         }
         launch { s.phase.collect { chatPhase = it } }
         launch {
+            // 排查问答等待时长:实时播放事件统一带 [InfoStreamDectect] 前缀
+            val chatLog: (String) -> Unit = { msg -> Log.i(AI_LOG_TAG, "[InfoStreamDectect] chat: $msg") }
             s.events.collect { ev ->
                 when (ev) {
                     is AvatarEvent.SentenceQueued ->
-                        Log.i(AI_LOG_TAG, "chat: SentenceQueued #${ev.sequence} \"${ev.text}\"")
+                        chatLog("SentenceQueued #${ev.sequence} \"${ev.text}\"")
                     is AvatarEvent.SentenceStarted -> {
                         replyText += ev.text
-                        Log.i(AI_LOG_TAG, "chat: SentenceStarted #${ev.sequence}")
+                        chatLog("SentenceStarted #${ev.sequence}")
                     }
                     is AvatarEvent.SentenceEnded ->
-                        Log.i(AI_LOG_TAG, "chat: SentenceEnded #${ev.sequence}")
+                        chatLog("SentenceEnded #${ev.sequence}")
                     is AvatarEvent.SentenceFailed -> {
                         // 上错误条：静默失败的句子只会让人以为"没出声/崩了"
                         chatError = "第 ${ev.sequence + 1} 句语音合成失败：${ev.message}"
-                        Log.w(AI_LOG_TAG, "chat: SentenceFailed #${ev.sequence}: ${ev.message}")
+                        Log.w(AI_LOG_TAG, "[InfoStreamDectect] chat: SentenceFailed #${ev.sequence}: ${ev.message}")
                     }
                     is AvatarEvent.EmotionChanged ->
-                        Log.i(AI_LOG_TAG, "chat: EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
+                        chatLog("EmotionChanged ${ev.cue.name} intensity=${ev.cue.intensity}")
                     is AvatarEvent.ActionStarted -> {
-                        Log.i(AI_LOG_TAG, "chat: ActionStarted ${ev.tag} (${ev.label})")
+                        chatLog("ActionStarted ${ev.tag} (${ev.label})")
                         // 手势刚加载开播,动画时长即到点时刻(视频模式回特写要等它)
                         gestureEndsAtMs = System.currentTimeMillis() +
                             (controller.getVrmaAnimationDuration() * 1000).toLong() + 400
@@ -724,10 +726,10 @@ private fun DemoScreen(
                         // 与手动视角 FAB 共用同一枚徽标，LLM 切机位时同步显示
                         currentShot = ev.shot
                         shotLabel = ev.shot.label
-                        Log.i(AI_LOG_TAG, "chat: CameraChanged ${ev.shot.name}")
+                        chatLog("CameraChanged ${ev.shot.name}")
                     }
                     is AvatarEvent.TurnCompleted -> {
-                        Log.i(AI_LOG_TAG, "chat: TurnCompleted subtitleLen=${replyText.length}")
+                        chatLog("TurnCompleted subtitleLen=${replyText.length}")
                         // 需求 6:视频模式回合结束(语音+手势都到点)自动回面部特写
                         if (uiState.inputMode == InputMode.VIDEO) {
                             launch {
@@ -744,10 +746,10 @@ private fun DemoScreen(
                     }
                     is AvatarEvent.TurnFailed -> {
                         chatError = ev.error.message ?: "对话失败"
-                        Log.e(AI_LOG_TAG, "chat: TurnFailed: ${ev.error.message}")
+                        Log.e(AI_LOG_TAG, "[InfoStreamDectect] chat: TurnFailed: ${ev.error.message}")
                     }
                     is AvatarEvent.PlaybackInterrupted ->
-                        Log.i(AI_LOG_TAG, "chat: PlaybackInterrupted")
+                        chatLog("PlaybackInterrupted")
                 }
             }
         }

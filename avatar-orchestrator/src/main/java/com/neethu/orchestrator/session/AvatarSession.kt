@@ -172,10 +172,10 @@ class AvatarSession(
             if (lsp is WlipsyncLipSyncProcessor) faceDriver?.setPhonemeLayout(lsp.vowelLayout)
         }
         pipeline.listener = object : SpeechPipeline.Listener {
-            override fun onSentenceFailed(sequence: Int, text: String, error: Throwable) {
-                Log.e("AvatarSession", "sentence #$sequence failed", error)
-                emit(AvatarEvent.SentenceFailed(sequence, text, error.message ?: "TTS failed"))
-            }
+        override fun onSentenceFailed(sequence: Int, text: String, error: Throwable) {
+            Log.e("AvatarSession", "${STREAM_PREFIX}sentence #$sequence failed", error)
+            emit(AvatarEvent.SentenceFailed(sequence, text, error.message ?: "TTS failed"))
+        }
         }
         queue.listener = object : PlaybackQueue.Listener {
             override fun onPlaybackStarted(item: PlaybackItem) {
@@ -197,7 +197,7 @@ class AvatarSession(
                 // 若明显小于说明句尾被截断（对照 logcat 的 SentenceStarted 时间戳）。
                 Log.i(
                     "AvatarSession",
-                    "clip #${item.sequence} pcm=${"%.2f".format(item.pcm.size.toFloat() / item.sampleRateHz)}s",
+                    "${STREAM_PREFIX}clip #${item.sequence} pcm=${"%.2f".format(item.pcm.size.toFloat() / item.sampleRateHz)}s",
                 )
                 scope.launch(Dispatchers.Main.immediate) {
                     emit(AvatarEvent.SentenceEnded(item.sequence, item.text))
@@ -264,7 +264,7 @@ class AvatarSession(
             emit(AvatarEvent.TurnFailed(IllegalStateException("ttsConfig not set"))); return
         }
         if (images.isNotEmpty()) {
-            Log.i("AvatarSession", "multimodal turn: ${images.size} image(s), text=${text.take(40)}")
+            Log.i("AvatarSession", "${STREAM_PREFIX}multimodal turn: ${images.size} image(s), text=${text.take(40)}")
         }
         turnJob = scope.launch {
             _phase.value = ConversationPhase.THINKING
@@ -292,9 +292,9 @@ class AvatarSession(
                 pipeline.endTurn()
                 pipeline.awaitTurnComplete()
                 // 观测点：原始回复（含标签）——排查"模型没发标签/标签被丢弃"先看这行
-                Log.i("AvatarSession", "raw reply: ${replyBuffer}")
+                Log.i("AvatarSession", "${STREAM_PREFIX}raw reply: ${replyBuffer}")
                 // 需求 5：原始与解析后的完整回复落到专用 tag（分段+单行化，方便排查）
-                Log.i(PROMPT_TAG, "=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch ===")
+                Log.i(PROMPT_TAG, "${STREAM_PREFIX}=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch ===")
                 logChunked(PROMPT_TAG, "RESPONSE raw", replyBuffer.toString())
                 logChunked(PROMPT_TAG, "RESPONSE clean", cleanBuffer.toString())
                 store.appendAssistant(replyBuffer.toString())
@@ -474,16 +474,16 @@ class AvatarSession(
         val lastUser = list.lastOrNull()?.takeIf { it.role == ChatRole.USER }
         Log.i(
             PROMPT_TAG,
-            "=== REQUEST model=${llmConfig?.model} view=${viewLine ?: "n/a"} " +
+            "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} view=${viewLine ?: "n/a"} " +
                 "system=${system.length}ch history=${history.size} sent=${trimmedSent(history)} " +
                 "images=${turnImages.size} ===",
         )
-        lastUser?.let { Log.i(PROMPT_TAG, "REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
+        lastUser?.let { Log.i(PROMPT_TAG, "${STREAM_PREFIX}REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
         logChunked(PROMPT_TAG, "REQUEST system", system)
         // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
         Log.i(
             "AvatarSession",
-            "system prompt: ${system.length} chars, cameras=${currentCameraTags().size}, " +
+            "${STREAM_PREFIX}system prompt: ${system.length} chars, cameras=${currentCameraTags().size}, " +
                 "actions=${currentActionGroups().sumOf { it.second.size }}, " +
                 "directExpr=${currentDirectExpressions().size}, history=${history.size} " +
                 "sent=${trimmedSent(history)} images=${turnImages.size}",
@@ -544,7 +544,7 @@ class AvatarSession(
      */
     private fun logChunked(tag: String, header: String, body: String) {
         if (body.isEmpty()) {
-            Log.i(tag, "$header <empty>")
+            Log.i(tag, "$STREAM_PREFIX$header <empty>")
             return
         }
         val chunkSize = 3_200
@@ -553,7 +553,7 @@ class AvatarSession(
         var part = 1
         while (start < body.length) {
             val end = minOf(start + chunkSize, body.length)
-            Log.i(tag, "$header [$part/$parts] ${body.substring(start, end).replace("\n", "\\n")}")
+            Log.i(tag, "$STREAM_PREFIX$header [$part/$parts] ${body.substring(start, end).replace("\n", "\\n")}")
             start = end
             part++
         }
@@ -562,6 +562,9 @@ class AvatarSession(
     companion object {
         /** 提示词/回复的专用排查日志 tag（需求 4/5）：`adb logcat -s LlmPrompt`。 */
         private const val PROMPT_TAG = "LlmPrompt"
+
+        /** 问答链路日志的统一前缀（用户 grep 用，覆盖提示词/回复/实时播放事件）。 */
+        private const val STREAM_PREFIX = "[InfoStreamDectect] "
 
         /** `<cam:…>` tag → preset shot (tag values are the enum names lowercased). */
     private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(
