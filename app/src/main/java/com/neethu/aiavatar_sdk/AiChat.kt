@@ -56,6 +56,46 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
 }
 
 /**
+ * 语音输入配置（任务 4）：ASR 模型 + 松手行为。
+ * 刻意不放进 [AiChatPrefs]——会话身份 = AiChatPrefs + 上下文，改 ASR 配置
+ * 不该触发会话重建（正在播的回复会被杀掉）。
+ */
+data class VoicePrefs(
+    /** ASR 模型名；留空 = 按端点自动推断（见 [resolveAsrModel]）。 */
+    val asrModel: String = "",
+    /** 松手识别成功后直接发送；关闭则识别文本填入输入框，由用户确认后发送。 */
+    val autoSend: Boolean = true,
+)
+
+private const val KEY_AI_ASR_MODEL = "ai_asr_model"
+private const val KEY_AI_VOICE_AUTO_SEND = "ai_voice_auto_send"
+
+fun SharedPreferences.loadVoicePrefs(): VoicePrefs = VoicePrefs(
+    asrModel = getString(KEY_AI_ASR_MODEL, "").orEmpty(),
+    autoSend = getBoolean(KEY_AI_VOICE_AUTO_SEND, true),
+)
+
+fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
+    edit()
+        .putString(KEY_AI_ASR_MODEL, p.asrModel.trim())
+        .putBoolean(KEY_AI_VOICE_AUTO_SEND, p.autoSend)
+        .apply()
+}
+
+/**
+ * ASR 模型留空时按端点推断：硅基流动 → `Qwen/Qwen3-ASR-1.7B`（其
+ * /audio/transcriptions 端点的默认语音识别模型），其他 → OpenAI 的 `whisper-1`。
+ */
+fun resolveAsrModel(baseUrl: String, configured: String): String =
+    configured.trim().ifBlank {
+        if (baseUrl.contains("siliconflow", ignoreCase = true)) {
+            "Qwen/Qwen3-ASR-1.7B"
+        } else {
+            "whisper-1"
+        }
+    }
+
+/**
  * Demo 的会话装配器：把 [AiChatPrefs] + 上下文 id 变成一条 [AvatarSession]。
  * 配置或上下文变化时用 [rebuild] 丢弃旧会话重建（AIRI getProviderInstance 的
  * "凭据变化即重建实例"语义）；上下文 id 变化即切换对话历史（任务 3）。

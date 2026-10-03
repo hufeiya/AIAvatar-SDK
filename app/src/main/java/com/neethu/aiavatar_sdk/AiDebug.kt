@@ -144,6 +144,14 @@ fun aiDebugHelp(): String = """
 |                           Activating rewrites the system prompt and speaks
 |                           the greeting when a TTS service is configured.
 |  active_card              Dump active card name/spec/system-prompt head
+|Voice input (ASR; requires the AI service configured):
+|  transcribe <arg>         Transcribe an audio file (arg = absolute path, or
+|                           path under the app's external files dir; adb push
+|                           there first). Same chain as push-to-talk.
+|  voice_record <arg>       Record ai_arg seconds (1..30) of mic with the same
+|                           MediaRecorder path as push-to-talk, then transcribe
+|Modes:
+|  set_mode <arg>           Switch input mode: manual | text | voice
 |Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |

@@ -1,6 +1,8 @@
 package com.neethu.aiavatar_sdk
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.widget.Toast
 import android.content.Intent
 import android.content.SharedPreferences
@@ -21,6 +23,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Build
@@ -44,12 +48,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.neethu.aiadapter.model.AsrConfig
+import com.neethu.aiadapter.openai.OpenAiCompatibleAsrAdapter
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.corelib.AvatarConfig
@@ -139,6 +147,7 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, C
 internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
+private const val KEY_AI_INPUT_MODE = "ai_input_mode"
 
 /** 新上下文的随机 id（UUID；ai_cmd select_context 支持前缀匹配）。 */
 private fun newContextId(): String = java.util.UUID.randomUUID().toString()
@@ -235,6 +244,31 @@ internal class DemoUiState(context: Context) {
     var selectedScene: String? by mutableStateOf(sceneFiles.firstOrNull())
     var activePanel by mutableStateOf(PanelType.NONE)
     var isDragMode by mutableStateOf(false)
+
+    /**
+     * 对话输入三模式（任务 4，互斥）：手动打字=完整 UI（全部按钮可见），
+     * 打字输入/语音模式=隐藏所有界面按钮只留输入条/按住说话。持久化。
+     */
+    var inputMode by mutableStateOf(prefs.enumValue(KEY_AI_INPUT_MODE, InputMode.MANUAL))
+        private set
+
+    /** 语音输入配置（ASR 模型/直接发送），与 AI 会话身份解耦，改它不重建会话。 */
+    var voicePrefs by mutableStateOf(prefs.loadVoicePrefs())
+        private set
+
+    /** 切换输入模式并持久化；离开手动模式时收起一切面板（那些按钮要藏起来）。 */
+    fun switchInputMode(mode: InputMode) {
+        if (mode == inputMode) return
+        inputMode = mode
+        if (mode != InputMode.MANUAL) activePanel = PanelType.NONE
+        prefs.edit().putString(KEY_AI_INPUT_MODE, mode.name).apply()
+    }
+
+    /** 更新语音输入配置并持久化。 */
+    fun updateVoicePrefs(p: VoicePrefs) {
+        voicePrefs = p
+        prefs.saveVoicePrefs(p)
+    }
 
     /** 渲染设置，初始值来自上一次会话的持久化。 */
     var renderSettings by mutableStateOf(prefs.loadRenderSettings())
@@ -631,8 +665,90 @@ private fun DemoScreen(
         }
     }
 
+    // ── 语音输入（任务 4）：按住说话 → MediaRecorder(m4a) → ASR → 发送/填入 ─
+    val voiceRecorder = remember { VoiceRecorder(context) }
+    var voiceRecording by remember { mutableStateOf(false) }
+    var voiceRecognizing by remember { mutableStateOf(false) }
+
+    /** autoSend=false 时的识别文本：经 AiChatBar 填入输入框待确认。 */
+    var voicePrefill by remember { mutableStateOf<String?>(null) }
+
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) chatError = "需要麦克风权限才能按住说话"
+    }
+
+    /** 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。 */
+    fun asrFor(): OpenAiCompatibleAsrAdapter {
+        val p = uiState.aiPrefs
+        check(p.isConfigured) { "请先在设置里配置 AI 服务（切回手动打字模式 ⚙️）" }
+        return OpenAiCompatibleAsrAdapter(p.baseUrl, p.apiKey)
+    }
+
+    val onHoldStart: () -> Unit = {
+        when {
+            voiceRecording || voiceRecognizing -> Unit
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED ->
+                micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            else -> {
+                // 半双工（对齐 AIRI 说话时抑制聆听）：按下的瞬间打断正在播的回复
+                if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
+                try {
+                    voiceRecorder.start()
+                    voiceRecording = true
+                } catch (e: IllegalStateException) {
+                    chatError = e.message ?: "录音启动失败"
+                }
+            }
+        }
+    }
+    val onHoldEnd: () -> Unit = {
+        if (voiceRecorder.isRecording) {
+            voiceRecording = false
+            val file = voiceRecorder.stop()
+            if (file == null) {
+                chatError = "没录到声音——按下后稍等半秒再开口"
+            } else {
+                voiceRecognizing = true
+                scope.launch {
+                    val prefs = uiState.aiPrefs
+                    val result = runCatching {
+                        withContext(Dispatchers.IO) {
+                            asrFor().transcribe(
+                                file.readBytes(),
+                                mimeForFileName(file.name),
+                                AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
+                            )
+                        }
+                    }
+                    file.delete()
+                    voiceRecognizing = false
+                    result.onSuccess { raw ->
+                        val text = raw.trim()
+                        if (text.isEmpty()) {
+                            chatError = "未识别到语音内容，请靠近一点重试"
+                        } else if (uiState.voicePrefs.autoSend) {
+                            replyText = ""
+                            session?.send(text)
+                        } else {
+                            voicePrefill = text
+                        }
+                    }.onFailure {
+                        chatError = "语音识别失败：${it.message}"
+                    }
+                }
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
-        onDispose { aiChat.shutdown() }
+        onDispose {
+            aiChat.shutdown()
+            // 录音中离开组合（切模式/退出）不能留下一个占着麦克风的 MediaRecorder
+            voiceRecorder.cancel()
+        }
     }
 
     // ── 人物卡：激活/删除逻辑，卡片面板与 adb import_card 共用 ────────────
@@ -759,6 +875,50 @@ private fun DemoScreen(
                 "context switched to ${match.id.take(8)} " +
                     "(${match.characterId ?: "free"}, ${match.messageCount} messages)"
             },
+            // 与按住说话同一条 ASR 链路，只是音频来自文件（真机无手也能验 ASR）
+            transcribeFile = { file ->
+                val prefs = uiState.aiPrefs
+                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                val text = asrFor().transcribe(
+                    bytes,
+                    mimeForFileName(file.name),
+                    AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
+                )
+                if (text.isBlank()) "recognized: <empty>" else "recognized: $text"
+            },
+            // MediaRecorder 真录音 N 秒后走 ASR：验证录音配置（AAC/m4a）服务端可收
+            voiceRecord = { seconds ->
+                // 半双工：录的是麦克风，先打断正在播的 TTS 防串音
+                if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
+                voiceRecorder.start()
+                delay(seconds * 1000L)
+                val file = voiceRecorder.stop()
+                    ?: error("no valid audio captured (recording too short?)")
+                val sizeKb = file.length() / 1024
+                val prefs = uiState.aiPrefs
+                try {
+                    val text = withContext(Dispatchers.IO) {
+                        asrFor().transcribe(
+                            file.readBytes(),
+                            mimeForFileName(file.name),
+                            AsrConfig(model = resolveAsrModel(prefs.baseUrl, uiState.voicePrefs.asrModel)),
+                        )
+                    }
+                    "file=${sizeKb}KB text=${text.ifBlank { "<empty>" }}"
+                } finally {
+                    file.delete()
+                }
+            },
+            setInputMode = { arg ->
+                val mode = when (arg?.lowercase()) {
+                    "manual", "manual_text" -> InputMode.MANUAL
+                    "text", "typing" -> InputMode.TEXT
+                    "voice", "asr" -> InputMode.VOICE
+                    else -> throw IllegalArgumentException("set_mode expects manual|text|voice, got '$arg'")
+                }
+                uiState.switchInputMode(mode)
+                "input mode = ${mode.name.lowercase()} (${mode.label})"
+            },
         )
     }
 
@@ -811,12 +971,29 @@ private fun DemoScreen(
                 .padding(bottom = 180.dp)
         )
 
-        // AI 对话条（输入 + 发送 + 打断）与回复字幕
+        // 输入模式下拉框（左上角，唯一常驻控制；三模式互斥，任务 4）
+        InputModeSelector(
+            current = uiState.inputMode,
+            onSelect = { uiState.switchInputMode(it) },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(12.dp),
+        )
+
+        // AI 对话条（输入区按模式切换：打字 or 按住说话）与回复字幕
         AiChatBar(
             phase = chatPhase,
             replyText = replyText,
             error = chatError,
             enabled = session != null,
+            inputMode = uiState.inputMode,
+            recording = voiceRecording,
+            recognizing = voiceRecognizing,
+            voiceAutoSend = uiState.voicePrefs.autoSend,
+            voicePrefill = voicePrefill,
+            onVoicePrefillConsumed = { voicePrefill = null },
+            onHoldStart = onHoldStart,
+            onHoldEnd = onHoldEnd,
             onSend = { text ->
                 replyText = ""
                 session?.send(text)
@@ -825,35 +1002,42 @@ private fun DemoScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, bottom = 96.dp)
+                .padding(
+                    start = 12.dp, end = 12.dp,
+                    // 手动打字模式底部两端有 FAB 列，抬高让位；纯净两档贴底
+                    bottom = if (uiState.inputMode == InputMode.MANUAL) 96.dp else 12.dp,
+                )
         )
 
-        // Drag mode FAB at bottom-start
-        SmallFloatingActionButton(
-            onClick = { uiState.isDragMode = !uiState.isDragMode },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp),
-            shape = CircleShape,
-            containerColor = if (uiState.isDragMode)
-                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
-            else
-                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
-        ) {
-            Icon(
-                imageVector = if (uiState.isDragMode) Icons.Default.Close else Icons.Default.Build,
-                contentDescription = if (uiState.isDragMode) "Exit drag mode" else "Enter drag mode"
-            )
+        // Drag mode FAB at bottom-start（仅手动打字模式；打字/语音模式隐藏所有按钮）
+        if (uiState.inputMode == InputMode.MANUAL) {
+            SmallFloatingActionButton(
+                onClick = { uiState.isDragMode = !uiState.isDragMode },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp),
+                shape = CircleShape,
+                containerColor = if (uiState.isDragMode)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Icon(
+                    imageVector = if (uiState.isDragMode) Icons.Default.Close else Icons.Default.Build,
+                    contentDescription = if (uiState.isDragMode) "Exit drag mode" else "Enter drag mode"
+                )
+            }
         }
 
-        // Row of FABs at bottom-end
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.End
-        ) {
+        // Row of FABs at bottom-end（仅手动打字模式；打字/语音模式隐藏所有按钮）
+        if (uiState.inputMode == InputMode.MANUAL) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.End
+            ) {
             // Camera shot FAB (视角) — cycles the 4 preset framings
             SmallFloatingActionButton(
                 onClick = {
@@ -981,6 +1165,7 @@ private fun DemoScreen(
                     imageVector = if (uiState.activePanel == PanelType.MODELS) Icons.Default.Close else Icons.Default.List,
                     contentDescription = if (uiState.activePanel == PanelType.MODELS) "Hide models" else "Show models"
                 )
+            }
             }
         }
 
@@ -1132,6 +1317,7 @@ private fun DemoScreen(
                 useExternalAnimations = uiState.useExternalAnimations,
                 externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
                 aiPrefs = uiState.aiPrefs,
+                voicePrefs = uiState.voicePrefs,
                 contexts = contextList,
                 activeContextId = uiState.contextId,
                 protocolPrompt = session?.protocolBlock().orEmpty(),
@@ -1139,6 +1325,7 @@ private fun DemoScreen(
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
                 onAiPrefsChange = { uiState.updateAiPrefs(it) },
+                onVoicePrefsChange = { uiState.updateVoicePrefs(it) },
                 onNewContext = { uiState.newContext() },
                 onSelectContext = { uiState.switchContext(it) },
                 onDeleteContext = { summary ->
@@ -1181,8 +1368,9 @@ private fun CameraShotLabelBadge(label: String?, modifier: Modifier = Modifier) 
 }
 
 /**
- * AI 对话条：状态徽标 + 当前轮回复字幕 + 输入框（发送/打断）。
- * `enabled = false`（未配置或未就绪）时输入框仍可见但不可发送。
+ * AI 对话条：状态徽标 + 当前轮回复字幕 + 输入区（按输入模式切换：
+ * 打字输入框 / 按住说话）。`enabled = false`（未配置或未就绪）时输入区
+ * 仍可见但不可交互。
  */
 @Composable
 private fun AiChatBar(
@@ -1190,12 +1378,28 @@ private fun AiChatBar(
     replyText: String,
     error: String?,
     enabled: Boolean,
+    inputMode: InputMode,
+    recording: Boolean,
+    recognizing: Boolean,
+    voiceAutoSend: Boolean,
+    voicePrefill: String?,
+    onVoicePrefillConsumed: () -> Unit,
+    onHoldStart: () -> Unit,
+    onHoldEnd: () -> Unit,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var input by remember { mutableStateOf("") }
     val busy = phase != ConversationPhase.IDLE
+
+    // 语音识别后不直接发送的路径：识别文本填入输入框，由用户确认发送
+    LaunchedEffect(voicePrefill) {
+        voicePrefill?.let {
+            input = it
+            onVoicePrefillConsumed()
+        }
+    }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (replyText.isNotEmpty()) {
@@ -1255,49 +1459,80 @@ private fun AiChatBar(
                         modifier = Modifier.padding(start = 12.dp, end = 6.dp)
                     )
                 }
-                TextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = {
-                        Text(
-                            text = if (enabled) "说点什么，回车或发送…" else "先在 ⚙️ 设置里配置 AI 服务",
-                            fontSize = 13.sp
+                if (inputMode == InputMode.VOICE && input.isBlank()) {
+                    // 语音模式主形态：整条都是按住说话
+                    HoldToTalk(
+                        recording = recording,
+                        recognizing = recognizing,
+                        enabled = enabled,
+                        onPressStart = onHoldStart,
+                        onPressEnd = onHoldEnd,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .padding(horizontal = 4.dp),
+                    )
+                } else {
+                    if (inputMode == InputMode.VOICE) {
+                        // 确认形态（关闭"直接发送"时）：识别文本可改，左侧保留小按住键
+                        HoldToTalk(
+                            recording = recording,
+                            recognizing = recognizing,
+                            enabled = enabled,
+                            onPressStart = onHoldStart,
+                            onPressEnd = onHoldEnd,
+                            compact = true,
+                            modifier = Modifier.size(40.dp),
                         )
-                    },
-                    singleLine = true,
-                    enabled = enabled,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = {
-                        if (enabled && input.isNotBlank()) {
+                    }
+                    TextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        placeholder = {
+                            Text(
+                                text = when {
+                                    !enabled -> "先在 ⚙️ 设置里配置 AI 服务"
+                                    inputMode == InputMode.VOICE -> "识别结果确认后发送…"
+                                    else -> "说点什么，回车或发送…"
+                                },
+                                fontSize = 13.sp
+                            )
+                        },
+                        singleLine = true,
+                        enabled = enabled,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = {
+                            if (enabled && input.isNotBlank()) {
+                                onSend(input)
+                                input = ""
+                            }
+                        }),
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = {
                             onSend(input)
                             input = ""
-                        }
-                    }),
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = {
-                        onSend(input)
-                        input = ""
-                    },
-                    enabled = enabled && input.isNotBlank()
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "发送",
-                        tint = if (enabled && input.isNotBlank())
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                        },
+                        enabled = enabled && input.isNotBlank()
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "发送",
+                            tint = if (enabled && input.isNotBlank())
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (busy) {
                     IconButton(onClick = onInterrupt) {
@@ -1307,6 +1542,116 @@ private fun AiChatBar(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 按住说话（任务 4）：press-hold 手势驱动 [onPressStart]/[onPressEnd]。
+ * 录音中红底"松开 识别"，识别中"识别中…"；`compact` 为确认形态的小圆钮。
+ */
+@Composable
+private fun HoldToTalk(
+    recording: Boolean,
+    recognizing: Boolean,
+    enabled: Boolean,
+    onPressStart: () -> Unit,
+    onPressEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val bgColor = when {
+        recording -> MaterialTheme.colorScheme.errorContainer
+        recognizing -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    }
+    val label = when {
+        recording -> "松开 识别"
+        recognizing -> "识别中…"
+        enabled -> "按住 说话"
+        else -> "未配置 AI 服务"
+    }
+    Box(
+        modifier = modifier
+            .clip(if (compact) CircleShape else RoundedCornerShape(22.dp))
+            .background(bgColor)
+            .then(
+                if (enabled) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                onPressStart()
+                                tryAwaitRelease()
+                                onPressEnd()
+                            }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (compact) "🎤" else label,
+            color = if (recording)
+                MaterialTheme.colorScheme.onErrorContainer
+            else
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = if (compact) 16.sp else 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 左上角输入模式下拉框：手动打字 / 打字输入 / 语音模式，三模式互斥切换。 */
+@Composable
+private fun InputModeSelector(
+    current: InputMode,
+    onSelect: (InputMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Surface(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(14.dp),
+            color = Color.Black.copy(alpha = 0.45f)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp)
+            ) {
+                Text(
+                    text = current.label,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "切换输入模式",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            InputMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (mode == current) "${mode.label}（当前）" else mode.label,
+                            fontWeight = if (mode == current) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        if (mode != current) onSelect(mode)
+                    },
+                )
             }
         }
     }

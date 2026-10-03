@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.ConversationContextSummary
+import com.neethu.aiavatar_sdk.VoicePrefs
 import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarRenderSettings
@@ -99,6 +100,7 @@ internal fun SettingsScreen(
     useExternalAnimations: Boolean,
     externalRootPath: String?,
     aiPrefs: AiChatPrefs,
+    voicePrefs: VoicePrefs,
     contexts: List<ConversationContextSummary>,
     activeContextId: String,
     protocolPrompt: String,
@@ -106,6 +108,7 @@ internal fun SettingsScreen(
     onAnimationSourceChange: (Boolean) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
     onAiPrefsChange: (AiChatPrefs) -> Unit,
+    onVoicePrefsChange: (VoicePrefs) -> Unit,
     onNewContext: () -> Unit,
     onSelectContext: (String) -> Unit,
     onDeleteContext: (ConversationContextSummary) -> Unit,
@@ -270,6 +273,18 @@ internal fun SettingsScreen(
                                 subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
                                 checked = aiPrefs.llmCamera
                             ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
+                            // 语音输入（任务 4）：ASR 走同一端点的 /audio/transcriptions
+                            SettingsGroupLabel("语音输入（按住说话，OpenAI 兼容 /audio/transcriptions）")
+                            SettingsTextFieldRow(
+                                title = "ASR 模型（留空=按端点自动选择）",
+                                value = voicePrefs.asrModel,
+                                placeholder = "硅基流动=Qwen/Qwen3-ASR-1.7B · 其他=whisper-1"
+                            ) { onVoicePrefsChange(voicePrefs.copy(asrModel = it)) }
+                            SettingsSwitchRow(
+                                title = "语音直接发送",
+                                subtitle = "松手识别成功即发送；关闭则识别文本先填入输入框，确认后再发",
+                                checked = voicePrefs.autoSend
+                            ) { onVoicePrefsChange(voicePrefs.copy(autoSend = it)) }
                         }
                     }
 

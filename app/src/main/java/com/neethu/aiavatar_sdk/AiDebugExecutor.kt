@@ -40,6 +40,16 @@ internal class AiChatDebugHooks(
     val selectContext: (String) -> String = { _ ->
         throw IllegalStateException("AI chat not wired in this screen")
     },
+    /** ai_cmd transcribe <file>：任意音频文件走与按住说话相同的 ASR 链路（挂起）。 */
+    val transcribeFile: suspend (File) -> String = { _ ->
+        "voice input not wired in this screen"
+    },
+    /** ai_cmd voice_record <秒>：MediaRecorder 真录音 N 秒后转写，验证录音链（挂起）。 */
+    val voiceRecord: suspend (Int) -> String = { _ ->
+        "voice input not wired in this screen"
+    },
+    /** ai_cmd set_mode manual|text|voice：切换输入模式（MIUI 禁触摸注入，用命令切）。 */
+    val setInputMode: (String?) -> String = { _ -> "AI chat not wired in this screen" },
 )
 
 /**
@@ -138,7 +148,7 @@ internal suspend fun executeAiCommand(
                             "to the app's external files dir; adb push the PNG/JSON there first)"
                     )
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
-                val file = resolveCardFile(context, arg)
+                val file = resolveAppFile(context, arg)
                 val result = chat.importCard(file.readBytes())
                     ?: throw IllegalArgumentException(
                         "not a parseable character card: ${file.absolutePath}"
@@ -147,6 +157,28 @@ internal suspend fun executeAiCommand(
             }
             "active_card" -> chat?.cardSnapshot()
                 ?: throw IllegalStateException("AI chat not wired in this screen")
+            "transcribe" -> {
+                val arg = command.arg
+                    ?: throw IllegalArgumentException(
+                        "transcribe expects ai_arg = an audio file path (absolute, or relative " +
+                            "to the app's external files dir; adb push it there first)"
+                    )
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.transcribeFile(resolveAppFile(context, arg))
+            }
+            "voice_record" -> {
+                val seconds = command.arg?.toIntOrNull()
+                    ?: throw IllegalArgumentException(
+                        "voice_record expects ai_arg = seconds to record (1..30), e.g. 3"
+                    )
+                require(seconds in 1..30) { "voice_record seconds must be 1..30, got $seconds" }
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.voiceRecord(seconds)
+            }
+            "set_mode" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setInputMode(command.arg)
+            }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
             )
@@ -202,12 +234,13 @@ private fun listAssets(
 }
 
 /**
- * Resolve the [import_card] argument: absolute path first, then relative to
- * the app's external files dir (`adb push card.png /sdcard/Android/data/
- * <pkg>/files/` needs no permission). The app itself has no storage
- * permission, so anything under shared storage roots will not read.
+ * Resolve a debug-command file argument (import_card / transcribe): absolute
+ * path first, then relative to the app's external files dir (`adb push
+ * file.png /sdcard/Android/data/<pkg>/files/` needs no permission). The app
+ * itself has no storage permission, so anything under shared storage roots
+ * will not read.
  */
-private fun resolveCardFile(context: Context, arg: String): File {
+private fun resolveAppFile(context: Context, arg: String): File {
     val absolute = File(arg)
     if (absolute.isFile) return absolute
     val external = context.getExternalFilesDir(null)

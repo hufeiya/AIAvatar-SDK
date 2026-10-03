@@ -80,3 +80,17 @@ class TtsResult(
     val format: TtsAudioFormat,
     val rawPcmSampleRate: Int = 24_000,
 )
+
+/** Recognition parameters for a speech-to-text request. */
+data class AsrConfig(
+    /** Provider model id, e.g. `whisper-1` or SiliconFlow `Qwen/Qwen3-ASR-1.7B`. */
+    val model: String,
+    /**
+     * ISO-639-1 language hint (whisper-style `language` form field, e.g. "zh");
+     * `null` = let the provider auto-detect. Providers that don't take the
+     * field simply ignore it, so leave it null unless the model needs it.
+     */
+    val language: String? = null,
+    /** Optional vocabulary/terminology hint (whisper-style `prompt`); `null` = none. */
+    val prompt: String? = null,
+)

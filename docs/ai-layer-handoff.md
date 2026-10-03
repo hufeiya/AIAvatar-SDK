@@ -27,6 +27,7 @@
 | `api/LlmAdapter.kt` | `streamChat(messages, config): Flow<LlmStreamEvent>`，事件 = TextDelta/Finish/Error |
 | `api/TagCue.kt` + `api/TagExtractor.kt` | 多模态行内标签协议（任务 8）：`TagCue` sealed（Emotion/Action/Camera，只带字符串，映射归 orchestrator）；`ExtractionResult(cleanText, cues)`；接口 `TagExtractor` |
 | `api/TtsAdapter.kt` | `suspend synthesize(text, config): TtsResult`（V1 句级整段返回） |
+| `api/AsrAdapter.kt` + `openai/OpenAiCompatibleAsrAdapter.kt` | 语音输入（任务 4）：`suspend transcribe(audio, mime, config): String`；OpenAI 兼容 `POST {base}/audio/transcriptions`（multipart `model`+`file`，文件名/Content-Type 由 mime 推导，m4a→`audio/mp4`）；language/prompt 缺省不发送（硅基流动只收 file+model，多余字段有 400 风险）；非 2xx 与 200 非 JSON 都带响应预览抛 IOException（A.1 第 11 条同源教训） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
 | `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
@@ -95,6 +96,16 @@
   - **idle 与 AI 会话解耦**：原来 idle 挂在 `session.idleAction`（AI 会话建立后才生效，未配 AI 时冷启动必 T-pose）。app 改为 `applyIdle` 直挂 controller（`LaunchedEffect(state)` 模型每次加载后按持久化值/内置优先级挂载），面板长按与 `ai_cmd set_idle/idle_off` 同改；`session.idleAction` API 保留（SDK 集成者用），demo 不再走
   - **renderer 同源去重**：`idleSource` 记录已挂来源，重复 `setVrmaIdleAnimation(同路径)` 直接返回（否则 produceState/LaunchedEffect 重组反复重解析+从头起播，待机莫名词跳）；模型重载时随引擎重建清空
   - `Arms Down.vrma` 是 0.0417s **单帧静态姿势**（循环即恒定垂臂站立）；真机验证：冷启动截图即垂臂站姿、LLM 两手势（挥手+握拳）播完回 Arms Down、`set_idle` 换 Look Around 立即转头（6.33s clip 热切换）再切回 Arms Down，全程零 FATAL
+
+- **任务 4 已完成（2026-10-03，真机 62fabe84，硅基流动）**：语音输入（ASR）+ 三种输入模式——
+  - **adapter**：`api/AsrAdapter`（`suspend transcribe(audio: ByteArray, mime: String, config): String`，对齐 TtsAdapter 风格）+ `AsrConfig(model, language?, prompt?)` + `OpenAiCompatibleAsrAdapter`——multipart 上传 `/audio/transcriptions`；错误全带响应预览（`ASR HTTP 4xx` / `non-JSON body`）
+  - **三种输入模式（互斥，持久化 `ai_input_mode`，左上角 InputModeSelector 下拉框切换、唯一常驻控制）**：`MANUAL 手动打字`=完整 UI（全部 FAB 可见）；`TEXT 打字输入`/`VOICE 语音模式`=**隐藏所有界面按钮**（拖拽 FAB + 整列 FAB 都不渲染，切离手动时自动收起面板）。聊天条按模式变形：VOICE 且输入空=整条"按住 说话"；关闭"语音直接发送"且识别出文本=小按住键 + 可改文本框 + 发送键（确认形态）。聊天条贴底位置也随模式变（手动 96dp 给 FAB 让位，纯净两档 12dp）
+  - **录音**：`VoiceRecorder`——MediaRecorder AAC/16kHz/单声道/MPEG_4(.m4a) 到 cacheDir（识别后即删）；`stop()` 抛 RuntimeException（按太短/无采样）返回 null 并清理；按住手势 = `pointerInput + detectTapGestures(onPress){ start; tryAwaitRelease; end }`；**半双工**：按下的瞬间 `phase==SPEAKING` 先 `session.interrupt()`（对齐 AIRI 说话时抑制聆听）；`DisposableEffect` onDispose `voiceRecorder.cancel()` 防切模式/退出占麦；RECORD_AUDIO 运行时权限：无权限首按弹系统框（拒绝上错误条）
+  - **ASR 配置**：`VoicePrefs(asrModel 留空=自动, autoSend 默认开)` 持久化 `ai_asr_model`/`ai_voice_auto_send`——**刻意不并入 AiChatPrefs**（会话身份 = AiChatPrefs + 上下文，改 ASR 配置不应重建会话杀掉在播回复）；`resolveAsrModel`：baseUrl 含 siliconflow → **`Qwen/Qwen3-ASR-1.7B`**（需求指定），其他 → `whisper-1`；设置页「AI 配置」加 ASR 模型行 + 直接发送开关
+  - **调试命令**：`transcribe <音频文件>`（不走麦克风、无需权限，与按住说话同一 ASR 链路）/ `voice_record <秒>`（真录音链路，录前先打断）/ `set_mode manual|text|voice`（MIUI 禁触摸注入的 UI 驱动）
+  - **单测 122 全绿**（adapter +6：happy/401/200非JSON/空文本/language+prompt 透传/wav mime 映射；app +4：resolveAsrModel）
+  - **真机验证**：host 用硅基流动 TTS 合成"今天天气真不错，我们一起出去散步吧。"mp3 → push → `transcribe` 识别**逐字一致**（默认模型推断生效）；半双工打断生效（`voice_record` 发起时正在播的回复 PlaybackInterrupted）；三模式 `screencap` 截图：手动=FAB 齐全+输入条、打字/语音=按钮全隐（输入条/按住说话）、左上角下拉框常驻且标签正确；force-stop 重启保持语音模式（prefs `ai_input_mode=VOICE`）；`voice_record` 无权限路径报错清晰
+  - **已知未覆盖**：MediaRecorder **成功**链路需真手——HyperOS 麦克风权限墙（见 A.1 第 21 条），首按"按住说话"弹系统框授权后才可录；autoSend=false 确认流程与下拉菜单点选同样需真手（禁触摸注入）
 
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
@@ -200,7 +211,7 @@ API Key: <在这里贴上Key>
 注意: kotlin 2.0.21 + ksp 版本兼容是本任务最大风险,先跑通一个空 Room 工程再铺开。提交代码。
 ```
 
-### 任务 4：语音输入（ASR 适配器）
+### 任务 4：语音输入（ASR 适配器）（✅ 已完成，2026-10-03，见第二章 2.4；demo 另做了三种互斥输入模式）
 
 ```
 继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
@@ -428,6 +439,7 @@ LLM SSE delta
 18. **标签名统一小写 vs 模型 morph 名大小写敏感（直接表情全灭的元凶，任务 8.1）**：`InlineTagExtractor` 沿用老协议把 cue 名 `lowercase()`，而 `AvatarState.Ready.expressions`/`getAvailableExpressions()` 返回的 morph 名是大小写敏感的（SK_Sun 是 ARKit 命名 `blinkLeft/eyeBlinkLeft/browInnerUp…`）——`<emo:blinkLeft:1>` 解析成 `blinkleft` 后被 availableExpressions 门控**静默丢弃**，事件都不发。最坑的是模型明明发了标签（`raw reply` 日志可见），表象却是"模型不遵守协议"。已修：`FaceDriver.resolveExpression` 大小写不敏感还原真实 morph 名（纯函数单测），分派时规范情绪走小写、直接表情走还原名。教训：**"模型不听话"先看 `AvatarSession` 的 `raw reply:` 日志再归因**——这次连试 4 轮提示词工程都无效，实际是客户端丢事件。
 19. **调试钩子读 UI 状态快照会陈旧（任务 3）**：`AiChatDebugHooks` 若捕获 Compose 的列表状态（如设置页用的 `contextList`，只在打开设置页时刷新），`ai_cmd` 在任意时刻执行时读到的是旧值——真机首次验证 `contexts` 返回空列表，实际库里已有会话行（run-as 拉库证实）。已修：`contexts`/`select_context` 钩子改为执行时 `runBlocking + Dispatchers.IO` 实时查库（调试命令在主线程同步执行，几十行的小查询阻塞可忽略）。教训：**给 adb 代理用的查询命令一律实时读数据源，不读 UI 派生状态**。
 20. **"待机优先级表"按文件名先过滤候选集会让不含关键字的条目永远落空（默认 idle 改 Arms Down 时踩）**：`resolveIdleAction` 原实现先 `filter { 文件名含 "idle" }` 再按 IDLE_PREFERENCE 精确匹配——首位换成 "Arms Down" 后它根本不在候选集里，静默落到第二优先级（logcat 里 `Loaded idle VRMA: 6.33s` 而非 0.042s 暴露）。修法：优先级表直接在库全量里精确匹配。**观测点：挂载的 idle 是否符合预期，看 `SoulLinkRenderer` 的 `Loaded idle VRMA: <时长>`——Arms Down 是单帧（0.042s），一眼可辨**。
+21. **HyperOS 麦克风 runtime 权限 adb 三条路全堵（任务 4）**：`pm grant` 报 SecurityException（shell 无 GRANT_RUNTIME_PERMISSIONS）、`adb install -r -g` 后 dumpsys 仍 `granted=false`、`appops set` 包级 allow 但 **uid 级被系统管控恒 ignore**——MediaRecorder `setAudioSource` 直接抛 `setAudioSource failed`。对策：验证 ASR 链路**不需要麦克风**——`ai_cmd transcribe <文件>` 走 file→bytes→适配器，与按住说话完全同一 ASR 路径（host 用 TTS 合成语音 push 进去还能做 TTS→ASR 闭环自校验）；录音链路只能真手首按授权。**顺带的观测坑：`ai_cmd screenshot` 抓的是渲染帧（`controller.captureFrame`，纯 3D 无 Compose UI），验证按钮显隐/聊天条形态必须用 `adb exec-out screencap -p`**。
 
 ### A.2 调参速查表
 
@@ -447,6 +459,8 @@ LLM SSE delta
 | 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
 | 冷启动就是 T-pose | idle 挂载失败或被清：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`（demo 现在与 AI 会话解耦，模型加载即自动挂，默认 Arms Down）；挂上了仍 T-pose 则查引擎版本是否含"挂 idle 即接管"语义 |
 | 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |
+| 按住说话报"录音启动失败：setAudioSource failed" | 麦克风 runtime 权限未授（HyperOS 禁 adb 授权，见 A.1 第 21 条）；真手首按弹系统框允许一次即可 |
+| 语音识别失败/识别为空 | 先 `ai_cmd transcribe <push 的音频>` 分离"录音问题"vs"ASR 问题"（TTS 合成一段语音 push 进去可闭环自校验）；识别空文本=离麦远/环境静音；ASR 模型确认：baseUrl 含 siliconflow 默认 `Qwen/Qwen3-ASR-1.7B`，可在设置里显式覆盖 |
 
 验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 
