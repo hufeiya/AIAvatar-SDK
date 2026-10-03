@@ -63,7 +63,7 @@
 
 ### 2.4 验证状态
 
-- **50 单测全绿**：adapter 22（emotion 9 / vowel 6 / processor 4 / profile 3）+ orchestrator 28（chunker 12 / card 7 / assembler 4 / pipeline 5）
+- **50 单测全绿**：adapter 22（emotion 9 / vowel 6 / processor 4 / profile 3）+ orchestrator 28（chunker 12 / card 7 / assembler 4 / pipeline 5）；任务 2 后增至 **62**（orchestrator +12：卡片库 8 / speak 4）
 - **任务 1 已完成（2026-10-03，真机 2c3769db，硅基流动 DeepSeek-V3 + CosyVoice2）**：成功路径全链路验证通过——
   - ①断句流水：LLM 首句 ~2s 出声，N 句播放时 N+1/N+2 已在合成，句间无缝（前句 Ended 10ms 后下句 Started）
   - ②口型：FaceDriver 采样日志（tag `FaceDriver`，2Hz）确认 viseme 跟随语音（ih/ou/oh 交替，峰值 0.47）；截图帧间嘴部差分 17-19
@@ -71,6 +71,12 @@
   - ④眨眼：自动眨眼每 1-6s 一次（14s 抓到 2 次），情绪回落不压制眨眼
   - ⑤打断：`interrupt_chat` 后 45ms 内 PlaybackInterrupted，AudioTrack 立即消失（dumpsys 验证），无崩溃
   - 过程中修了 4 个真 bug + 1 个观测坑，见附录 A.1；调试命令 send_chat/interrupt_chat/chat_state 见 docs/ai-debug-intents.md
+- **任务 2 已完成（2026-10-03，真机 62fabe84 小米14/HyperOS Android16，硅基流动）**：人物卡导入 UI + 开场白——
+  - orchestrator：`CharacterCardStore`（filesDir 字节落盘，纯 JVM 可测）、`AvatarSession.speak()`（无 LLM 直通 pipeline）、`clearCharacterCard()`、`spokenGreeting()`（{{char}}/{{user}} 宏替换）
+  - app：`CardLibrary`（索引 ai_cards + 激活 ai_active_card 持久化 demo_settings）、CARDS 面板（双行列表：名称 + spec·version，使用中徽标，删除钮，SAF 导入 PNG/JSON，导入即自动激活）、激活 = setCharacterCard + clearHistory + 自动 speak(first_mes)；会话（重）建后自动重挂卡片提示词，激活时 AI 未配置则记 pendingGreetingFile 待会话就绪补播
+  - 调试命令新增 `import_card` / `active_card` / `open_panel` / `list cards`（见 docs/ai-debug-intents.md）
+  - 真机验证：PNG(V2)/JSON(V3) 导入激活 ✓、坏卡拒绝 ✓、开场白自动朗读（`*动作*` 剥离、宏替换、按序播放）✓、按人设回答 ✓、系统提示词重写（388/440 chars）✓、重启后卡片与激活态持久化 ✓、面板 UI 截图 ✓、全程无崩溃
+  - 未覆盖：SAF 选择器手势流与面板内点按激活/删除（HyperOS 禁止 shell 注入触摸；二者与已验证的 import_card 命令共用同一条落盘/索引/激活路径）
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts
 
 ## 三、关键设计决策（改代码前必读）
@@ -102,7 +108,7 @@
 - 填写入口：App ⚙️ 设置 →「AI 对话」→ 五项即填即存。
 - 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest`
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
-- 设备：`2c3769db`；日志关注 `adb logcat -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
+- 设备：`62fabe84`（小米14/HyperOS Android16，任务2起；已配硅基流动，注意 HyperOS 禁 shell input）与 `2c3769db`（任务1）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
 ## 六、接下来的工作 —— 任务提示词（按优先级）
 
@@ -125,7 +131,7 @@
 API Key: <在这里贴上Key>
 ```
 
-### 任务 2：人物卡导入 UI（不依赖 API，随时可做）
+### 任务 2：人物卡导入 UI（✅ 已完成，2026-10-03，见第二章 2.4）
 
 ```
 继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章;本次做人物卡导入 UI。
@@ -222,6 +228,8 @@ demo 设置加 TTS 引擎切换(OpenAI 兼容 / Edge-TTS,后者不需要 baseUrl
 5. **CosyVoice2 输出电平很低**（帧 RMS p95≈0.08 满量程），VowelDriver 的 AIRI 常量按麦克风级输入（0.3~1.0）标定，直接喂进去口型只开 15%。已修：`WlipsyncLipSyncProcessor.analyze` 末尾按整段 clip 做 p95 音量归一化（目标 0.75，增益上限 12 倍，静音不动）——uLipSync "profile gain" 的等价物，provider 无关。修后响亮帧 viseme 达 0.47（AIRI 文档示例 0.49）。
 6. **观测坑：相机每次重启 app 都复位到默认全身景**。截图差分验证口型/表情前必须先 `ai_cmd camera_shot closeup`，且差分坐标要按当前取景重新标定——本次在全身景下按旧特写坐标量了半天"鼻子"，误判表情系统全坏，浪费近一小时。`set_expression jawOpen` + closeup 全帧差分 2.0 才是可信信号。
 7. **adb run-as 写文件的引号坑**：`adb shell run-as PKG sh -c 'cat > shared_prefs/xx.xml'` 会被 adb 拆词，重定向落在 device shell（cwd=/）报 `can't create file`。正确写法：`adb shell "run-as PKG sh -c 'cat > /data/data/PKG/shared_prefs/xx.xml'" < local_file`（外层双引号 + 绝对路径）。
+8. **coroutines-test 1.9.0 的 `advanceUntilIdle()` 不投递 SharedFlow 挂起恢复**：runTest 里 `backgroundScope` 订阅 `MutableSharedFlow` 后同步 `tryEmit`，`testScheduler.advanceUntilIdle()` 实测收不到（订阅协程仍挂起），`testScheduler.runCurrent()` 才可靠投递。AvatarSessionSpeakTest 已按此写法（注释也写在测试里），以后写事件流单测别再用 advanceUntilIdle 泵。
+9. **HyperOS/Android 16 禁止 shell 注入触摸**：`adb shell input tap` 抛 `SecurityException: Injecting input events requires INJECT_EVENTS`（旧设备的 MIUI 也只有部分机型放行）。UI 驱动改走 `ai_cmd open_panel <面板名>`（本次新增），文件选择器这类必须真手点的就放弃自动化。
 
 ### A.2 调参速查表
 

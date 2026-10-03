@@ -29,3 +29,19 @@ data class CharacterCard(
     /** Unmodified `data.extensions` (or root `extensions` for V1), for forward compatibility. */
     val extensions: JsonObject? = null,
 )
+
+// SillyTavern's two core macros. Greetings are spoken aloud, so they must not
+// leak into TTS literally. The SDK has no persona concept yet, so `{{user}}`
+// resolves to a generic second-person address (tune per app if needed).
+private val CHAR_MACRO = Regex("""\{\{\s*char\s*\}\}""", RegexOption.IGNORE_CASE)
+private val USER_MACRO = Regex("""\{\{\s*user\s*\}\}""", RegexOption.IGNORE_CASE)
+
+/**
+ * [CharacterCard.firstMessage] prepared for [com.neethu.orchestrator.session.AvatarSession.speak]:
+ * `{{char}}` → the card's name, `{{user}}` → [userAlias].
+ */
+fun CharacterCard.spokenGreeting(userAlias: String = "你"): String =
+    firstMessage
+        .replace(CHAR_MACRO, name)
+        .replace(USER_MACRO, userAlias)
+        .trim()

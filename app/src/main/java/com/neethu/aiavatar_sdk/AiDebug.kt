@@ -101,10 +101,10 @@ private fun Any?.asBoolean(): Boolean? = when (this) {
 fun aiDebugHelp(): String = """
     |AI debug interface — intent extras: ai_cmd, ai_arg, ai_x, ai_y, ai_z, ai_weight, ai_loop
     |
-    |Query:
-    |  help                     Print this help
-    |  state                    Dump avatar/scene/animation/expression/camera state
-    |  list <arg>               List assets: models | scenes | animations | expressions
+|Query:
+|  help                     Print this help
+|  state                    Dump avatar/scene/animation/expression/camera state
+|  list <arg>               List assets: models | scenes | animations | expressions | cards
     |Assets:
     |  load_model <arg>         Switch character. arg = file in assets/vrms (.glb/.vrm)
     |  load_scene <arg>         Switch scene (file in assets/scene) or remove it (arg=none)
@@ -122,13 +122,22 @@ fun aiDebugHelp(): String = """
     |  camera_shot <arg>        Frame a preset shot with a smooth transition:
     |                           closeup | medium | full | long | over | off (release)
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
+|  open_panel <arg>         Open a bottom panel: none | models | animations |
+|                           expressions | scenes | cards | settings
     |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
     |Chat (requires the AI service configured in ⚙️ settings):
     |  send_chat <arg>          Send ai_arg as the user's chat message; the reply
     |                           streams into the subtitle + AIDebug event logs
     |  interrupt_chat           Interrupt the current turn (same as ✕ button)
-    |  chat_state               Dump chat phase / subtitle length / last error
-    |Other:
+|  chat_state               Dump chat phase / subtitle length / last error
+|Cards (no AI service needed to import/activate):
+|  import_card <arg>        Import + activate a card (SillyTavern PNG/JSON).
+|                           arg = absolute path, or path under the app's
+|                           external files dir (adb push there first).
+|                           Activating rewrites the system prompt and speaks
+|                           the greeting when a TTS service is configured.
+|  active_card              Dump active card name/spec/system-prompt head
+|Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |
     |Example:

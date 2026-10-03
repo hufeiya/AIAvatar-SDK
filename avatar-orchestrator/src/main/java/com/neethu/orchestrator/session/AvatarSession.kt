@@ -124,7 +124,11 @@ class AvatarSession(
             override fun onPlaybackStarted(item: PlaybackItem) {
                 queue.active()?.let { faceDriver?.onPlaybackStarted(item, it) }
                 scope.launch(Dispatchers.Main.immediate) {
-                    if (_phase.value == ConversationPhase.THINKING) _phase.value = ConversationPhase.SPEAKING
+                    // Normal turns arrive here via THINKING; speak()'s greeting
+                    // turns start from IDLE — either way playback means speaking.
+                    if (_phase.value != ConversationPhase.SPEAKING) {
+                        _phase.value = ConversationPhase.SPEAKING
+                    }
                     emit(AvatarEvent.SentenceStarted(item.sequence, item.text))
                 }
             }
@@ -153,6 +157,11 @@ class AvatarSession(
     /** Load persona from a character card and rebuild the system prompt. */
     fun setCharacterCard(card: CharacterCard) {
         systemPrompt = options.assembler.assemble(card)
+    }
+
+    /** Drop the card persona (system prompt reverts to empty). */
+    fun clearCharacterCard() {
+        systemPrompt = ""
     }
 
     /**
@@ -223,6 +232,42 @@ class AvatarSession(
     suspend fun sendAndAwait(text: String) {
         send(text)
         turnJob?.join()
+    }
+
+    /**
+     * Speak [text] directly, without an LLM turn — character-card greetings,
+     * announcements. The text goes through the same chunker → TTS → ordered
+     * playback pipeline (emotion markers are NOT interpreted); phase skips
+     * THINKING and the playback callback drives IDLE→SPEAKING→IDLE. The text
+     * is not appended to conversation history. Suspending like
+     * [sendAndAwait]; [interrupt] cuts it mid-playback.
+     */
+    suspend fun speak(text: String) {
+        if (text.isBlank()) return
+        if (turnJob?.isActive == true) interrupt("superseded")
+        val ttsCfg = ttsConfig ?: run {
+            emit(AvatarEvent.TurnFailed(IllegalStateException("ttsConfig not set")))
+            return
+        }
+        val job = scope.launch {
+            chunker.reset()
+            pipeline.beginTurn()
+            try {
+                (chunker.feed(text) + chunker.flush()).forEach { submitSentence(it, ttsCfg) }
+                pipeline.endTurn()
+                pipeline.awaitTurnComplete()
+                _phase.value = ConversationPhase.IDLE
+                emit(AvatarEvent.TurnCompleted(interrupted = false))
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                pipeline.cancelTurn("speak-error")
+                _phase.value = ConversationPhase.IDLE
+                emit(AvatarEvent.TurnFailed(t))
+            }
+        }
+        turnJob = job
+        job.join()
     }
 
     /**

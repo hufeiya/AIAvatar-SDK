@@ -3,11 +3,14 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
@@ -54,6 +57,9 @@ import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.rememberAvatarController
+import com.neethu.orchestrator.card.CharacterCard
+import com.neethu.orchestrator.card.CharacterCardStore
+import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
@@ -119,11 +125,11 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Which panel is currently shown */
-internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, SETTINGS }
+internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, CARDS, SETTINGS }
 
 // ── 设置持久化（SharedPreferences）─────────────────────────────────────
 
-private const val PREFS_NAME = "demo_settings"
+internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 
 /** 读取枚举设置项；名字失效（如改过枚举名）时回落到默认值。 */
@@ -219,6 +225,23 @@ internal class DemoUiState(context: Context) {
     var aiPrefs by mutableStateOf(prefs.loadAiPrefs())
         private set
 
+    /** 人物卡库：bytes 落 filesDir/cards，索引/激活卡持久化到 demo_settings。 */
+    val cardLibrary = CardLibrary(context)
+
+    /** 已导入的卡片（镜像 cardLibrary.cards，驱动 UI 重组）。 */
+    var cards by mutableStateOf(cardLibrary.cards)
+        private set
+
+    /** 当前激活卡片的文件名；null = 未激活。 */
+    var activeCardFile by mutableStateOf(cardLibrary.activeFile)
+        private set
+
+    /**
+     * 激活卡片时 AI 会话尚不可用（未配置服务）则记下文件名，会话就绪后由
+     * DemoScreen 补播一次开场白；仅内存，不跨进程。
+     */
+    var pendingGreetingFile: String? = null
+
     init {
         refreshAnimationFiles(context)
     }
@@ -242,6 +265,43 @@ internal class DemoUiState(context: Context) {
     fun updateAiPrefs(p: AiChatPrefs) {
         aiPrefs = p
         prefs.saveAiPrefs(p)
+    }
+
+    // ── 人物卡 ────────────────────────────────────────────────────────────
+
+    /** 按文件名查卡片条目。 */
+    fun cardByFile(fileName: String?): CharacterCardStore.Entry? =
+        cards.firstOrNull { it.fileName == fileName }
+
+    /** 从 SAF Uri 导入；null = 不可读或解析失败。成功后刷新列表。 */
+    fun importCard(context: Context, uri: Uri): CharacterCardStore.Entry? {
+        val entry = cardLibrary.import(context, uri) ?: return null
+        cards = cardLibrary.cards
+        return entry
+    }
+
+    /** 字节级导入（adb 调试命令用），与 UI 导入同一条落盘/索引路径。 */
+    fun importCardBytes(bytes: ByteArray): CharacterCardStore.Entry? {
+        val entry = cardLibrary.importBytes(bytes) ?: return null
+        cards = cardLibrary.cards
+        return entry
+    }
+
+    /** 激活/取消激活（null）并持久化；会话内的系统提示由 DemoScreen 处理。 */
+    fun setActiveCard(fileName: String?) {
+        activeCardFile = fileName
+        cardLibrary.setActive(fileName)
+        if (fileName == null) pendingGreetingFile = null
+    }
+
+    /** 删除卡片；若删的是激活卡同时清激活态。 */
+    fun deleteCard(fileName: String) {
+        cardLibrary.delete(fileName)
+        cards = cardLibrary.cards
+        if (activeCardFile == fileName) {
+            activeCardFile = null
+            pendingGreetingFile = null
+        }
     }
 
     /** 外置动画根目录：App 外部存储私有区（`/sdcard/Android/data/<pkg>/files`）。 */
@@ -388,6 +448,18 @@ private fun DemoScreen(
 
     LaunchedEffect(session) {
         val s = session ?: return@LaunchedEffect
+        // 会话（重）建后让激活的人物卡重新生效；激活时若 AI 尚未配置，
+        // pendingGreetingFile 记着开场白意图，这里补播一次。
+        uiState.activeCardFile?.let { file ->
+            uiState.cardByFile(file)?.let { entry ->
+                s.setCharacterCard(entry.card)
+                if (uiState.pendingGreetingFile == file) {
+                    uiState.pendingGreetingFile = null
+                    val greeting = entry.card.spokenGreeting()
+                    if (greeting.isNotEmpty()) launch { runCatching { s.speak(greeting) } }
+                }
+            }
+        }
         launch { s.phase.collect { chatPhase = it } }
         launch {
             s.events.collect { ev ->
@@ -428,6 +500,46 @@ private fun DemoScreen(
         onDispose { aiChat.shutdown() }
     }
 
+    // ── 人物卡：激活/删除逻辑，卡片面板与 adb import_card 共用 ────────────
+    val activateCard: (CharacterCardStore.Entry) -> Unit = { entry ->
+        val wasActive = uiState.activeCardFile == entry.fileName
+        uiState.setActiveCard(if (wasActive) null else entry.fileName)
+        val s = session
+        when {
+            wasActive -> {
+                s?.clearCharacterCard()
+                s?.clearHistory()
+            }
+            s != null -> {
+                s.setCharacterCard(entry.card)
+                s.clearHistory()
+                val greeting = entry.card.spokenGreeting()
+                if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+            }
+            else -> uiState.pendingGreetingFile = entry.fileName
+        }
+    }
+    val deleteCard: (CharacterCardStore.Entry) -> Unit = { entry ->
+        val wasActive = uiState.activeCardFile == entry.fileName
+        uiState.deleteCard(entry.fileName)
+        if (wasActive) {
+            session?.clearCharacterCard()
+            session?.clearHistory()
+        }
+    }
+
+    // 导入：SAF 选 PNG / JSON → parse → 落盘 → 索引 → 自动激活
+    val cardPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val entry = uiState.importCard(context, uri)
+            if (entry == null) {
+                chatError = "无法解析所选文件为角色卡（支持 SillyTavern PNG / JSON）"
+            } else {
+                activateCard(entry)
+            }
+        }
+    }
+
     // AI debug hooks: adb commands drive the same chat path as the chat bar
     val chatHooks = remember {
         AiChatDebugHooks(
@@ -446,6 +558,28 @@ private fun DemoScreen(
             },
             snapshot = {
                 "phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"}"
+            },
+            importCard = { bytes ->
+                val entry = uiState.importCardBytes(bytes)
+                if (entry == null) null
+                else {
+                    activateCard(entry)
+                    "imported ${entry.fileName} (name=${entry.card.name}, spec=${entry.card.spec}) and activated"
+                }
+            },
+            cardSnapshot = {
+                val file = uiState.activeCardFile
+                if (file == null) "no active card (cards=${uiState.cards.size})"
+                else {
+                    val entry = uiState.cardByFile(file)
+                    if (entry == null) "active=$file but the file is missing/corrupt"
+                    else {
+                        val prompt = session?.systemPrompt.orEmpty()
+                        "active=$file name=${entry.card.name} spec=${entry.card.spec} " +
+                            "version=${entry.card.characterVersion} firstMes=${entry.card.firstMessage.length}ch " +
+                            "sysPromptChars=${prompt.length} sysPromptHead=${prompt.take(100)}"
+                    }
+                }
             },
         )
     }
@@ -617,6 +751,22 @@ private fun DemoScreen(
                 )
             }
 
+            // Character card FAB (人物卡, text "卡" like the camera "视" FAB)
+            SmallFloatingActionButton(
+                onClick = {
+                    uiState.activePanel =
+                        if (uiState.activePanel == PanelType.CARDS) PanelType.NONE
+                        else PanelType.CARDS
+                },
+                shape = RoundedCornerShape(50),
+                containerColor = if (uiState.activePanel == PanelType.CARDS)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Text(text = "卡", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+
             // Animation FAB
             SmallFloatingActionButton(
                 onClick = {
@@ -750,6 +900,25 @@ private fun DemoScreen(
                     uiState.selectedScene = fileName
                     uiState.activePanel = PanelType.NONE
                 }
+            )
+        }
+
+        // Character card panel: import (SAF) / activate / delete
+        AnimatedVisibility(
+            visible = uiState.activePanel == PanelType.CARDS,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
+        ) {
+            CardsPanel(
+                cards = uiState.cards,
+                activeFile = uiState.activeCardFile,
+                onImport = { cardPicker.launch(arrayOf("image/png", "application/json")) },
+                onActivate = activateCard,
+                onDelete = deleteCard,
             )
         }
 
@@ -922,6 +1091,125 @@ private fun AiChatBar(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "打断"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 人物卡面板：ListPanel 的双行条目扩展版 —— 标题 = 卡片名，副标题 =
+ * spec + characterVersion；点条目激活/取消激活（激活时播开场白），尾部
+ * 图标删除。导入走 SAF（[onImport]）。
+ */
+@Composable
+private fun CardsPanel(
+    cards: List<CharacterCardStore.Entry>,
+    activeFile: String?,
+    onImport: () -> Unit,
+    onActivate: (CharacterCardStore.Entry) -> Unit,
+    onDelete: (CharacterCardStore.Entry) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        tonalElevation = 4.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 4.dp, start = 4.dp)
+            ) {
+                Text(
+                    text = "角色卡",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onImport) {
+                    Text(text = "导入 PNG/JSON…", fontSize = 13.sp)
+                }
+            }
+
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 240.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(cards, key = { it.fileName }) { entry ->
+                    val isActive = entry.fileName == activeFile
+                    val bgColor by animateColorAsState(
+                        targetValue = if (isActive)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surface,
+                        label = "cardBg"
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(bgColor)
+                            .clickable { onActivate(entry) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = entry.card.name.ifEmpty { "（未命名卡片）" },
+                                fontSize = 14.sp,
+                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isActive)
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = entry.card.characterVersion
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { "${entry.card.spec} · $it" }
+                                    ?: entry.card.spec,
+                                fontSize = 11.sp,
+                                color = if (isActive)
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (isActive) {
+                            Text(
+                                text = "使用中",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(end = 4.dp)
+                            )
+                        }
+                        IconButton(onClick = { onDelete(entry) }, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "删除卡片",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                if (cards.isEmpty()) {
+                    item {
+                        Text(
+                            text = "还没有卡片。导入 SillyTavern 导出的 PNG / JSON 角色卡后，\n" +
+                                "点按卡片激活人设，AI 会按人设回答并朗读开场白。",
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
                         )
                     }
                 }

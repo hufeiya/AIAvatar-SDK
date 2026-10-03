@@ -24,6 +24,10 @@ internal class AiChatDebugHooks(
     val interrupt: () -> Boolean,
     /** One-line snapshot of phase / subtitle / error for `chat_state`. */
     val snapshot: () -> String,
+    /** Import card bytes through the UI's save/activate path; null = unparseable. */
+    val importCard: (ByteArray) -> String? = { null },
+    /** One-line snapshot of the active card + system prompt for `active_card`. */
+    val cardSnapshot: () -> String = { "AI chat not wired in this screen" },
 )
 
 /**
@@ -70,6 +74,7 @@ internal suspend fun executeAiCommand(
             }
             "camera_shot" -> cameraShotCommand(controller, command.arg)
             "set_drag_mode" -> setDragModeCommand(uiState, command.arg)
+            "open_panel" -> openPanelCommand(uiState, command.arg)
             "spring_debug" -> {
                 val enabled = when (command.arg?.lowercase()) {
                     "on", "true", "1" -> true
@@ -98,6 +103,22 @@ internal suspend fun executeAiCommand(
                 "interrupt requested"
             }
             "chat_state" -> chat?.snapshot()
+                ?: throw IllegalStateException("AI chat not wired in this screen")
+            "import_card" -> {
+                val arg = command.arg
+                    ?: throw IllegalArgumentException(
+                        "import_card expects ai_arg = a card file path (absolute, or relative " +
+                            "to the app's external files dir; adb push the PNG/JSON there first)"
+                    )
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                val file = resolveCardFile(context, arg)
+                val result = chat.importCard(file.readBytes())
+                    ?: throw IllegalArgumentException(
+                        "not a parseable character card: ${file.absolutePath}"
+                    )
+                result
+            }
+            "active_card" -> chat?.cardSnapshot()
                 ?: throw IllegalStateException("AI chat not wired in this screen")
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
@@ -141,10 +162,35 @@ private fun listAssets(
     "models", "model" -> "models=${uiState.modelFiles}"
     "scenes", "scene" -> "scenes=${uiState.sceneFiles}"
     "animations", "animation" -> "animations=${uiState.animationFiles}"
+    "cards", "card" ->
+        if (uiState.cards.isEmpty()) "cards=[]"
+        else "cards=" + uiState.cards.joinToString(", ") { entry ->
+            "${entry.card.name}(${entry.fileName}${if (entry.fileName == uiState.activeCardFile) ",active" else ""})"
+        }
     "expressions", "expression" ->
         "expressions=${DemoUiState.resolveExpressions(controller.state.value)}"
     else -> throw IllegalArgumentException(
-        "list expects models|scenes|animations|expressions, got '$arg'"
+        "list expects models|scenes|animations|expressions|cards, got '$arg'"
+    )
+}
+
+/**
+ * Resolve the [import_card] argument: absolute path first, then relative to
+ * the app's external files dir (`adb push card.png /sdcard/Android/data/
+ * <pkg>/files/` needs no permission). The app itself has no storage
+ * permission, so anything under shared storage roots will not read.
+ */
+private fun resolveCardFile(context: Context, arg: String): File {
+    val absolute = File(arg)
+    if (absolute.isFile) return absolute
+    val external = context.getExternalFilesDir(null)
+    if (external != null) {
+        val candidate = File(external, arg.removePrefix("/"))
+        if (candidate.isFile) return candidate
+    }
+    throw IllegalArgumentException(
+        "no card file at '$arg' (push it to ${external?.absolutePath ?: "<app external files dir>"} " +
+            "or pass an absolute path readable by the app)"
     )
 }
 
@@ -283,6 +329,24 @@ private fun setDragModeCommand(uiState: DemoUiState, arg: String?): String {
     }
     uiState.isDragMode = enabled
     return "drag mode ${if (enabled) "enabled" else "disabled"}"
+}
+
+/** Open/switch a bottom panel without touching the screen (MIUI blocks shell input). */
+private fun openPanelCommand(uiState: DemoUiState, arg: String?): String {
+    val panel = when (arg?.lowercase()) {
+        null, "none", "off", "close" -> PanelType.NONE
+        "models", "model" -> PanelType.MODELS
+        "animations", "animation" -> PanelType.ANIMATIONS
+        "expressions", "expression" -> PanelType.EXPRESSIONS
+        "scenes", "scene" -> PanelType.SCENES
+        "cards", "card" -> PanelType.CARDS
+        "settings" -> PanelType.SETTINGS
+        else -> throw IllegalArgumentException(
+            "open_panel expects none|models|animations|expressions|scenes|cards|settings, got '$arg'"
+        )
+    }
+    uiState.activePanel = panel
+    return "panel=${panel.name.lowercase()}"
 }
 
 private suspend fun screenshotCommand(context: Context, controller: AvatarController): String {
