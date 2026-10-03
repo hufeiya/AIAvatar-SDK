@@ -73,6 +73,7 @@ class UserCameraTracker(private val context: android.content.Context) {
         private set
 
     private var lastSnapshotMs = 0L
+    private var lastDetectMs = 0L
     private val busy = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val isActive: Boolean get() = provider != null
@@ -216,6 +217,15 @@ class UserCameraTracker(private val context: android.content.Context) {
     // ── 分析管线（analysis executor 线程）────────────────────────────────
 
     private fun analyzeFrame(proxy: ImageProxy) {
+        // 帧级门:检测 ~12.5fps 足够注视追踪(One-Euro 平滑兜着),既省 CPU 又把
+        // ML Kit 原生层的逐帧 V 级日志(FaceDetectorV2Jni,应用无法关)压掉 ~60%
+        val now = SystemClock.elapsedRealtime()
+        val detectDue = now - lastDetectMs >= DETECT_INTERVAL_MS
+        val snapDue = now - lastSnapshotMs >= SNAPSHOT_INTERVAL_MS
+        if (!detectDue && !snapDue) {
+            proxy.close()
+            return
+        }
         if (!busy.compareAndSet(false, true)) {
             proxy.close()
             return
@@ -229,15 +239,21 @@ class UserCameraTracker(private val context: android.content.Context) {
         }
         try {
             val rotation = proxy.imageInfo.rotationDegrees
-            val now = SystemClock.elapsedRealtime()
-            val snapDue = now - lastSnapshotMs >= SNAPSHOT_INTERVAL_MS
-            // 抓拍位图必须在 proxy 关闭前取（toBitmap 复制像素）
             val snapBitmap = if (snapDue) {
                 runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
             } else {
                 null
             }
             if (snapBitmap != null) lastSnapshotMs = now
+
+            if (!detectDue) {
+                // 只差抓拍的帧:不进 ML Kit(每次调用都会打一对原生 V 级日志)
+                if (snapBitmap != null) executor.execute { encodeSnapshot(snapBitmap) }
+                proxy.close()
+                busy.set(false)
+                return
+            }
+            lastDetectMs = now
 
             val w = proxy.width
             val h = proxy.height
@@ -337,6 +353,8 @@ class UserCameraTracker(private val context: android.content.Context) {
     companion object {
         private const val TAG = "VideoTracker"
         private const val SNAPSHOT_INTERVAL_MS = 500L
+        /** 人脸检测最小间隔（≈12.5fps）：注视追踪够用，原生逐帧日志与 CPU 大幅下降。 */
+        private const val DETECT_INTERVAL_MS = 80L
         private const val SNAPSHOT_SIZE = 512
         private const val SNAPSHOT_JPEG_QUALITY = 80
     }

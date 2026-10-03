@@ -25,6 +25,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // demo 项目:release 直接用 debug 签名(免配 keystore,可装可调试对比)
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
