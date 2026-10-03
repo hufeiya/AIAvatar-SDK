@@ -139,6 +139,8 @@ fun aiDebugHelp(): String = """
 |                           (model list follows; empty model = vendor default)
 |  set_tts_provider <arg>   Switch TTS provider independently (unchecks
 |                           "same as LLM"): siliconflow | volcano
+|  set_llm_model <arg>      Switch the LLM model within the current provider's
+|                           catalog (exact id, e.g. Qwen/Qwen3.8-27B)
 |Gaze (look-at; default = camera, the avatar watches the user):
 |  look_at                  No ai_arg = dump gaze state (target + applied yaw/pitch)
 |  look_at <arg>            ai_arg = camera (watch the user/lens) | off (release);
@@ -162,10 +164,19 @@ fun aiDebugHelp(): String = """
 |  voice_record <arg>       Record ai_arg seconds (1..30) of mic with the same
 |                           MediaRecorder path as push-to-talk, then transcribe
 |Modes:
-|  set_mode <arg>           Switch input mode: manual | text | voice
+    |  set_mode <arg>           Switch input mode: manual | text | voice | video
+    |                           (video = camera call: needs a vision-capable LLM,
+    |                           rejected with the reason otherwise; enables face
+    |                           gaze tracking, draggable PiP preview and per-turn
+    |                           camera snapshots attached to messages)
 |  show_buttons <arg>       Show/hide all floating buttons: on | off
 |                           (omit ai_arg to toggle). Reveals the manual
-|                           buttons while staying in text/voice mode
+|                           buttons while staying in text/voice/video mode
+|Video call (video mode):
+    |  video_camera <arg>       front | back (omit ai_arg to toggle)
+    |  video_snapshot           Probe the snapshot ring buffer (bytes/sharpness/
+    |                           age) — no request is sent; empty = camera just
+    |                           started, wait ~1s
 |Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |

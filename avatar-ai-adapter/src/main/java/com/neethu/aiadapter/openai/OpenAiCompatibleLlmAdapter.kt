@@ -109,7 +109,29 @@ class OpenAiCompatibleLlmAdapter(
             add(
                 buildJsonObject {
                     put("role", msg.role.name.lowercase())
-                    put("content", msg.content)
+                    // Text-only messages stay a plain string — array-form content
+                    // makes text-only models (DeepSeek …) answer 400. Images ride
+                    // OpenAI multimodal parts: text first, then image_url data URLs.
+                    put(
+                        "content",
+                        if (msg.images.isEmpty()) kotlinx.serialization.json.JsonPrimitive(msg.content)
+                        else kotlinx.serialization.json.buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", msg.content)
+                                }
+                            )
+                            msg.images.forEach { url ->
+                                add(
+                                    buildJsonObject {
+                                        put("type", "image_url")
+                                        put("image_url", buildJsonObject { put("url", url) })
+                                    }
+                                )
+                            }
+                        },
+                    )
                 }
             )
         }

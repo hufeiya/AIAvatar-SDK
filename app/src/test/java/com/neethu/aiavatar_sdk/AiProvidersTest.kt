@@ -16,7 +16,12 @@ class AiProvidersTest {
     fun `catalog matches the product spec`() {
         val sf = AiProvider.SILICONFLOW
         assertEquals(
-            listOf("deepseek-ai/DeepSeek-V4-Flash", "deepseek-ai/DeepSeek-V3", "Qwen/Qwen3.8-27B"),
+            listOf(
+                "deepseek-ai/DeepSeek-V4-Flash",
+                "deepseek-ai/DeepSeek-V3",
+                "Qwen/Qwen3.8-27B",
+                "Qwen/Qwen3-VL-32B-Instruct",
+            ),
             sf.llmModels,
         )
         assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.defaultLlmModel)
@@ -180,5 +185,50 @@ class AiProvidersTest {
         assertEquals("豆包语音 API Key（语音合成用）", AiProvider.VOLCANO.ttsKeyLabel)
         // 硅基流动一家一把 key：TTS 字段只在与大模型不同服务商时出现，标签带用途后缀
         assertEquals("硅基流动 API Key（语音合成用）", AiProvider.SILICONFLOW.ttsKeyLabel)
+    }
+
+    // ── 视觉模型清单（视频模式准入门控；2026-10-03 真实请求核验）──────────
+    @Test
+    fun `vision catalog matches measured model capabilities`() {
+        val sf = AiProvider.SILICONFLOW
+        // DeepSeek 系真机实测明确拒图（"The model is not a VLM"）；Qwen 两款收图
+        assertTrue("Qwen/Qwen3.8-27B" in sf.visionLlmModels)
+        assertTrue("Qwen/Qwen3-VL-32B-Instruct" in sf.visionLlmModels)
+        assertFalse("deepseek-ai/DeepSeek-V4-Flash" in sf.visionLlmModels)
+        assertFalse("deepseek-ai/DeepSeek-V3" in sf.visionLlmModels)
+        // 清单里的每个视觉模型都必须在大模型清单内（门控经 resolveLlmModel 归位）
+        assertTrue(sf.visionLlmModels.all { it in sf.llmModels })
+
+        val volc = AiProvider.VOLCANO
+        // 火山 doubao 系 chat 模型全部真看图（同图描述正确）
+        assertEquals(
+            setOf(
+                "doubao-seed-2-0-mini-260428",
+                "doubao-seed-2-1-turbo-260628",
+                "doubao-seed-2-1-pro-260915",
+                "doubao-seed-character-260628",
+            ),
+            volc.visionLlmModels.toSet(),
+        )
+        // deepseek-v4-flash-ga 是假视觉（收 image_url 但答 image data incomplete）、
+        // seedream 是图像生成模型——都不得进视觉清单
+        assertFalse("deepseek-v4-flash-ga-260731" in volc.visionLlmModels)
+        assertFalse("doubao-seedream-5-0-pro-260628" in volc.visionLlmModels)
+        assertTrue(volc.visionLlmModels.all { it in volc.llmModels })
+    }
+
+    @Test
+    fun `isVisionLlm resolves through resolveLlmModel first`() {
+        // 留空 = 默认：硅基流动默认 DeepSeek-V4-Flash 不支持视觉（视频模式要手动切 Qwen）
+        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, ""))
+        assertTrue(isVisionLlm(AiProvider.SILICONFLOW, "Qwen/Qwen3.8-27B"))
+        // 火山默认就是视觉模型（视频模式开箱即用）
+        assertTrue(isVisionLlm(AiProvider.VOLCANO, ""))
+        // 跨服务商残留值先归位再判定：SF 的 DeepSeek 残留到火山 → 火山默认（视觉），
+        // 但 SF 收到火山的值 → 落 SF 默认（非视觉）——不会把残留值误判成清单内视觉模型
+        assertTrue(isVisionLlm(AiProvider.VOLCANO, "deepseek-ai/DeepSeek-V3"))
+        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, "doubao-seed-2-0-mini-260428"))
+        // 大小写敏感：不在清单内就是不支持，不模糊匹配
+        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, "qwen/qwen3.8-27b"))
     }
 }

@@ -49,7 +49,7 @@
 | `screenshot` | — | 渲染一张 PNG 到应用外部目录，绝对路径打印到 logcat（可直接 `adb pull`） |
 | `send_chat` | `ai_arg`=消息文本 | 发送一条用户消息（等价于聊天条发送），走 LLM 流式→断句→TTS→口型全链路；断句/情绪/回合事件时序打印到 `AIDebug`（`chat:` 前缀） |
 | `interrupt_chat` | — | 打断当前 AI 回合（等价于聊天条 ✕），立即静音并回到 IDLE |
-| `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 / 已解析生效的双厂商配置（llmProvider+llmModel、ttsProvider(same=勾选态)+ttsModel+voice） |
+| `chat_state` | — | 输出 AI 对话状态：phase（IDLE/THINKING/SPEAKING）/ 字幕长度 / 最近错误 / 已解析生效的双厂商配置（llmProvider+llmModel、ttsProvider(same=勾选态)+ttsModel+voice）/ 当前模型是否支持图片输入（vision=）；视频模式再附 video=[相机/人脸/抓拍缓存状态] |
 | `contexts` | — | 列出全部对话上下文（Room 持久化，按最近使用排序）：id 前 8 位（卡片名/消息数/最近使用时间）+ 当前上下文标记 |
 | `new_context` | — | 新建一个上下文并切换（随机 UUID）；旧上下文历史保留在库里，可随时切回 |
 | `select_context` | `ai_arg`=上下文 id 前缀 | 切换到指定上下文（前缀匹配，不区分大小写），历史从 Room 恢复；无匹配报错。切换会重建会话，正在播放的回合会被打断 |
@@ -57,10 +57,13 @@
 | `active_card` | — | 输出当前激活卡片：文件名 / name / spec / version / 开场白长度 / 系统提示词长度与前 100 字符（卡片未激活输出 `no active card`） |
 | `transcribe` | `ai_arg`=音频文件路径 | 语音识别（任务 4）：把音频文件走与「按住说话」完全相同的 ASR 链路（OpenAI 兼容 `/audio/transcriptions`，模型按设置推断：硅基流动默认 `Qwen/Qwen3-ASR-1.7B`），识别文本打印到 logcat。arg 为绝对路径或相对应用外部目录的相对路径（先 `adb push`）。**不需要麦克风权限**（不走 MediaRecorder），适合无手环境验证 ASR |
 | `voice_record` | `ai_arg`=秒数(1\|30) | 用与「按住说话」相同的 MediaRecorder 路径（AAC/m4a/16kHz）真录音 N 秒后自动转写，输出文件大小与识别文本；开始录音前会先打断正在播的回复（半双工）。**需要麦克风权限**：HyperOS 禁 adb 授权（`pm grant`/`install -g`/appops 均无效），首次须真手按住说话弹系统框授权；无权限时报 `录音启动失败：setAudioSource failed` |
-| `set_mode` | `ai_arg`= manual \| text \| voice | 切换输入模式（持久化）：manual=手动点击（完整 UI，全部按钮可见）/ text=打字输入（进入时自动隐藏所有界面按钮）/ voice=语音模式（同左，按住说话）。MIUI 禁触摸注入，用此命令切换后配合 `adb exec-out screencap -p` 验证 UI |
+| `set_mode` | `ai_arg`= manual \| text \| voice \| video | 切换输入模式（持久化）：manual=手动点击（完整 UI，全部按钮可见）/ text=打字输入（进入时自动隐藏所有界面按钮）/ voice=语音模式（同左，按住说话）/ video=视频模式（语音模式的一切 + 用户相机 PiP 小窗 + 人脸注视追踪 + 每轮发送附相机抓拍）。**video 有准入门控**：只有多模态（可收图）大模型才能进入，否则 FAIL 并带原因（切模型用 `set_llm_model`）。MIUI 禁触摸注入，用此命令切换后配合 `adb exec-out screencap -p` 验证 UI；首次进入视频模式会弹系统相机权限框，**须真手点允许**（HyperOS 禁 adb 授权，同麦克风） |
+| `video_camera` | `ai_arg`= front \| back（省略=翻转） | 视频模式前后摄切换（立即重绑相机）；相机未启动报错 |
+| `video_snapshot` | — | 探测视频模式的抓拍环形缓存（每 0.5s 一帧 512×512 JPEG(80)，深 3 帧）：输出最清晰一帧的字节数/清晰度/年龄与缓存深度；空=相机刚起，等 1s 再试。只探测不发送——发送路径由 `send_chat`/按住说话自动附帧 |
 | `show_buttons` | `ai_arg`= on \| off（省略=翻转） | 显示/隐藏所有悬浮按钮：打字/语音模式进入时按钮自动隐藏，需要换模型/开设置时用它临时显示；不持久化，切模式/重启回到该模式默认（manual=显示） |
 | `set_provider` | `ai_arg`= siliconflow \| volcano | 切换大模型服务商（持久化，设置页下拉框同款语义）：模型清单随服务商切换，存储的模型/音色不在新服务商清单时自动落回该服务商默认（防跨服务商残留）；火山 LLM 需方舟 Ark API Key（与豆包语音的 API Key 是两把钥匙） |
 | `set_tts_provider` | `ai_arg`= siliconflow \| volcano | TTS 独立服务商切换：自动取消「TTS 与大模型同服务商」勾选并切到目标服务商（模型/音色同样按清单校验回落）；硅基流动 TTS 两模型共用 CosyVoice 音色引用，火山只有 seed-tts-2.0 |
+| `set_llm_model` | `ai_arg`=清单内模型 id | 当前服务商下切换大模型（精确 id，清单见 `set_provider` 后的回落默认或代码 AiProviders.kt）：硅基流动视觉模型=`Qwen/Qwen3.8-27B`/`Qwen/Qwen3-VL-32B-Instruct`，火山 4 个 doubao 系全是视觉模型（默认 mini 即可）——视频模式验证用 |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。
@@ -104,6 +107,15 @@ adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at
 adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --ef ai_x 2.5 --ef ai_y 1.0 --ef ai_z -3.5
 adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --es ai_arg camera
 adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at --es ai_arg off
+
+# 视频模式（需视觉模型；首次弹相机权限框要真手点允许）
+adb shell am start -n $PKG/.MainActivity --es ai_cmd chat_state        # 看 vision= 确认模型收图
+adb shell am start -n $PKG/.MainActivity --es ai_cmd set_mode --es ai_arg video
+adb shell am start -n $PKG/.MainActivity --es ai_cmd video_snapshot    # 探测抓拍缓存
+adb shell am start -n $PKG/.MainActivity --es ai_cmd video_camera --es ai_arg back
+adb shell am start -n $PKG/.MainActivity --es ai_cmd send_chat --es ai_arg "'描述你现在通过摄像头看到的画面'"
+# ↑ 视频模式下 send_chat 自动附缓存窗内最清晰一帧（logcat 看 AvatarSession 的
+#   "multimodal turn: N image(s)" 行）；state 命令输出 video: 相机/人脸/缓存行
 
 # 截图并拉取
 adb shell am start -n $PKG/.MainActivity --es ai_cmd screenshot

@@ -21,8 +21,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,17 +51,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.camera.core.CameraSelector
+import androidx.camera.view.PreviewView
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.LifecycleOwner
 import com.neethu.aiadapter.model.AsrConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleAsrAdapter
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
+import com.neethu.aiavatar_sdk.video.UserCameraTracker
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.AvatarRenderSettings
@@ -83,6 +95,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * Demo activity. Beyond the touch UI it exposes an AI-native debug interface:
@@ -149,6 +162,8 @@ internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
 private const val KEY_AI_INPUT_MODE = "ai_input_mode"
+private const val KEY_VIDEO_PIP_X = "ai_video_pip_x"
+private const val KEY_VIDEO_PIP_Y = "ai_video_pip_y"
 
 /** 新上下文的随机 id（UUID；ai_cmd select_context 支持前缀匹配）。 */
 private fun newContextId(): String = java.util.UUID.randomUUID().toString()
@@ -284,6 +299,39 @@ internal class DemoUiState(context: Context) {
     fun updateVoicePrefs(p: VoicePrefs) {
         voicePrefs = p
         prefs.saveVoicePrefs(p)
+    }
+
+    // ── 视频模式（任务 6）────────────────────────────────────────────────
+
+    /**
+     * 视频模式准入门控：需求是"只能多模态可以输入图片的大模型才能开启"。
+     * 返回 null = 可进入；否则返回给用户的拒绝原因（错误条展示）。
+     */
+    fun videoModeBlockReason(): String? = when {
+        !aiPrefs.isConfigured -> "先在 ⚙️ 设置里配置 AI 服务，再开视频模式"
+        !isVisionLlm(aiPrefs.provider, aiPrefs.llmModel) ->
+            "当前大模型「${resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel)}」不支持图片输入，" +
+                "视频模式需要多模态模型（⚙️ 设置里切换：硅基流动选 Qwen3.8-27B / Qwen3-VL，火山默认模型即可）"
+        else -> null
+    }
+
+    /**
+     * PiP 小窗位置（相对屏幕左上角的 0..1 分数），拖动实时更新并持久化——
+     * 重启回到上次放的位置。
+     */
+    var videoPipOffset by mutableStateOf(
+        Offset(
+            prefs.getFloat(KEY_VIDEO_PIP_X, 0.58f),
+            prefs.getFloat(KEY_VIDEO_PIP_Y, 0.12f),
+        )
+    )
+        private set
+
+    fun updateVideoPipOffset(f: Offset) {
+        val x = f.x.coerceIn(0f, 1f)
+        val y = f.y.coerceIn(0f, 1f)
+        videoPipOffset = Offset(x, y)
+        prefs.edit().putFloat(KEY_VIDEO_PIP_X, x).putFloat(KEY_VIDEO_PIP_Y, y).apply()
     }
 
     /** 渲染设置，初始值来自上一次会话的持久化。 */
@@ -704,6 +752,69 @@ private fun DemoScreen(
         if (!granted) chatError = "需要麦克风权限才能按住说话"
     }
 
+    // ── 视频模式（任务 6）：用户相机追踪 + PiP 小窗 + 发送附抓拍 ──────────
+    val videoTracker = remember { UserCameraTracker(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var cameraGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var pipLensFront by remember { mutableStateOf(true) }
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        cameraGranted = granted
+        if (!granted) chatError = "需要相机权限才能视频通话（打字/按住说话仍可用，无抓拍与注视追踪）"
+    }
+
+    /**
+     * 发送时附带的多模态抓拍（模式 A+B 合并语义：视频模式每轮都附缓存窗内
+     * 最清晰一帧）。仅视频模式 + 相机权限 + 模型确实收图才产出。
+     */
+    fun videoSnapshotImages(): List<String> {
+        if (uiState.inputMode != InputMode.VIDEO || !cameraGranted) return emptyList()
+        if (!isVisionLlm(uiState.aiPrefs.provider, uiState.aiPrefs.llmModel)) return emptyList()
+        return listOfNotNull(videoTracker.snapshotDataUrl())
+    }
+
+    // 进出视频模式：进入时补申请相机权限；离开时停相机并把视线交回默认
+    LaunchedEffect(uiState.inputMode) {
+        if (uiState.inputMode == InputMode.VIDEO) {
+            if (!cameraGranted) cameraPermission.launch(Manifest.permission.CAMERA)
+        } else {
+            videoTracker.stop()
+            session?.faceDriver?.setGazeMode(GazeMode.CAMERA)
+            if (session == null) controller.clearLookAtTarget()
+        }
+    }
+
+    // 视线消费（~30Hz）：追踪器的新人脸观测 → FaceDriver POINT 注入缝；人脸
+    // 离开画面 >1.5s 回退 CAMERA（看着镜头等用户回来）。无会话时直驱 controller。
+    LaunchedEffect(uiState.inputMode, session) {
+        if (uiState.inputMode != InputMode.VIDEO) return@LaunchedEffect
+        var lastNanos = System.nanoTime()
+        while (true) {
+            delay(33)
+            val now = System.nanoTime()
+            val dt = ((now - lastNanos) / 1_000_000_000f).coerceIn(1f / 240f, 0.25f)
+            lastNanos = now
+            val point = videoTracker.pollGazeWorld(controller.getCameraLookAt(), dt)
+            val fd = session?.faceDriver
+            if (point != null) {
+                if (fd != null) {
+                    fd.setGazePoint(point[0], point[1], point[2])
+                    fd.setGazeMode(GazeMode.POINT)
+                } else {
+                    controller.setLookAtTarget(point[0], point[1], point[2])
+                }
+            } else if (videoTracker.isActive && videoTracker.faceAgeMs() > 1500) {
+                fd?.setGazeMode(GazeMode.CAMERA)
+            }
+        }
+    }
+
     /**
      * 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。
      * ASR 目前仅硅基流动提供（OpenAI 兼容 /audio/transcriptions），key 固定
@@ -730,7 +841,9 @@ private fun DemoScreen(
                 // 半双工（对齐 AIRI 说话时抑制聆听）：按下的瞬间打断正在播的回复
                 if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
                 try {
-                    voiceRecorder.start()
+                    // 视频模式走 VOICE_COMMUNICATION 音源（平台硬件 AEC）：
+                    // 扬声器里的虚拟人声音不再混进 ASR 录音
+                    voiceRecorder.start(echoCancellation = uiState.inputMode == InputMode.VIDEO)
                     voiceRecording = true
                 } catch (e: IllegalStateException) {
                     chatError = e.message ?: "录音启动失败"
@@ -760,7 +873,7 @@ private fun DemoScreen(
                             chatError = "未识别到语音内容，请靠近一点重试"
                         } else if (uiState.voicePrefs.autoSend) {
                             replyText = ""
-                            session?.send(text)
+                            session?.send(text, videoSnapshotImages())
                         } else {
                             voicePrefill = text
                         }
@@ -827,7 +940,7 @@ private fun DemoScreen(
                 val s = session
                 if (s != null) {
                     replyText = ""
-                    s.send(text)
+                    s.send(text, videoSnapshotImages())
                 }
                 s != null
             },
@@ -842,7 +955,8 @@ private fun DemoScreen(
                     "llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} " +
                     "ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) " +
                     "ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} " +
-                    "voice=${resolveVoice(p.ttsProviderResolved, p.voice)}"
+                    "voice=${resolveVoice(p.ttsProviderResolved, p.voice)} vision=${isVisionLlm(p.provider, p.llmModel)}" +
+                    if (uiState.inputMode == InputMode.VIDEO) " video=[${videoTracker.debugStatus()}]" else ""
             },
             importCard = { bytes ->
                 val entry = uiState.importCardBytes(bytes)
@@ -919,7 +1033,7 @@ private fun DemoScreen(
             voiceRecord = { seconds ->
                 // 半双工：录的是麦克风，先打断正在播的 TTS 防串音
                 if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
-                voiceRecorder.start()
+                voiceRecorder.start(echoCancellation = uiState.inputMode == InputMode.VIDEO)
                 delay(seconds * 1000L)
                 val file = voiceRecorder.stop()
                     ?: error("no valid audio captured (recording too short?)")
@@ -938,10 +1052,18 @@ private fun DemoScreen(
                     "manual", "manual_text" -> InputMode.MANUAL
                     "text", "typing" -> InputMode.TEXT
                     "voice", "asr" -> InputMode.VOICE
-                    else -> throw IllegalArgumentException("set_mode expects manual|text|voice, got '$arg'")
+                    "video", "camera" -> InputMode.VIDEO
+                    else -> throw IllegalArgumentException(
+                        "set_mode expects manual|text|voice|video, got '$arg'"
+                    )
+                }
+                if (mode == InputMode.VIDEO) {
+                    val reason = uiState.videoModeBlockReason()
+                    if (reason != null) throw IllegalStateException(reason)
                 }
                 uiState.switchInputMode(mode)
-                "input mode = ${mode.name.lowercase()} (${mode.label})"
+                "input mode = ${mode.name.lowercase()} (${mode.label})" +
+                    if (mode == InputMode.VIDEO) " — camera starting" else ""
             },
             showButtons = { arg ->
                 val show = when (arg?.lowercase()) {
@@ -971,6 +1093,22 @@ private fun DemoScreen(
                     "ttsModel=${resolveTtsModel(provider, uiState.aiPrefs.ttsModel)} " +
                     "voice=${resolveVoice(provider, uiState.aiPrefs.voice)} " +
                     "ttsKey=${if (uiState.aiPrefs.apiKeyForTts().isNotBlank()) "set" else "MISSING"}"
+            },
+            // 当前服务商的大模型切换（清单校验；MIUI 禁触摸注入，设置页下拉的命令入口）
+            setLlmModel = { arg ->
+                val provider = uiState.aiPrefs.provider
+                val id = arg?.trim()
+                    ?: throw IllegalArgumentException(
+                        "set_llm_model expects ai_arg = a model id from ${provider.name.lowercase()} " +
+                            "catalog: ${provider.llmModels}"
+                    )
+                if (id !in provider.llmModels) {
+                    throw IllegalArgumentException(
+                        "model '$id' not in ${provider.name.lowercase()} catalog: ${provider.llmModels}"
+                    )
+                }
+                uiState.updateAiPrefs(uiState.aiPrefs.copy(llmModel = id))
+                "llmModel=$id vision=${isVisionLlm(provider, id)}"
             },
             // 视线控制：会话存在时切 FaceDriver 的 GazeMode（SaccadeEngine 接管
             // 每帧写入）；无会话时直接驱动 controller（corelib 视线叠加不依赖会话）
@@ -1013,6 +1151,40 @@ private fun DemoScreen(
                         )
                     }
                 }
+            },
+            // 视频模式命令组：前后摄切换 / 抓拍缓存探测 / state 增量行
+            switchLens = { arg ->
+                if (!videoTracker.isActive) {
+                    error("视频相机未启动——先进入视频模式 (set_mode video)")
+                }
+                val wantFront = when (arg?.lowercase()) {
+                    null, "toggle", "flip" -> !videoTracker.currentLensFront
+                    "front", "user", "qian" -> true
+                    "back", "rear", "world" -> false
+                    else -> throw IllegalArgumentException(
+                        "video_camera expects front|back (omit ai_arg to toggle), got '$arg'"
+                    )
+                }
+                if (wantFront != videoTracker.currentLensFront) {
+                    pipLensFront = wantFront
+                    videoTracker.start(
+                        lifecycleOwner,
+                        if (wantFront) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK,
+                    )
+                }
+                "video camera = ${if (pipLensFront) "front" else "back"}"
+            },
+            videoSnapshot = {
+                if (!videoTracker.isActive) {
+                    error("视频相机未启动——先进入视频模式 (set_mode video)")
+                }
+                val f = videoTracker.ring.best()
+                    ?: error("抓拍缓存还是空的——相机刚起或第一帧还没编码完，等 1s 再试")
+                "snapshot ${f.byteCount}B sharpness=${"%.1f".format(f.sharpness)} " +
+                    "age=${android.os.SystemClock.elapsedRealtime() - f.atMs}ms ring=${videoTracker.ring.size()}"
+            },
+            videoStatusLine = {
+                if (uiState.inputMode == InputMode.VIDEO) videoTracker.debugStatus() else null
             },
         )
     }
@@ -1066,6 +1238,20 @@ private fun DemoScreen(
                 .padding(bottom = 180.dp)
         )
 
+        // 视频模式 PiP：用户相机实时预览小窗（可拖动，位置持久化；可切前后摄）。
+        // 摆在 Box 最上层（输入条之上），拖动不受聊天条遮挡。
+        if (uiState.inputMode == InputMode.VIDEO && cameraGranted) {
+            VideoCallPip(
+                tracker = videoTracker,
+                lensFront = pipLensFront,
+                owner = lifecycleOwner,
+                offsetFraction = uiState.videoPipOffset,
+                onOffsetChange = { uiState.updateVideoPipOffset(it) },
+                onToggleLens = { pipLensFront = !pipLensFront },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
         // 左上角常驻控制：输入模式下拉框 + 按钮显隐开关（任务 4）
         Row(
             modifier = Modifier
@@ -1076,7 +1262,17 @@ private fun DemoScreen(
         ) {
             InputModeSelector(
                 current = uiState.inputMode,
-                onSelect = { uiState.switchInputMode(it) },
+                onSelect = { mode ->
+                    // 视频模式准入：只有多模态模型可进（需求硬性门控），拒绝原因上错误条
+                    if (mode == InputMode.VIDEO) {
+                        val reason = uiState.videoModeBlockReason()
+                        if (reason != null) {
+                            chatError = reason
+                            return@InputModeSelector
+                        }
+                    }
+                    uiState.switchInputMode(mode)
+                },
             )
             ButtonsToggle(
                 visible = uiState.buttonsVisible,
@@ -1100,7 +1296,7 @@ private fun DemoScreen(
             onHoldEnd = onHoldEnd,
             onSend = { text ->
                 replyText = ""
-                session?.send(text)
+                session?.send(text, videoSnapshotImages())
             },
             onInterrupt = { session?.interrupt() },
             modifier = Modifier
@@ -1563,8 +1759,8 @@ private fun AiChatBar(
                         modifier = Modifier.padding(start = 12.dp, end = 6.dp)
                     )
                 }
-                if (inputMode == InputMode.VOICE && input.isBlank()) {
-                    // 语音模式主形态：整条都是按住说话
+                if ((inputMode == InputMode.VOICE || inputMode == InputMode.VIDEO) && input.isBlank()) {
+                    // 语音/视频模式主形态：整条都是按住说话
                     HoldToTalk(
                         recording = recording,
                         recognizing = recognizing,
@@ -1577,7 +1773,7 @@ private fun AiChatBar(
                             .padding(horizontal = 4.dp),
                     )
                 } else {
-                    if (inputMode == InputMode.VOICE) {
+                    if (inputMode == InputMode.VOICE || inputMode == InputMode.VIDEO) {
                         // 确认形态（关闭"直接发送"时）：识别文本可改，左侧保留小按住键
                         HoldToTalk(
                             recording = recording,
@@ -1596,6 +1792,7 @@ private fun AiChatBar(
                             Text(
                                 text = when {
                                     !enabled -> "先在 ⚙️ 设置里配置 AI 服务"
+                                    inputMode == InputMode.VIDEO -> "说话（视频模式：每轮附相机画面）…"
                                     inputMode == InputMode.VOICE -> "识别结果确认后发送…"
                                     else -> "说点什么，回车或发送…"
                                 },
@@ -1784,6 +1981,107 @@ private fun ButtonsToggle(
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
         )
+    }
+}
+
+/**
+ * 视频模式的用户相机 PiP 小窗：实时预览 + 拖动（位置 0..1 分数持久化，重启
+ * 回到上次位置）+ 底部前后摄切换钮。相机绑定跟随本组合的生命周期
+ * （组合出现/镜头切换时重绑；离开视频模式由模式 LaunchedEffect 统一 stop）。
+ * 拖动起点在 onDragStart 捕获一次、手势内只累加增量——不每帧重读状态，
+ * 避免写状态后回读造成的位置漂移。
+ */
+@Composable
+private fun VideoCallPip(
+    tracker: UserCameraTracker,
+    lensFront: Boolean,
+    owner: LifecycleOwner,
+    offsetFraction: Offset,
+    onOffsetChange: (Offset) -> Unit,
+    onToggleLens: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pipWidth = 108.dp
+    val pipHeight = 144.dp
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    val fraction by rememberUpdatedState(offsetFraction)
+
+    LaunchedEffect(lensFront) {
+        tracker.start(
+            owner,
+            if (lensFront) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK,
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { tracker.detachPreview() }
+    }
+
+    Box(modifier = modifier.onGloballyPositioned { containerSize = it.size }) {
+        if (containerSize == IntSize.Zero) return@Box
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        (fraction.x * containerSize.width).roundToInt(),
+                        (fraction.y * containerSize.height).roundToInt(),
+                    )
+                }
+                .size(pipWidth, pipHeight)
+                .clip(RoundedCornerShape(14.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                .background(Color.Black)
+                .pointerInput(containerSize) {
+                    var accumX = 0f
+                    var accumY = 0f
+                    var startPx = Offset.Zero
+                    detectDragGestures(
+                        onDragStart = {
+                            accumX = 0f; accumY = 0f
+                            startPx = Offset(
+                                fraction.x * containerSize.width,
+                                fraction.y * containerSize.height,
+                            )
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            if (containerSize == IntSize.Zero) return@detectDragGestures
+                            accumX += amount.x
+                            accumY += amount.y
+                            val wPx = pipWidth.toPx()
+                            val hPx = pipHeight.toPx()
+                            val maxX = (containerSize.width - wPx).coerceAtLeast(1f)
+                            val maxY = (containerSize.height - hPx).coerceAtLeast(1f)
+                            onOffsetChange(
+                                Offset(
+                                    (startPx.x + accumX).coerceIn(0f, maxX) / containerSize.width,
+                                    (startPx.y + accumY).coerceIn(0f, maxY) / containerSize.height,
+                                )
+                            )
+                        },
+                    )
+                },
+        ) {
+            AndroidView(
+                factory = { ctx -> PreviewView(ctx).also { tracker.attachPreview(it) } },
+                modifier = Modifier.fillMaxSize(),
+            )
+            SmallFloatingActionButton(
+                onClick = onToggleLens,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 6.dp)
+                    .size(30.dp),
+                shape = CircleShape,
+                containerColor = Color.Black.copy(alpha = 0.55f),
+            ) {
+                Text(
+                    text = if (lensFront) "前" else "后",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                )
+            }
+        }
     }
 }
 

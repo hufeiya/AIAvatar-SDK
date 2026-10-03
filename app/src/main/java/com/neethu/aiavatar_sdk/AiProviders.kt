@@ -13,6 +13,15 @@ enum class AiProvider(
     /** OpenAI 兼容端点（火山即方舟 Ark v3，chat/completions 同构）。 */
     val baseUrl: String,
     val llmModels: List<String>,
+    /**
+     * 清单里支持图片输入（多模态）的子集——视频模式的准入门控依据。
+     * 2026-10-03 用真实请求核验（64px 红/蓝图 chat 回色=过，报
+     * "not a VLM"/答非所问=不过）：硅基流动 DeepSeek 系明确拒图；
+     * 火山 doubao 系全部真看图；`deepseek-v4-flash-ga` 是假视觉——API
+     * 收下 image_url 但答"image data incomplete"（同图 doubao 描述正确），
+     * 必须排除；`doubao-seedream-5-0-pro` 是图像生成模型，chat 不可用照旧排除。
+     */
+    val visionLlmModels: List<String>,
     /** TTS 请求体里的 model id；展示名见 [ttsModelLabel]。 */
     val ttsModels: List<String>,
     val defaultTtsModel: String,
@@ -38,6 +47,11 @@ enum class AiProvider(
             "deepseek-ai/DeepSeek-V4-Flash",
             "deepseek-ai/DeepSeek-V3",
             "Qwen/Qwen3.8-27B",
+            "Qwen/Qwen3-VL-32B-Instruct",
+        ),
+        visionLlmModels = listOf(
+            "Qwen/Qwen3.8-27B",
+            "Qwen/Qwen3-VL-32B-Instruct",
         ),
         ttsModels = listOf(
             "fnlp/MOSS-TTSD-v0.5",
@@ -62,6 +76,12 @@ enum class AiProvider(
             "doubao-seedream-5-0-pro-260628",
             "doubao-seed-2-1-pro-260915",
             "deepseek-v4-flash-ga-260731",
+            "doubao-seed-character-260628",
+        ),
+        visionLlmModels = listOf(
+            "doubao-seed-2-0-mini-260428",
+            "doubao-seed-2-1-turbo-260628",
+            "doubao-seed-2-1-pro-260915",
             "doubao-seed-character-260628",
         ),
         ttsModels = listOf("seed-tts-2.0"),
@@ -140,6 +160,13 @@ fun resolveTtsModel(provider: AiProvider, configured: String): String {
     val v = configured.trim()
     return if (v in provider.ttsModels) v else provider.defaultTtsModel
 }
+
+/**
+ * 模型是否支持图片输入（视频模式准入门控）：只认 [AiProvider.visionLlmModels]
+ * 实测清单，先经 [resolveLlmModel] 归位（跨服务商残留值不算）。
+ */
+fun isVisionLlm(provider: AiProvider, configured: String): Boolean =
+    resolveLlmModel(provider, configured) in provider.visionLlmModels
 
 /**
  * 音色解析 = 校验 + 默认：已知音色（静态清单/接口拉取的短名或完整引用）与

@@ -9,6 +9,15 @@ enum class ChatRole { SYSTEM, USER, ASSISTANT }
 data class ChatMessage(
     val role: ChatRole,
     val content: String,
+    /**
+     * Images attached to this message as data URLs (`data:image/jpeg;base64,…`),
+     * sent via the OpenAI multimodal `content` array (`image_url` parts).
+     * Only meaningful on USER messages for vision-capable models; keep empty
+     * for text-only models (they reject array-form content with 400).
+     * Wire format only — history stores text alone, so images sent on one
+     * turn are deliberately dropped from later requests.
+     */
+    val images: List<String> = emptyList(),
 )
 
 /**

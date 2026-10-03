@@ -132,6 +132,19 @@
   - 真机验证（2c3769db，默认模型 SK_Sun）：启动即注视镜头（FaceDriver 默认 CAMERA，closeup 下 yaw+14.9°/pitch+15.8° 跟随运镜）；`look_at` 侧方点 (2.5,1.0,-3.5) 头颈链准确转到限幅 yaw=+55.0°（截图侧脸朝向正确、眼无斜视）；`look_at off` yaw/pitch 归零、`camera` 恢复；挥手 VRMA 播放中视线叠加照常跟踪（截图：手势姿态+头朝镜头+发梢弹簧自然，SpringBone 诊断 len=rest 零爆炸）；换模型 10.vrm↔SK_Sun 重绑正确（两种头骨轴约定 faceLocal 分别 (0,0.01,1.0)/(0.03,-1.0,0.05)）；全对话链路（LLM 标签+口型+视线同开）TurnCompleted 后视线保持；全程零 FATAL。截图存 /tmp/gaze_{front,side,gesture}.png（会话产物，未入库）。
   - 已知未覆盖：设置页无视线开关（demo 默认开，SDK 侧 `session.faceDriver.setGazeMode` 即可关；UI 开关随视频系统一起做）；点击注视（AIRI mouse 模式）未做——移动端触摸被相机手势占用，等视频系统的脸位置作为唯一 POINT 源更合理。
 
+- **任务 9 视频模式已完成（2026-10-03，真机 62fabe84；相机链路待真手授一次相机权限后复验，见下）**：第四种输入模式 `VIDEO 视频模式`——和用户开摄像头视频通话，"只能多模态（可收图）大模型才能开启"。
+  - **多模态事实核验（设计前提，2026-10-03 真实请求实测）**：给模型发 64px 纯色 JPEG 问颜色——**硅基流动**：DeepSeek-V4-Flash/V3 明确拒图（`The model is not a VLM`），`Qwen/Qwen3.8-27B` 收图且答对（清单原有模型本身就是视觉模型），`Qwen/Qwen3-VL-32B-Instruct` 在册可用（已补进清单）；**火山**：5 个 chat 模型里 4 个 doubao 系全部真看图（默认 mini 即视觉，视频模式开箱即用），`deepseek-v4-flash-ga` 是**假视觉**——API 收下 image_url 但答 "image data incomplete"（同图 doubao 描述正确），清单里**不得**标为视觉；`seedream` 图像生成模型照旧排除。全部锁进 `AiProvider.visionLlmModels` + `AiProvidersTest`。
+  - **adapter**：`ChatMessage.images`（data URL 列表）——序列化时带图消息走 OpenAI 数组形态 `content=[{type:text},{type:image_url}]`，纯文本消息保持字符串（数组形态会被文本模型 400）；历史 assistant/永不带图。MockWebServer 锁请求体形态。
+  - **orchestrator**：`AvatarSession.send(text, images)`/`sendAndAwait` 带图——图片只挂到**本轮请求**的末尾 user 消息，`store` 历史只存文字（历史带图会让 vision-token 成本随轮数平方增长；模型对"刚才那张图"按文字记忆工作，可接受取舍）；`face/FacePointProjector`（纯 JVM）：人脸归一化坐标 nx/ny/面积占比 + `getCameraLookAt()` 位姿 → 世界注视点（喂任务 5 预留的 `setGazePoint`+POINT 缝），内置 One-Euro 滤波（minCutoff 1.2/beta 0.06，自适应平滑）+ 面积估深度（面积越大注视点越向模型前伸，深度钳 0.5-3）；调参常量全在构造参数。
+  - **app 追踪引擎**（`video/`）：`UserCameraTracker` = CameraX ImageAnalysis(480×640, KEEP_ONLY_LATEST) + ML Kit FaceDetector（FAST/无 landmark/无分类/minFaceSize 0.15）——检测最大脸，归一化坐标**前置摄像头翻转 nx**（原始帧未镜像：脸在屏幕右时落在画面左，世界对齐 +1=屏幕右；竖直不镜像）；抓拍与检测解耦：每 500ms 独立取帧（ImageProxy.toBitmap 复制像素须在 proxy 关闭前）→ 直立旋转 → 中心裁 512×512 → JPEG(80) → 拉普拉斯方差清晰度 → `SnapshotRingBuffer`（深 3 ≈1.5s 窗）；**proxy 生命周期 = ML Kit Task complete 回调里 close**（fromMediaImage 异步读 buffer，提前 close 就是崩溃/检测全灭）。纯逻辑（ring/清晰度/关键词）与 Android 依赖分离，JVM 单测直测。
+  - **app UI**：`InputMode.VIDEO`（复用语音模式的按住说话条，按钮默认隐藏）；准入门控 `videoModeBlockReason()`（未配置/模型非视觉 → 错误条原因，`set_mode video` 同路径 FAIL）；PiP 小窗 `VideoCallPip`（108×144dp，拖动=onDragStart 捕获起点+手势内只累加增量防漂移，位置 0..1 分数持久化 `ai_video_pip_x/y`，底部"前/后"钮切摄像头重绑）；视线消费 ~30Hz ticker：新观测→FaceDriver POINT，人脸离开 >1.5s 回退 CAMERA（看镜头等用户回来），无会话直驱 controller；**发送带图策略 = 视频模式每轮都附缓存窗最清晰一帧**（语音/打字/send_chat 三条路径同源 `videoSnapshotImages()`）——用户的"模式 A 抓拍时机 + 模式 B 意图拦截 + 纯闲聊降级"合并落地：抓拍帧只存在于视频模式，漏判"看这个"比多传一张 ~50KB JPEG 伤得多（≈1-2K vision token），`VisionKeywords` 关键词判定保留为纯函数（带单测）供 SDK 集成者按自家带宽策略接。
+  - **回声消除（第一层）**：视频模式录音走 `MediaRecorder.AudioSource.VOICE_COMMUNICATION`（平台通话链路硬件 AEC/NS）——MediaRecorder 拿不到 audio session id 挂不了 AcousticEchoCanceler，音源切换是平台标准做法；半双工（按下先 interrupt）仍是主防线；WebRTC 软件 APM 留作真机实测仍有残留时再引入。
+  - **ai_cmd**：`set_mode video`（带门控拒绝原因）/ `video_camera front|back` / `video_snapshot`（探测缓存不发请求）/ `set_llm_model <id>`（新增，清单校验——MIUI 禁触摸注入的模型切换入口）/ `state` 与 `chat_state` 增 video/vision 行；help 同步。
+  - **单测 192 全绿（+25）**：adapter 3（数组形态/纯文本保持字符串/assistant 历史不带图）+ orchestrator 11（OneEuro 收敛/阶跃、投影器 nx/ny/深度/旋转基/退化安全/稳定性、会话带图挂队尾/历史不落图/无图不变）+ app 11（视觉清单锁死含假视觉排除、isVisionLlm 先归位再判定、ring 滚动/最清晰/并列取新、平坦≈0清晰度、关键词命中）。
+  - **真机 62fabe84 已验**：chat_state `vision=true`（该机已配 Qwen3.8-27B）；`set_mode video` 进入（模式徽标变"视频模式"、按钮自动隐藏）；系统相机权限框正常弹出（截图）；无权限降级——发送走纯文本、追踪器 `active=false`、应用稳定；切 DeepSeek-V4-Flash 后 `set_mode video` **FAIL 且原因文案正确**，恢复 Qwen 后重新放行；全程零 FATAL。
+  - **⚠️ 未完待验（需要真手一次）**：HyperOS 禁 adb 授相机权限（`pm grant` SecurityException / appops uid 级 ignore / `install -g` 不授，与 A.1 第 21 条麦克风同源），**真手在弹出的系统框点"仅在使用中允许"后**复验清单：①PiP 预览出现（logcat `VideoTracker: camera bound`）②`video_snapshot` 出字节数 ③人在镜头里时 `state` 的 `face=(x,y)` 非零且 `look_at` yaw 跟随、侧移时头转向 ④`send_chat "描述你现在通过摄像头看到的画面"` 回答与实际场景一致（logcat `multimodal turn: 1 image(s)`）⑤PiP 拖动与前后摄切换（真手拖；命令侧 `video_camera` 已可验）。**nx 翻转方向是首验项**：若头像朝脸的反方向转，把 `UserCameraTracker.analyzeFrame` 里前置分支的 `-cx` 改 `cx`。
+
+
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
   - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
   - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
@@ -148,7 +161,7 @@
   - 单测：adapter 32 + orchestrator 51 全绿（新增 InlineTagExtractorTest 15 / AvatarSessionTagsTest 6 / 音频 release 回归 1，重写 assembler 测试）
   - 真机验证：首轮对话 LLM 自发 `<cam:medium_shot><act:wave><emo:happy:0.8>` 开场、中段 `<cam:close_up><emo:happy:1.0>`——CameraChanged/ActionStarted/EmotionChanged 按序触发（`Loaded VRMA 5.08s, 53 bone tracks` 证实手势真加载，播完自动归位），字幕零标签泄漏，5 句按序 TurnCompleted；第二轮 `ActionStarted celebrate`（VRMA 8.54s）+ 4 次情绪变化 + 机位切换，打断 ✕ 后 23ms PlaybackInterrupted、动作停止，全程零 FATAL/TurnFailed
   - 顺带修真崩溃：release() 打断停在 wait() 的写线程 → FATAL（见 A.1 第 17 条）
-- 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts
+- 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts；视频模式再加 CameraX 1.4.2（core/camera2/lifecycle/view）与 `com.google.mlkit:face-detection:16.1.7`（**bundled 版**自带 BlazeFace 模型，不依赖 GMS，国产机可跑）
 
 ## 三、关键设计决策（改代码前必读）
 
@@ -178,7 +191,7 @@
   - **火山引擎**：LLM=方舟 Ark `https://ark.cn-beijing.volces.com/api/v3`（OpenAI 兼容 chat/completions；6 个模型 chat 实测 5 通——doubao-seed-2-0-mini(默认)/2-1-turbo/2-1-pro/deepseek-v4-flash-ga/seed-character 均回包，**seedream-5-0-pro 是图像模型 chat 报 RPM 限额**）；TTS=豆包语音 seed-tts-2.0（V3 WebSocket，`X-Api-Key` + `X-Api-Resource-Id: seed-tts-2.0`，音色 zh_female_vv_uranus_bigtts 默认等 6 个）；两把 key 分字段存储见 2.4 双服务商条目
   - 密钥明文：仓库根 `secrets.properties`（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY(待补)；设备侧经 run-as 写入 demo_settings（`ai_api_key_siliconflow`/`ai_api_key_volcano`）
 - 填写入口：App ⚙️ 设置 →「AI 配置」→ 选服务商 + 填 Key 即可对话（模型/音色留空=默认）。
-- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（167 全绿，任务 5 起 corelib 也有纯 JVM 单测）
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（192 全绿，视频模式起 app 也有纯 JVM 单测）
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - 设备：`2c3769db`（本次双厂商验证机，adb input 可用）与 `62fabe84`（小米14/HyperOS，禁 shell input）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
@@ -470,6 +483,9 @@ LLM SSE delta
 23. **火山是两把钥匙（2026-10-03 实测，已按两字段落地）**：豆包语音控制台 key（`020b5acf-…`，TTS WebSocket `X-Api-Key` 可用）与方舟 Ark key（`ark-…`，chat/completions 可用）**互不通用**（互调 401/403——语音域按 Resource-Id 分鉴权域，Ark 域按 Bearer key 查表）。初版两把 key 共用一个「火山引擎 API Key」字段是设计缺陷：用户同时要火山 LLM+TTS 时必然断一头。已拆 `apiKeyVolcano`/`apiKeyVolcanoTts` 两字段，选火山 TTS 时豆包语音 Key 字段恒显（勾「同服务商」也要单填，下拉框旁的文案讲清楚）；旧单字段值按 `ark-` 前缀形态迁移（`splitLegacyVolcanoKey` 纯函数+单测）。另：`doubao-seedream-5-0-pro-260628` 是图像生成模型，chat/completions 返回 `ModelAccountRpmRateLimitExceeded`（账户对该模型 RPM 配额为 0 的表现），排查"火山某个模型报 RPM 超限"先想到这一条。
 24. **视线系统的三个坑（任务 5，2026-10-03）**：①**脸方向不能假设骨骼轴**：头骨局部系因模型而异（10.vrm 脸朝头局部 +Z，SK_Sun 朝 −Y——`VrmLookAt: bound` 日志的 `faceLocal=` 可辨）。必须在绑定时刻用 `inv(头rest世界四元数)·(0,0,1)` 反推 faceLocalDir（VRM 模型静止面朝世界 +Z：1.0 天然如此，0.x 被 renderer 翻转 180° 后如此，故绑定必须放在翻转**之后**）；直接给头骨叠欧拉角必有一个模型头反着转。②**读世界变换前必须 `commitLocalTransformTransaction()`**：VRMA 每帧只写局部变换，不提交就读头骨世界位姿会拿到上一帧的陈旧值（写完偏移再 `updateBoneMatrices()` 传播蒙皮，渲染循环里 updateBoneMatrices 从两个动画分支收口成 gaze 之后的一次）。③**眼骨余量分层依赖增益和=1**：头 0.65+颈 0.35 平滑分量，眼骨补 `目标角−平滑角`——头颈收敛后眼自然回中；改增益时两处必须同步改，否则注视点永远差一截（无眼骨模型没有补足通道，落点天然略短，可接受）。
 25. **骨骼叠加旋转必须"先剥再叠"，否则不在动画轨道里的骨骼逐帧累积（任务 5 用户实测眼珠转过头只剩眼白）**：头/颈每帧被 VRMA/idle 重写，偏移乘上去不会累积；但**眼骨不在 VRMA 轨道里**——上一帧写入的偏移一直留在局部变换里，下一帧再把新偏移乘在"当前局部"上就是连乘，头颈 ~300ms 收敛期内眼偏移被乘十几遍然后冻结在滚转位置（全模型必现，凡是"叠加旋转"的代码都适用此教训）。修法：每个骨骼记 `lastWritten`（上次写入的局部四元数）+`lastOffset`（对应的局部偏移 K）；本帧读到的局部若与 `lastWritten` 角度差 <0.01rad（=没被动画重写）就用 `inv(K)·当前` 剥回干净基座再叠新偏移，被动画重写过就直接以当前为基座。纯函数 `VrmLookAtEngine.stripPreviousWrite` + 5 条单测锁语义（`VrmLookAtStripTest`）；顺带修了"无任何动画时头/颈也累积"的暗坑（同一条剥逻辑覆盖）。**观测点：`quatAngle` 在 dot≈1−2.4e-7 时 acos 会放大成 6.9e-4，近 1 必须钳零**（GazeMath.quatAngle 已处理，自己写角度比对时注意）。
+26. **"多模态模型"必须实测，API 收下 image_url ≠ 真看图（任务 9）**：`deepseek-v4-flash-ga`（火山）对 image_url 请求不报错但回答 "The image data appears incomplete"（同一张图 doubao-seed-2-0-mini 描述正确）——若把它标成视觉模型，用户在视频模式里会以为模型"看得见"实际全瞎。核验方法：64px 纯色 JPEG + "图中是什么颜色" chat 一次，答对=过、报 not a VLM=拒、答非所问/报图不完整=假视觉。硅基流动对**文本模型发数组形态 content** 会直接 400 `The model is not a VLM`——所以 adapter 里纯文本消息必须保持字符串 content，只有带图消息才用数组形态（否则闲聊轮也全灭）。
+27. **CameraX+ML Kit 组装三坑（任务 9）**：①`ImageProxy.toBitmap()` 复制像素必须在 proxy close 前、ML Kit `fromMediaImage` 异步读 buffer——**proxy 的 close 必须挂在 Task 的 addOnCompleteListener**（默认主线程回调，close 线程安全），在 analyze 里提前 close 会检测全灭；②检测框坐标是**旋转后直立系**的（InputImage 带 rotationDegrees），前置摄像头原始帧**未镜像**：脸在屏幕右侧时落在画面左侧，世界对齐 nx 要翻转（-cx），竖直不镜像——首验看头像转向是否符合"看向我的脸"；③ML Kit bundled 版（`com.google.mlkit:face-detection`）模型在 AAR 里不依赖 GMS，国产机可用；别选 unbundled（play services 变体）。
+28. **HyperOS 相机权限 adb 三条路全堵（任务 9，与第 21 条麦克风同源）**：`pm grant` 报 SecurityException（shell 无 GRANT_RUNTIME_PERMISSIONS）、`adb install -r -g` 后 dumpsys 仍 granted=false、`appops set` 包级 allow 但 **uid 级恒 ignore**（`appops get` 显示 `Uid mode: CAMERA: ignore`）——CameraX `bindToLifecycle` 前必须 runtime 权限到位，只能真手在系统框点一次"仅在使用中允许"。设计上的对冲：无权限时视频模式**降级不崩**（PiP 不渲染、追踪器 inactive、发送自动走纯文本），权限就绪（进程存活期间授权回调 / 重启后 checkSelfPermission）即自愈。
 
 ### A.2 调参速查表
 
@@ -494,6 +510,11 @@ LLM SSE delta
 | 火山 TTS/LLM 报 401/403 | 看错误条/logcat 里的响应体：Ark `The API key doesn't exist` = 填的是语音 Key 不是方舟 Key（A.1 第 23 条）；TTS 403 = `X-Api-Key` 配了不匹配的 Resource-Id（必须 `seed-tts-2.0`，A.1 第 22 条） |
 | 切服务商后模型/音色不对 | 正常防护路径：存储值不在新服务商清单一律落该服务商默认（`resolveLlmModel/resolveTtsModel/resolveVoice` 校验+默认）；`ai_cmd chat_state` 看"已解析生效"配置核对 |
 | 视线不动/想验证视线 | `ai_cmd look_at`（无参）看 target/yaw/pitch（yaw 非零=在生效）；`look_at camera` 回注视用户、`look_at off` 关闭、`ai_x/ai_y/ai_z` 指向世界点看头是否转向限幅 |
+| 视频模式进不去 | `chat_state` 看 `vision=`：false 就是当前模型不可收图——`set_llm_model Qwen/Qwen3.8-27B`（硅基流动）或 `set_provider volcano`（默认即视觉）；错误条文案里有原因 |
+| 视频模式没有画面/抓拍 | 先看系统相机权限（A.1 第 28 条，真手授权一次）；`state` 看 `video: active=` 与 `ring=`；`video_snapshot` 探测缓存；logcat `VideoTracker` 的 `camera bound/released` 与 face detect 失败行 |
+| 头朝脸的反方向转 | 前置 nx 翻转方向错了：`UserCameraTracker.analyzeFrame` 前置分支 `-cx` ↔ `cx`（A.1 第 27 条②） |
+| 视线转头太狠/太弱（视频模式） | `FacePointProjector` 构造参数：lateralRange/verticalRange（幅度）、refDepth/areaRef（深度基准）——先在 `look_at` 用世界点验证骨骼链，再调投影 |
+| 回复不提画面内容 | logcat 搜 `multimodal turn:`——没有=没带图（非视频模式/无相机权限/模型非视觉任一），有=带了图是模型理解问题（换 Qwen3-VL 或 doubao-pro 观察） |
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
 | 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
 

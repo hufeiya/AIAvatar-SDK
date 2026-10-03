@@ -6,17 +6,21 @@ import android.os.Build
 import java.io.File
 
 /**
- * 对话输入三模式（互斥，不能混用；左上角下拉框切换，持久化）：
+ * 对话输入四模式（互斥，不能混用；左上角下拉框切换，持久化）：
  * - [MANUAL] 手动点击：完整 demo UI——全部 FAB 面板按钮可见 + 打字输入；
  * - [TEXT]   打字输入：隐藏所有界面按钮，只留输入条（打字）；
- * - [VOICE]  语音模式：隐藏所有界面按钮，只留按住说话 + 字幕。
- * 任何模式下都可用下拉框旁的显隐开关临时显示/隐藏按钮（进入打字/语音
- * 模式时自动隐藏，切回手动点击自动显示）。
+ * - [VOICE]  语音模式：隐藏所有界面按钮，只留按住说话 + 字幕；
+ * - [VIDEO]  视频模式：语音模式的一切 + 用户相机 PiP 小窗 + 人脸注视追踪 +
+ *   发送时附相机抓拍（多模态）。准入门控：只有多模态（可收图）大模型才
+ *   能进入（见 [videoModeBlockReason]）。
+ * 任何模式下都可用下拉框旁的显隐开关临时显示/隐藏按钮（进入打字/语音/
+ * 视频模式时自动隐藏，切回手动点击自动显示）。
  */
 enum class InputMode(val label: String) {
     MANUAL("手动点击"),
     TEXT("打字输入"),
     VOICE("语音模式"),
+    VIDEO("视频模式"),
 }
 
 /** 从文件扩展名推 ASR multipart 所需的 MIME（[VoiceRecorder] 产物是 m4a）。 */
@@ -47,8 +51,17 @@ class VoiceRecorder(private val context: Context) {
 
     val isRecording: Boolean get() = recorder != null
 
-    /** 开始录音到新临时文件；麦克风被占等失败时抛 [IllegalStateException]。 */
-    fun start(): File {
+    /**
+     * 开始录音到新临时文件；麦克风被占等失败时抛 [IllegalStateException]。
+     *
+     * [echoCancellation]（视频模式）：音频源用 VOICE_COMMUNICATION 走平台
+     * 通话链路的硬件 AEC/NS——虚拟人扬声器出声时麦克风会把 TTS 混进去，
+     * MIC 源无回声抑制。MediaRecorder 拿不到 audio session id，挂不了
+     * session 级 [android.media.audiofx.AcousticEchoCanceler]，音源切换是
+     * 平台标准做法；半双工（按下先 interrupt）仍是主防线，WebRTC 软件
+     * APM 仅在真机实测仍有残留回声时再引入。
+     */
+    fun start(echoCancellation: Boolean = false): File {
         check(recorder == null) { "录音已在进行中" }
         val file = File(cacheDir, "voice_input_${System.currentTimeMillis()}.m4a")
         val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -58,7 +71,10 @@ class VoiceRecorder(private val context: Context) {
             MediaRecorder()
         }
         try {
-            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            r.setAudioSource(
+                if (echoCancellation) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                else MediaRecorder.AudioSource.MIC
+            )
             r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             r.setAudioSamplingRate(16_000)

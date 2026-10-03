@@ -56,10 +56,18 @@ internal class AiChatDebugHooks(
     val setProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_tts_provider siliconflow|volcano：TTS 独立服务商切换（自动取消同服务商勾选）。 */
     val setTtsProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd set_llm_model <清单id>：当前服务商下的大模型切换（清单校验，视频模式验证用）。 */
+    val setLlmModel: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd look_at：视线控制——camera|off / 世界坐标点 / 无参查状态（挂会话内外都可用）。 */
     val lookAt: (String?, Float?, Float?, Float?) -> String = { _, _, _, _ ->
         "AI chat not wired in this screen"
     },
+    /** ai_cmd video_camera front|back（无参=翻转）：前后摄切换（视频模式）。 */
+    val switchLens: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd video_snapshot：探测抓拍环形缓存（字节数/清晰度/年龄），不发请求。 */
+    val videoSnapshot: () -> String = { "AI chat not wired in this screen" },
+    /** state 命令的视频状态增量行（相机/人脸/缓存）。 */
+    val videoStatusLine: () -> String? = { null },
 )
 
 /**
@@ -80,7 +88,11 @@ internal suspend fun executeAiCommand(
                 Log.i(AI_LOG_TAG, aiDebugHelp())
                 "help printed to logcat"
             }
-            "state" -> describeState(controller, uiState)
+            "state" -> {
+                val base = describeState(controller, uiState)
+                val videoLine = chat?.videoStatusLine()?.takeIf { uiState.inputMode == InputMode.VIDEO }
+                if (videoLine != null) "$base\nvideo: $videoLine" else base
+            }
             "list" -> listAssets(controller, uiState, command.arg)
             "load_model" -> loadModelCommand(controller, uiState, command.arg)
             "load_scene" -> loadSceneCommand(controller, uiState, command.arg)
@@ -201,9 +213,21 @@ internal suspend fun executeAiCommand(
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setTtsProvider(command.arg)
             }
+            "set_llm_model" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setLlmModel(command.arg)
+            }
             "look_at" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.lookAt(command.arg, command.x, command.y, command.z)
+            }
+            "video_camera" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.switchLens(command.arg)
+            }
+            "video_snapshot" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.videoSnapshot()
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

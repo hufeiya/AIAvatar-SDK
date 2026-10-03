@@ -244,14 +244,25 @@ class AvatarSession(
 
     // ── Conversation control ──────────────────────────────────────────────
 
-    /** Fire-and-forget user turn. Emits [AvatarEvent]s on [events]. */
-    fun send(text: String) {
+    /**
+     * Fire-and-forget user turn. Emits [AvatarEvent]s on [events].
+     *
+     * [images] (data URLs) ride the CURRENT request only — the multimodal
+     * camera snapshot of a video-call turn. They are attached to the trailing
+     * user message but never persisted into history: keeping every historical
+     * turn's frame in context would multiply vision-token cost per turn for
+     * no conversational gain (the model reads "刚才那张图" without pixels).
+     */
+    fun send(text: String, images: List<String> = emptyList()) {
         if (turnJob?.isActive == true) interrupt("superseded")
         val llmCfg = llmConfig ?: run {
             emit(AvatarEvent.TurnFailed(IllegalStateException("llmConfig not set"))); return
         }
         val ttsCfg = ttsConfig ?: run {
             emit(AvatarEvent.TurnFailed(IllegalStateException("ttsConfig not set"))); return
+        }
+        if (images.isNotEmpty()) {
+            Log.i("AvatarSession", "multimodal turn: ${images.size} image(s), text=${text.take(40)}")
         }
         turnJob = scope.launch {
             _phase.value = ConversationPhase.THINKING
@@ -261,7 +272,7 @@ class AvatarSession(
             pipeline.beginTurn()
             store.appendUser(text)
             try {
-                llm.streamChat(buildRequestMessages(), llmCfg).collect { event ->
+                llm.streamChat(buildRequestMessages(images), llmCfg).collect { event ->
                     when (event) {
                         is LlmStreamEvent.TextDelta -> handleDelta(event.text, ttsCfg)
                         is LlmStreamEvent.Finish -> Unit
@@ -292,8 +303,8 @@ class AvatarSession(
     }
 
     /** Send and suspend until the whole turn (LLM + TTS + playback) settles. */
-    suspend fun sendAndAwait(text: String) {
-        send(text)
+    suspend fun sendAndAwait(text: String, images: List<String> = emptyList()) {
+        send(text, images)
         turnJob?.join()
     }
 
@@ -423,7 +434,7 @@ class AvatarSession(
         emit(AvatarEvent.SentenceQueued(sequence, sentence))
     }
 
-    private fun buildRequestMessages(): List<ChatMessage> {
+    private fun buildRequestMessages(turnImages: List<String>): List<ChatMessage> {
         val system = systemPromptWithProtocol()
         val list = mutableListOf<ChatMessage>()
         if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
@@ -431,12 +442,18 @@ class AvatarSession(
         // 现拼现置顶，天然不受 recentTurnLimit 影响。
         val history = store.messages()
         list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
+        // 本轮抓拍（视频模式）：挂到刚 append 的末尾 user 消息上——请求里带图，
+        // store 里的历史始终只有文字（见 send 的注释）。
+        if (turnImages.isNotEmpty() && list.lastOrNull()?.role == ChatRole.USER) {
+            list[list.size - 1] = list.last().copy(images = turnImages)
+        }
         // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
         Log.i(
             "AvatarSession",
             "system prompt: ${system.length} chars, cameras=${currentCameraTags().size}, " +
                 "actions=${currentActionGroups().sumOf { it.second.size }}, " +
-                "directExpr=${currentDirectExpressions().size}, history=${history.size} sent=${trimmedSent(history)}",
+                "directExpr=${currentDirectExpressions().size}, history=${history.size} " +
+                "sent=${trimmedSent(history)} images=${turnImages.size}",
         )
         return list
     }
