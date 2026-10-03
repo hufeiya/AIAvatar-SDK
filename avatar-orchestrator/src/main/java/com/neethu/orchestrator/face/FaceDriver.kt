@@ -22,6 +22,11 @@ import kotlin.math.abs
  *  4. merge with AIRI's ownership rules and push into [AvatarController]:
  *     lip-sync owns the mouth (`aa/ih/ou/ee/oh`) while speaking; after speech
  *     ends the emotion re-asserts its mouth targets with a blend-back pass.
+ *     Once everything the driver owns is at rest (no playback, no blend-back,
+ *     emotion decayed to neutral) it goes quiet after one final zero write —
+ *     manual expressions set from the app UI then own the face again, because
+ *     the controller treats `setExpression(name, 0)` as a removal, so
+ *     re-asserting zeros every frame would erase them.
  *
  * The controller is switched to instant mode (`transitionDuration = 0`) — all
  * easing lives here, mirroring three-vrm's per-frame `setValue` semantics.
@@ -192,7 +197,13 @@ class FaceDriver(
     private fun send(name: String, value: Float) {
         if (availableExpressions.isNotEmpty() && name !in availableExpressions) return
         val previous = sent[name]
-        if (previous != null && abs(previous - value) < SEND_EPSILON && value != 0f) return
+        // Dedup guard including zeros: at rest (no playback, no blend-back, emotion
+        // decayed to 0) the driver must go QUIET after its one final zero write.
+        // Re-asserting zeros every frame is destructive — corelib treats
+        // setExpression(name, 0) as targetWeights.remove(name), so a resting
+        // zero-storm silently erases any manually applied mouth expression
+        // (aa/ih/ou/ee/oh) the frame after the user sets it.
+        if (previous != null && abs(previous - value) < SEND_EPSILON) return
         if (previous == null && value == 0f) return
         controller.setExpression(name, value)
         sent[name] = value
