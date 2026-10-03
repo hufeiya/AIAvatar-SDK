@@ -79,6 +79,50 @@ object FrameQuality {
 }
 
 /**
+ * 人脸框归一化（视频模式，纯函数）。
+ *
+ * ⚠️ 坐标系：ImageProxy 的 width/height 是**传感器缓冲系**（竖屏手机上前置
+ * 摄像头为横置的 640×480），而 ML Kit 在 InputImage 带 rotation 后给出的
+ * boundingBox 是**旋转后直立系**的（480×640）——归一化必须用直立系尺寸，
+ * 用缓冲系会把居中的脸算出恒定偏置（真机实录：注视点恒偏右下，正好等于
+ * 480↔640 纵横比错位的量）。前置摄像头原始帧未镜像：脸在屏幕右侧时落在
+ * 画面左侧，世界对齐 nx 要翻转（+1=屏幕右）；竖直方向不镜像。
+ */
+object FaceFrameMath {
+
+    data class NormalizedFace(val nx: Float, val ny: Float, val area: Float)
+
+    /** 旋转后直立系的画面尺寸（90°/270° 时宽高互换）。 */
+    fun uprightSize(bufferW: Int, bufferH: Int, rotationDegrees: Int): Pair<Int, Int> =
+        if (rotationDegrees == 90 || rotationDegrees == 270) bufferH to bufferW
+        else bufferW to bufferH
+
+    /**
+     * [centerX]/[centerY]/[boxW]/[boxH] 取自直立系的 ML Kit boundingBox；
+     * [bufferW]/[bufferH] 是 ImageProxy 缓冲尺寸（仅用于推直立尺寸）。
+     */
+    fun normalize(
+        centerX: Float,
+        centerY: Float,
+        boxW: Float,
+        boxH: Float,
+        bufferW: Int,
+        bufferH: Int,
+        rotationDegrees: Int,
+        frontCamera: Boolean,
+    ): NormalizedFace {
+        val (w, h) = uprightSize(bufferW, bufferH, rotationDegrees)
+        val cx = (centerX / w) * 2f - 1f
+        val cy = (centerY / h) * 2f - 1f
+        return NormalizedFace(
+            nx = (if (frontCamera) -cx else cx).coerceIn(-1f, 1f),
+            ny = cy.coerceIn(-1f, 1f),
+            area = ((boxW * boxH) / (w.toFloat() * h)).coerceIn(1e-4f, 1f),
+        )
+    }
+}
+
+/**
  * 视觉意图关键词（"模式 B 意图拦截"）：识别文本命中 → 该轮语义上需要看图。
  *
  * ⚠️ demo 现状：抓拍帧只存在于视频模式（相机管线随模式启停），且视频模式

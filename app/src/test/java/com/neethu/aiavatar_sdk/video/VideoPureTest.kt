@@ -87,7 +87,57 @@ class VideoPureTest {
         assertEquals(0f, FrameQuality.laplacianVariance(IntArray(100), 10, 5)) // size < w*h
     }
 
-    // ── VisionKeywords ────────────────────────────────────────────────────
+    // ── FaceFrameMath ─────────────────────────────────────────────────────
+
+    @Test
+    fun `upright size swaps for quarter rotations`() {
+        assertEquals(480 to 640, FaceFrameMath.uprightSize(640, 480, 270))
+        assertEquals(480 to 640, FaceFrameMath.uprightSize(640, 480, 90))
+        assertEquals(640 to 480, FaceFrameMath.uprightSize(640, 480, 0))
+        assertEquals(640 to 480, FaceFrameMath.uprightSize(640, 480, 180))
+    }
+
+    @Test
+    fun `centered face normalizes to zero - regression of the constant bottom-right bias`() {
+        // 真机实录（修复前）：缓冲 640×480、直立 480×640，居中的脸
+        // centerX=240/centerY=320 被除以缓冲尺寸 → nx=+0.25、ny=+0.33
+        // → 注视点恒偏右下。必须按直立系归一化。
+        val f = FaceFrameMath.normalize(
+            centerX = 240f, centerY = 320f, boxW = 200f, boxH = 250f,
+            bufferW = 640, bufferH = 480, rotationDegrees = 270, frontCamera = true,
+        )
+        assertEquals(0f, f.nx, 1e-5f)
+        assertEquals(0f, f.ny, 1e-5f)
+    }
+
+    @Test
+    fun `front camera flips nx - face on image left looks world-right`() {
+        // 前置原始帧未镜像：用户在屏幕右（世界 +X）→ 画面左（直立 x<240）
+        val f = FaceFrameMath.normalize(
+            centerX = 120f, centerY = 320f, boxW = 100f, boxH = 120f,
+            bufferW = 640, bufferH = 480, rotationDegrees = 270, frontCamera = true,
+        )
+        assertEquals(0.5f, f.nx, 1e-5f)
+        assertEquals(0f, f.ny, 1e-5f)
+        // 后置不翻转：同位置直接映射（画面左 = 世界左）
+        val back = FaceFrameMath.normalize(
+            centerX = 120f, centerY = 320f, boxW = 100f, boxH = 120f,
+            bufferW = 640, bufferH = 480, rotationDegrees = 270, frontCamera = false,
+        )
+        assertEquals(-0.5f, back.nx, 1e-5f)
+    }
+
+    @Test
+    fun `face at image bottom maps to positive ny and area uses upright frame`() {
+        val f = FaceFrameMath.normalize(
+            centerX = 240f, centerY = 560f, boxW = 240f, boxH = 320f,
+            bufferW = 640, bufferH = 480, rotationDegrees = 270, frontCamera = true,
+        )
+        // 画面下缘（ny>0）= 用户低 → 投影器向下看
+        assertEquals(0.75f, f.ny, 1e-5f)
+        // 面积分母是直立系 480×640（不是缓冲 640×480）
+        assertEquals(0.25f, f.area, 1e-5f)
+    }
 
     @Test
     fun `visual intent keywords hit`() {

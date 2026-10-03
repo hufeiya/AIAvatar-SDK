@@ -142,7 +142,13 @@
   - **ai_cmd**：`set_mode video`（带门控拒绝原因）/ `video_camera front|back` / `video_snapshot`（探测缓存不发请求）/ `set_llm_model <id>`（新增，清单校验——MIUI 禁触摸注入的模型切换入口）/ `state` 与 `chat_state` 增 video/vision 行；help 同步。
   - **单测 192 全绿（+25）**：adapter 3（数组形态/纯文本保持字符串/assistant 历史不带图）+ orchestrator 11（OneEuro 收敛/阶跃、投影器 nx/ny/深度/旋转基/退化安全/稳定性、会话带图挂队尾/历史不落图/无图不变）+ app 11（视觉清单锁死含假视觉排除、isVisionLlm 先归位再判定、ring 滚动/最清晰/并列取新、平坦≈0清晰度、关键词命中）。
   - **真机 62fabe84 已验**：chat_state `vision=true`（该机已配 Qwen3.8-27B）；`set_mode video` 进入（模式徽标变"视频模式"、按钮自动隐藏）；系统相机权限框正常弹出（截图）；无权限降级——发送走纯文本、追踪器 `active=false`、应用稳定；切 DeepSeek-V4-Flash 后 `set_mode video` **FAIL 且原因文案正确**，恢复 Qwen 后重新放行；全程零 FATAL。
-  - **⚠️ 未完待验（需要真手一次）**：HyperOS 禁 adb 授相机权限（`pm grant` SecurityException / appops uid 级 ignore / `install -g` 不授，与 A.1 第 21 条麦克风同源），**真手在弹出的系统框点"仅在使用中允许"后**复验清单：①PiP 预览出现（logcat `VideoTracker: camera bound`）②`video_snapshot` 出字节数 ③人在镜头里时 `state` 的 `face=(x,y)` 非零且 `look_at` yaw 跟随、侧移时头转向 ④`send_chat "描述你现在通过摄像头看到的画面"` 回答与实际场景一致（logcat `multimodal turn: 1 image(s)`）⑤PiP 拖动与前后摄切换（真手拖；命令侧 `video_camera` 已可验）。**nx 翻转方向是首验项**：若头像朝脸的反方向转，把 `UserCameraTracker.analyzeFrame` 里前置分支的 `-cx` 改 `cx`。
+  - **二轮修复（2026-10-04，用户手授相机权限后实测反馈 2 个 bug，均已真机复验）**：
+    1. **PiP 预览黑屏**（相机开了但小窗黑）：组合时序坑——`VideoCallPip` 首帧容器无尺寸、内层 AndroidView（PreviewView）尚未创建，而 `LaunchedEffect(lensFront)` 首帧就跑了 `start()`，那次 bind 只带分析流没有 Preview，之后无人触发重绑 → 永远黑。修法=黑屏守卫：`attachPreview(view, owner)` 时若 provider 已绑定且 `previewBound=false` 就强制带 Preview 重绑（`start(force=true)`，no-op 守卫加 `previewBound == (previewView != null)` 条件）。
+    2. **注视点恒偏右下**：ML Kit 的 boundingBox 是**旋转后直立系**（480×640），归一化却用了 ImageProxy 的**传感器缓冲系**尺寸（640×480）——居中的脸算出 nx=+0.25/ny=+0.33 的恒定偏置（恰好=纵横比错位量，且与脸位置无关）。修法=抽纯函数 `FaceFrameMath.normalize`（直立尺寸按 rotation 90/270 互换，前置翻转 nx），+5 条单测锁死（居中→零回归用例）。修后真机 `face=(-0.32,-0.05)` 随位置变化、yaw -34°↔-20° 随头动抖动更新。
+    3. 顺带：`debugStatus()` 的 `"%.0fB".format(Int)` 抛 `f != java.lang.Integer` 把 state 命令打挂——String.format 的 %f 只吃浮点，Int 必须直接插值。
+  - **端到端闭环（2026-10-04 真机，权限就绪后）**：PiP 实时画面（screencap 裁 PiP 区域 std=52 非黑、圆角+边框+前后摄钮正常）；`state` 输出 `video: active=true lens=front face=(x,y) area=0.14 age=30ms ring=3 best=27552B sharpness=3976.1`；**多模态回合**：`send_chat "描述一下你现在通过摄像头看到的画面"` → logcat `multimodal turn: 1 image(s)` + `system prompt: ... images=1` → 模型回复**准确描述真实场景**（圆框眼镜/吸顶灯/空调出风口格栅/白色书架/关着的门，与 PiP 截图一致），自发 `<cam:close_up><emo:…><act:…>` 标签全通道触发，8 句流水播完 TurnCompleted。
+  - **观测点补注**：①视频模式下 `look_at` 手动命令会被追踪器 33ms 内覆盖（视频模式视线归追踪器所有，设计内）；②冷启动后立刻采 state 可能读到 yaw/pitch=0 的瞬态（首帧未收敛），连采 2-3 次再看；③`raw reply:` 日志多行回复首行可能显示为空（回复以 `\n<cam:…>` 开头），grep -A 续行才见全文。
+  - **剩余待真手**：PiP 拖动手感与前后摄真手点按（adb 禁注入；`video_camera` 命令侧已可驱动）；注视幅度/平滑的观感调参（`FacePointProjector` 构造参数 lateralRange/verticalRange/refDepth/areaRef，用户觉得太狠/太弱时动这里）。
 
 
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
@@ -486,6 +492,7 @@ LLM SSE delta
 26. **"多模态模型"必须实测，API 收下 image_url ≠ 真看图（任务 9）**：`deepseek-v4-flash-ga`（火山）对 image_url 请求不报错但回答 "The image data appears incomplete"（同一张图 doubao-seed-2-0-mini 描述正确）——若把它标成视觉模型，用户在视频模式里会以为模型"看得见"实际全瞎。核验方法：64px 纯色 JPEG + "图中是什么颜色" chat 一次，答对=过、报 not a VLM=拒、答非所问/报图不完整=假视觉。硅基流动对**文本模型发数组形态 content** 会直接 400 `The model is not a VLM`——所以 adapter 里纯文本消息必须保持字符串 content，只有带图消息才用数组形态（否则闲聊轮也全灭）。
 27. **CameraX+ML Kit 组装三坑（任务 9）**：①`ImageProxy.toBitmap()` 复制像素必须在 proxy close 前、ML Kit `fromMediaImage` 异步读 buffer——**proxy 的 close 必须挂在 Task 的 addOnCompleteListener**（默认主线程回调，close 线程安全），在 analyze 里提前 close 会检测全灭；②检测框坐标是**旋转后直立系**的（InputImage 带 rotationDegrees），前置摄像头原始帧**未镜像**：脸在屏幕右侧时落在画面左侧，世界对齐 nx 要翻转（-cx），竖直不镜像——首验看头像转向是否符合"看向我的脸"；③ML Kit bundled 版（`com.google.mlkit:face-detection`）模型在 AAR 里不依赖 GMS，国产机可用；别选 unbundled（play services 变体）。
 28. **HyperOS 相机权限 adb 三条路全堵（任务 9，与第 21 条麦克风同源）**：`pm grant` 报 SecurityException（shell 无 GRANT_RUNTIME_PERMISSIONS）、`adb install -r -g` 后 dumpsys 仍 granted=false、`appops set` 包级 allow 但 **uid 级恒 ignore**（`appops get` 显示 `Uid mode: CAMERA: ignore`）——CameraX `bindToLifecycle` 前必须 runtime 权限到位，只能真手在系统框点一次"仅在使用中允许"。设计上的对冲：无权限时视频模式**降级不崩**（PiP 不渲染、追踪器 inactive、发送自动走纯文本），权限就绪（进程存活期间授权回调 / 重启后 checkSelfPermission）即自愈。
+29. **视频模式二轮的两个真 bug（2026-10-04 用户实测，均已修+真机复验）**：①**PiP 黑屏=组合时序**：`AndroidView` 的 PreviewView 在容器拿到尺寸前不进组合，而 `LaunchedEffect` 首帧已 `start()`——bind 只有分析流没有 Preview，之后没人重绑，永远黑。凡"先绑后挂 UI 面"的组合都要在**挂载回调里检查补绑**（`attachPreview` 里 force 重绑），别假设 effect 晚于视图创建。②**注视点恒偏右下=坐标系错位**：ML Kit boundingBox 在**旋转后直立系**，ImageProxy width/height 是**传感器缓冲系**（竖屏前置为横置 640×480）——居中的脸被算出 nx=+0.25/ny=+0.33 恒定偏置（恰为纵横比错位量，症状是"追踪有效但恒定偏向一侧"，与脸位置无关）。归一化抽纯函数 `FaceFrameMath`（rotation 90/270 宽高互换）+ 居中→零的回归单测。判别技巧：偏置**恒定**找坐标系/分辨率错位，偏置**随位置镜像**才找翻转符号。③顺带：`String.format("%.0f", Int)` 抛 `f != java.lang.Integer`——%f 只吃浮点。
 
 ### A.2 调参速查表
 
@@ -511,8 +518,8 @@ LLM SSE delta
 | 切服务商后模型/音色不对 | 正常防护路径：存储值不在新服务商清单一律落该服务商默认（`resolveLlmModel/resolveTtsModel/resolveVoice` 校验+默认）；`ai_cmd chat_state` 看"已解析生效"配置核对 |
 | 视线不动/想验证视线 | `ai_cmd look_at`（无参）看 target/yaw/pitch（yaw 非零=在生效）；`look_at camera` 回注视用户、`look_at off` 关闭、`ai_x/ai_y/ai_z` 指向世界点看头是否转向限幅 |
 | 视频模式进不去 | `chat_state` 看 `vision=`：false 就是当前模型不可收图——`set_llm_model Qwen/Qwen3.8-27B`（硅基流动）或 `set_provider volcano`（默认即视觉）；错误条文案里有原因 |
-| 视频模式没有画面/抓拍 | 先看系统相机权限（A.1 第 28 条，真手授权一次）；`state` 看 `video: active=` 与 `ring=`；`video_snapshot` 探测缓存；logcat `VideoTracker` 的 `camera bound/released` 与 face detect 失败行 |
-| 头朝脸的反方向转 | 前置 nx 翻转方向错了：`UserCameraTracker.analyzeFrame` 前置分支 `-cx` ↔ `cx`（A.1 第 27 条②） |
+| 视频模式没有画面/抓拍 | 先看系统相机权限（A.1 第 28 条，真手授权一次）；`state` 看 `video: active=` 与 `ring=`；`video_snapshot` 探测缓存；logcat `VideoTracker` 的 `camera bound`(preview=true 才对)/`released` 与 face detect 失败行；**小窗黑屏但 state active=true** = Preview 没绑上（A.1 第 29 条①的守卫失效时查这里） |
+| 注视点恒定偏向一侧（与脸位置无关） | 坐标系/分辨率错位而非翻转符号：查归一化用的是直立系还是缓冲系尺寸（A.1 第 29 条②，FaceFrameMath）；偏向随位置左右镜像才去翻 nx 符号 |
 | 视线转头太狠/太弱（视频模式） | `FacePointProjector` 构造参数：lateralRange/verticalRange（幅度）、refDepth/areaRef（深度基准）——先在 `look_at` 用世界点验证骨骼链，再调投影 |
 | 回复不提画面内容 | logcat 搜 `multimodal turn:`——没有=没带图（非视频模式/无相机权限/模型非视觉任一），有=带了图是模型理解问题（换 Qwen3-VL 或 doubao-pro 观察） |
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |

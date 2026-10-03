@@ -62,6 +62,10 @@ class UserCameraTracker(private val context: android.content.Context) {
     private var lensFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var boundLens: Int = 0
     private var analysis: ImageAnalysis? = null
+    private var lifecycleOwner: LifecycleOwner? = null
+
+    /** 最近一次 bind 是否包含了 Preview 用例（黑屏守卫的判据）。 */
+    private var previewBound: Boolean = false
 
     /** 最近一次检测命中的人脸观测（分析线程写，主线程读）。 */
     @Volatile
@@ -78,9 +82,22 @@ class UserCameraTracker(private val context: android.content.Context) {
     fun faceAgeMs(nowMs: Long = SystemClock.elapsedRealtime()): Long =
         latestFace?.let { nowMs - it.atMs } ?: Long.MAX_VALUE
 
-    /** PiP 预览面：绑定前（或重绑前）由 UI 侧塞进来；null=只分析不预览。 */
-    fun attachPreview(view: PreviewView) {
+    /**
+     * PiP 预览面。**必须在挂上时检查重绑**：组合时序上 `start()` 可能先于
+     * PreviewView 挂载执行（PiP 首帧容器尺寸未定、AndroidView 尚未创建），
+     * 那次 bind 只带了分析流 → PiP 永远黑屏；此时补一次带 Preview 的强制
+     * 重绑。传 [owner] 便于这路重绑。
+     */
+    fun attachPreview(view: PreviewView, owner: LifecycleOwner? = null) {
         previewView = view
+        owner?.let { lifecycleOwner = it }
+        if (provider != null && !previewBound) {
+            val o = lifecycleOwner
+            if (o != null) {
+                Log.i(TAG, "preview attached after bind — rebinding with preview")
+                start(o, lensFacing, force = true)
+            }
+        }
     }
 
     fun detachPreview() {
@@ -88,13 +105,14 @@ class UserCameraTracker(private val context: android.content.Context) {
     }
 
     /**
-     * 绑定相机并开始分析。已激活时：镜头一致 → no-op，不一致（或刚 [switchLens]）
-     * → 解绑重绑。必须在主线程调用。
+     * 绑定相机并开始分析。已激活时：镜头一致且预览状态一致 → no-op，否则
+     * （[switchLens] / 补绑 Preview / [force]）解绑重绑。必须在主线程调用。
      */
     @SuppressLint("RestrictedApi")
-    fun start(owner: LifecycleOwner, lens: Int = lensFacing) {
+    fun start(owner: LifecycleOwner, lens: Int = lensFacing, force: Boolean = false) {
         lensFacing = lens
-        if (isActive && boundLens == lensFacing) return
+        lifecycleOwner = owner
+        if (!force && isActive && boundLens == lensFacing && previewBound == (previewView != null)) return
 
         val newProvider = ProcessCameraProvider.getInstance(context).get()
         newProvider.unbindAll()
@@ -131,7 +149,12 @@ class UserCameraTracker(private val context: android.content.Context) {
         provider = newProvider
         analysis = newAnalysis
         boundLens = lensFacing
-        Log.i(TAG, "camera bound: lens=${if (currentLensFront) "front" else "back"} preview=${previewView != null}")
+        previewBound = useCases.any { it is Preview }
+        Log.i(
+            TAG,
+            "camera bound: lens=${if (currentLensFront) "front" else "back"} " +
+                "preview=$previewBound analysis=on",
+        )
     }
 
     fun stop() {
@@ -140,6 +163,7 @@ class UserCameraTracker(private val context: android.content.Context) {
         analysis?.clearAnalyzer()
         analysis = null
         boundLens = 0
+        previewBound = false
         detector?.close()
         detector = null
         latestFace = null
@@ -185,7 +209,8 @@ class UserCameraTracker(private val context: android.content.Context) {
             ?: "face=none"
         val best = ring.best()
         return "active=$isActive lens=${if (currentLensFront) "front" else "back"} $faceStr " +
-            "ring=${ring.size()} best=${best?.let { "%.0fB/s=%.1f".format(it.byteCount, it.sharpness) } ?: "none"}"
+            "ring=${ring.size()} best=" +
+            (best?.let { "${it.byteCount}B sharpness=${"%.1f".format(it.sharpness)}" } ?: "none")
     }
 
     // ── 分析管线（analysis executor 线程）────────────────────────────────
@@ -223,15 +248,23 @@ class UserCameraTracker(private val context: android.content.Context) {
                     val biggest = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
                     if (biggest != null) {
                         val box = biggest.boundingBox
-                        val cx = (box.centerX().toFloat() / w) * 2f - 1f
-                        val cy = (box.centerY().toFloat() / h) * 2f - 1f
-                        // 前置摄像头原始帧未镜像：脸在屏幕右时落在画面左侧 →
-                        // 世界对齐 nx 翻转（+1=屏幕右）；竖直方向不镜像
-                        val nx = if (front) -cx else cx
+                        // ⚠️ boundingBox 是旋转后直立系的——归一化必须用直立系
+                        // 尺寸（FaceFrameMath.normalize），用 proxy 缓冲尺寸会把
+                        // 居中的脸算出恒定右下偏置（真机实录，见该类 doc）
+                        val nf = FaceFrameMath.normalize(
+                            centerX = box.centerX().toFloat(),
+                            centerY = box.centerY().toFloat(),
+                            boxW = box.width().toFloat(),
+                            boxH = box.height().toFloat(),
+                            bufferW = w,
+                            bufferH = h,
+                            rotationDegrees = rotation,
+                            frontCamera = front,
+                        )
                         latestFace = FaceObservation(
-                            nx = nx.coerceIn(-1f, 1f),
-                            ny = cy.coerceIn(-1f, 1f),
-                            area = ((box.width().toFloat() * box.height()) / (w * h)).coerceIn(1e-4f, 1f),
+                            nx = nf.nx,
+                            ny = nf.ny,
+                            area = nf.area,
                             atMs = SystemClock.elapsedRealtime(),
                         )
                     }

@@ -2062,7 +2062,9 @@ private fun VideoCallPip(
                 },
         ) {
             AndroidView(
-                factory = { ctx -> PreviewView(ctx).also { tracker.attachPreview(it) } },
+                // owner 一并传给 attachPreview:组合时序上 start 可能先于本视图
+                // 挂载执行(容器首帧无尺寸),attach 时追踪器会自动补绑 Preview
+                factory = { ctx -> PreviewView(ctx).also { tracker.attachPreview(it, owner) } },
                 modifier = Modifier.fillMaxSize(),
             )
             SmallFloatingActionButton(
