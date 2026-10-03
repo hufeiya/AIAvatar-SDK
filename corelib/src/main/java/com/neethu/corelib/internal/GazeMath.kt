@@ -138,4 +138,12 @@ internal object GazeMath {
     private fun horLen(a: FloatArray): Float = sqrt(a[0] * a[0] + a[2] * a[2])
 
     private fun asinSafe(x: Float): Float = kotlin.math.asin(x.coerceIn(-1f, 1f))
+
+    /** Rotation angle between two unit quaternions (rad, in [0, π]; q and −q are equal). */
+    fun quatAngle(a: FloatArray, b: FloatArray): Float {
+        val d = kotlin.math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
+        // acos 在 1 附近对浮点噪声极敏感（dot=1-2.4e-7 → 6.9e-4），近 1 直接归零
+        if (d >= 1f - 1e-6f) return 0f
+        return 2f * kotlin.math.acos(d.coerceIn(0f, 1f))
+    }
 }

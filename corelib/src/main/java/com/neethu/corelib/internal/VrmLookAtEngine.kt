@@ -64,9 +64,43 @@ internal class VrmLookAtEngine(private val engine: Engine) {
         // Below this (rad) an offset write is skipped — keeps the resting state
         // fully silent like FaceDriver's expression dedup.
         private const val WRITE_EPS_RAD = 0.002f
+
+        // 判定"骨骼局部是否仍是我上次写入的值"的角度阈值（≈0.57°）：只需盖住
+        // 矩阵↔四元数往返的 ~1e-6 噪声，同时排除动画每帧的重写（重写差=偏移
+        // 本身，远超此阈；单帧静态 idle 重写的差也=偏移量）
+        private const val STRIP_EPS_RAD = 0.01f
+
+        private val IDENTITY_Q = floatArrayOf(0f, 0f, 0f, 1f)
+
+        /**
+         * 纯函数：骨骼当前局部 [current] 若仍等于上次写入的 [lastWritten]（角度
+         * 差在阈值内 = 没被动画重写），返回剥掉上次偏移 [lastOffset] 后的干净
+         * 基座 + "确实剥了东西"标记；否则原样返回。
+         */
+        internal fun stripPreviousWrite(
+            current: FloatArray,
+            lastWritten: FloatArray?,
+            lastOffset: FloatArray?,
+        ): Pair<FloatArray, Boolean> {
+            if (lastWritten == null || lastOffset == null) return current to false
+            if (GazeMath.quatAngle(current, lastWritten) > STRIP_EPS_RAD) return current to false
+            val base = GazeMath.quatMultiply(GazeMath.quatInverse(lastOffset), current)
+            return base to (GazeMath.quatAngle(lastOffset, IDENTITY_Q) > STRIP_EPS_RAD)
+        }
     }
 
-    private class BoneRef(val entity: Int, val restLocalMat: FloatArray)
+    /**
+     * 骨骼引用 + 叠加层记账。[VrmaAnimationEngine] 等动画每帧重写被驱动的
+     * 骨骼（头/颈在 VRMA 轨道里），但**不在动画轨道里的骨骼（眼骨）会一直
+     * 保持我上次写入的局部旋转**——直接把新偏移乘在"当前局部"上就会逐帧
+     * 累积（真机元凶：眼珠转过头只剩眼白）。所以每个骨骼记下最后一次写入
+     * 的局部四元数与偏移：本帧读到的局部若仍等于它（=没被动画重写），先
+     * 剥掉旧偏移得到干净基座，再叠加新偏移。
+     */
+    private class BoneRef(val entity: Int, val restLocalMat: FloatArray) {
+        var lastWritten: FloatArray? = null
+        var lastOffset: FloatArray? = null
+    }
 
     private var head: BoneRef? = null
     private var neck: BoneRef? = null
@@ -184,19 +218,37 @@ internal class VrmLookAtEngine(private val engine: Engine) {
     }
 
     /**
-     * Rotate [bone] by (yaw/pitch built against [forward], world frame):
-     * `L' = inv(P)·D·P·L`, keeping the local translation. [P] is the parent's
-     * world rotation — ⚠ TransformManager.getParent returns the parent
-     * **entity** and must go through getInstance() before use (the
-     * entity/instance mix-up is a known SIGSEGV trap, see
-     * VrmSpringBoneManager).
+     * Rotate [bone] by (yaw/pitch built against [forward], world frame),
+     * keeping the local translation. [P] is the parent's world rotation — ⚠
+     * TransformManager.getParent returns the parent **entity** and must go
+     * through getInstance() before use (the entity/instance mix-up is a known
+     * SIGSEGV trap, see VrmSpringBoneManager).
+     *
+     * 先剥再叠（见 [BoneRef] 注释）：骨骼局部若仍是我上次写的值就先剥掉旧
+     * 偏移，保证偏移永远相对"本帧动画基座"，而不是上一帧的叠加结果。
      */
     private fun applyOffset(bone: BoneRef?, yaw: Float, pitch: Float, forward: FloatArray) {
         if (bone == null) return
-        if (abs(yaw) < WRITE_EPS_RAD && abs(pitch) < WRITE_EPS_RAD) return
         val tm = engine.transformManager
         val inst = tm.getInstance(bone.entity)
         if (inst == 0) return
+
+        val mat = FloatArray(16)
+        tm.getTransform(inst, mat)
+        val lCurrent = GazeMath.matToQuat(mat)
+
+        val strip = stripPreviousWrite(lCurrent, bone.lastWritten, bone.lastOffset)
+        val base = strip.first
+        bone.lastWritten = null
+        bone.lastOffset = null
+
+        // 本帧不要偏移：只负责清掉可能残留的旧偏移（无动画骨骼的定格态）
+        if (abs(yaw) < WRITE_EPS_RAD && abs(pitch) < WRITE_EPS_RAD) {
+            if (strip.second) {
+                tm.setTransform(inst, withQuaternion(mat, base))
+            }
+            return
+        }
 
         val parentEntity = tm.getParent(inst)
         val parentQ = if (parentEntity != 0) {
@@ -218,14 +270,17 @@ internal class VrmLookAtEngine(private val engine: Engine) {
             GazeMath.quatMultiply(GazeMath.quatInverse(parentQ), dWorld),
             parentQ,
         )
-
-        val mat = FloatArray(16)
-        tm.getTransform(inst, mat)
-        val l = GazeMath.matToQuat(mat)
-        val l2 = GazeMath.quatMultiply(localOffset, l)
-        quaternionToMatrix(l2, mat) // quaternionToMatrix keeps the translation columns
-        tm.setTransform(inst, mat)
+        val lNew = GazeMath.quatMultiply(localOffset, base)
+        tm.setTransform(inst, withQuaternion(mat, lNew))
+        bone.lastWritten = lNew
+        bone.lastOffset = localOffset
         appliedAny = true
+    }
+
+    /** Rotation part of [q] into column-major [mat], translation preserved. */
+    private fun withQuaternion(mat: FloatArray, q: FloatArray): FloatArray {
+        quaternionToMatrix(q, mat)
+        return mat
     }
 
     /** Put the driven bones back to their rest locals (gaze off / model reset). */
@@ -235,6 +290,8 @@ internal class VrmLookAtEngine(private val engine: Engine) {
             val b = bone ?: continue
             val inst = tm.getInstance(b.entity)
             if (inst != 0) tm.setTransform(inst, b.restLocalMat)
+            b.lastWritten = null
+            b.lastOffset = null
         }
         appliedAny = false
     }
@@ -247,8 +304,6 @@ internal class VrmLookAtEngine(private val engine: Engine) {
         tm.getTransform(inst, mat)
         return BoneRef(entity, mat.clone())
     }
-
-    private val IDENTITY_Q = floatArrayOf(0f, 0f, 0f, 1f)
 
     /** Rotation part of [q] into column-major [mat], translation preserved. */
     private fun quaternionToMatrix(q: FloatArray, mat: FloatArray) {
