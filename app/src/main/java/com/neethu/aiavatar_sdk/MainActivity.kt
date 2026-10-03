@@ -1,6 +1,7 @@
 package com.neethu.aiavatar_sdk
 
 import android.content.Context
+import android.widget.Toast
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -18,6 +19,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -211,6 +213,13 @@ internal class DemoUiState(context: Context) {
     var animationFiles: List<String> by mutableStateOf(emptyList())
         private set
 
+    /**
+     * 当前待机动作（assets 相对路径或 "ext:<绝对路径>"），LLM 手势播完/手动
+     * 停止后回到它（§7.10）；null = 回 rest pose。面板长按或 ai_cmd set_idle
+     * 切换，持久化到 demo_settings。
+     */
+    var idleAnimation by mutableStateOf<String?>(prefs.getString(KEY_IDLE_ANIMATION, null))
+
     var selectedModel by mutableStateOf("SK_Sun_PERFORMANCE_jacket_off_1024.vrm")
     var selectedAnimation by mutableStateOf<String?>(null)
     var selectedExpression by mutableStateOf<String?>(null)
@@ -321,6 +330,21 @@ internal class DemoUiState(context: Context) {
             listAssetsRecursive(context, "animations") { it.endsWith(".vrma") }
                 .map { it.removePrefix("animations/") }
         }
+    }
+
+    /** 内置动画库全量相对路径（LLM 动作目录与待机选型的来源，§7.2/§7.10）。 */
+    fun assetAnimationPaths(context: Context): List<String> =
+        listAssetsRecursive(context, "animations") { it.endsWith(".vrma") }
+            .map { it.removePrefix("animations/") }
+
+    /** 外置动画库全量绝对路径（追加进 LLM 动作目录用）。 */
+    fun externalAnimationAbsolutePaths(context: Context): List<String> {
+        val root = externalAnimationsRoot(context) ?: return emptyList()
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension.equals("vrma", ignoreCase = true) }
+            .map { it.absolutePath }
+            .sorted()
+            .toList()
     }
 
     /**
@@ -445,8 +469,19 @@ private fun DemoScreen(
         // 正在播放/合成的回合被反复杀掉（表现为"还没输完就不出声了"）。
         delay(800)
         value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)?.also { s ->
-            // 动作目录跟随动画来源（内置策展 / 外置库关键词匹配），喂给协议块与 GestureDriver
-            s.actionCatalog = buildLlmActionCatalog(context, uiState.useExternalAnimations)
+            // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加外置库；
+            // 待机 = 持久化选择优先，否则按内置优先级挑中性 idle。模型（重）加载后
+            // produceState 因 state 键重跑，这里顺便把 idle 重新挂到新引擎上。
+            val assetPaths = uiState.assetAnimationPaths(context)
+            val externalFiles =
+                if (uiState.useExternalAnimations) uiState.externalAnimationAbsolutePaths(context)
+                else emptyList()
+            s.actionCatalog = buildLlmActionCatalog(assetPaths, externalFiles)
+            s.idleAction = resolveIdleAction(
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_IDLE_ANIMATION, null),
+                assetPaths,
+            )
         }
     }
 
@@ -599,6 +634,26 @@ private fun DemoScreen(
                             "sysPromptChars=${prompt.length} sysPromptHead=${prompt.take(100)}"
                     }
                 }
+            },
+            setIdle = { relativePath, external ->
+                val s = session
+                    ?: return@AiChatDebugHooks "no AI chat session — idle will apply once configured"
+                val root = uiState.externalAnimationsRoot(context)
+                val entry = idleEntryFor(relativePath, external, root)
+                    ?: return@AiChatDebugHooks "cannot resolve idle entry for $relativePath"
+                val prefValue = idlePrefValueFor(relativePath, external, root)
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putString(KEY_IDLE_ANIMATION, prefValue).apply()
+                uiState.idleAnimation = prefValue
+                s.idleAction = entry
+                "idle set to ${entry.label} (${entry.tag})"
+            },
+            clearIdle = {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_IDLE_ANIMATION).apply()
+                uiState.idleAnimation = null
+                session?.idleAction = null
+                "idle cleared (one-shots fall back to rest pose)"
             },
         )
     }
@@ -858,15 +913,35 @@ private fun DemoScreen(
                 .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
         ) {
             ListPanel(
-                title = "Animations",
+                title = "Animations · 长按条目设为待机",
                 items = uiState.animationFiles,
                 selectedItem = uiState.selectedAnimation,
                 // 只隐藏顶层目录名（如 VRMA_Selected_Categorized），保留分类子文件夹
-                displayName = { it.removeSuffix(".vrma").substringAfter('/') },
+                displayName = {
+                    val base = it.removeSuffix(".vrma").substringAfter('/')
+                    if (idlePrefValueFor(
+                            it, uiState.useExternalAnimations, uiState.externalAnimationsRoot(context)
+                        ) == uiState.idleAnimation
+                    ) "$base · 待机" else base
+                },
                 onItemClick = { fileName ->
                     uiState.selectedAnimation = fileName
                     uiState.loadAnimation(context, controller, fileName)
                     controller.playVrmaAnimation(loop = true)
+                },
+                onItemLongClick = { fileName ->
+                    val root = uiState.externalAnimationsRoot(context)
+                    val entry = idleEntryFor(fileName, uiState.useExternalAnimations, root)
+                    if (entry == null) {
+                        Toast.makeText(context, "该文件无法设为待机", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val prefValue = idlePrefValueFor(fileName, uiState.useExternalAnimations, root)
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putString(KEY_IDLE_ANIMATION, prefValue).apply()
+                        uiState.idleAnimation = prefValue
+                        session?.idleAction = entry
+                        Toast.makeText(context, "待机动作：${entry.label}", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
         }
@@ -1243,12 +1318,14 @@ private fun CardsPanel(
  * to the currently selected item.
  */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun ListPanel(
     title: String,
     items: List<String>,
     selectedItem: String?,
     displayName: (String) -> String = { it },
-    onItemClick: (String) -> Unit
+    onItemClick: (String) -> Unit,
+    onItemLongClick: ((String) -> Unit)? = null
 ) {    Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -1275,7 +1352,7 @@ private fun ListPanel(
 
             LazyColumn(
                 state = listState,
-                modifier = Modifier.heightIn(max = 200.dp),
+                modifier = Modifier.heightIn(max = 240.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(items) { fileName ->
@@ -1287,13 +1364,21 @@ private fun ListPanel(
                             MaterialTheme.colorScheme.surface,
                         label = "itemBg"
                     )
+                    val clickModifier = if (onItemLongClick != null) {
+                        Modifier.combinedClickable(
+                            onClick = { onItemClick(fileName) },
+                            onLongClick = { onItemLongClick(fileName) },
+                        )
+                    } else {
+                        Modifier.clickable { onItemClick(fileName) }
+                    }
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(bgColor)
-                            .clickable { onItemClick(fileName) }
+                            .then(clickModifier)
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

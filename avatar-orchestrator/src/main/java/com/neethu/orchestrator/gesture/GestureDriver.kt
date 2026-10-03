@@ -16,6 +16,7 @@ import com.neethu.corelib.AvatarController
 open class GestureDriver(private val controller: AvatarController) {
 
     private var catalog: Map<String, ActionEntry> = emptyMap()
+    private var idleEntry: ActionEntry? = null
 
     /** Tag most recently started, or null after a stop / failed play. */
     @Volatile
@@ -24,6 +25,27 @@ open class GestureDriver(private val controller: AvatarController) {
 
     fun setCatalog(entries: List<ActionEntry>) {
         catalog = entries.associateBy { it.tag }
+    }
+
+    /**
+     * Set the looping idle the engine returns to after one-shots and manual
+     * stops (§7.10). Does not interrupt current playback.
+     */
+    open fun setIdle(entry: ActionEntry): Boolean {
+        idleEntry = entry
+        val loaded = when {
+            entry.assetPath != null -> controller.setVrmaIdleAnimation(entry.assetPath)
+            else -> entry.filePath?.let { controller.setVrmaIdleAnimationFromFile(it) } ?: false
+        }
+        if (loaded) Log.i(TAG, "idle set to '${entry.tag}' (${entry.label})")
+        else Log.w(TAG, "idle '${entry.tag}' failed to load (${entry.assetPath ?: entry.filePath})")
+        return loaded
+    }
+
+    /** Drop the idle; one-shots and stops return to the rest pose again. */
+    open fun clearIdle() {
+        idleEntry = null
+        controller.clearVrmaIdleAnimation()
     }
 
     /** Load and start the clip for [tag]; false when unknown or unloadable. */

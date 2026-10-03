@@ -92,6 +92,9 @@ class AiChatController(
             baseUrl = prefs.baseUrl,
             apiKey = prefs.apiKey,
             model = prefs.llmModel,
+            // 略低于默认 0.8：多模态行内标签协议对指令遵循敏感（真机实测
+            // 0.8 下模型偶尔完全忽略标签/用括号演戏），0.6 是遵循与创意折中
+            temperature = 0.6f,
         )
         session.ttsConfig = TtsConfig(
             model = prefs.ttsModel,

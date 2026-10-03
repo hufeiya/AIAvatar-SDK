@@ -86,13 +86,19 @@ class EmotionBlender(
     }
 
     private fun applyInternal(cue: EmotionCue) {
-        val def = defs[cue.name] ?: return
+        // Unknown names become direct single-morph expressions (§7.10): the
+        // loaded model's own presets/ARKit morphs (blink_l, browInnerUp, aa…)
+        // ride the same easing + 3 s auto-reset machinery as the canonical
+        // emotions. Canonical defs take precedence; FaceDriver's expression
+        // gating drops morphs the model doesn't actually have. Def stores 1.0
+        // — applyInternal scales by the cue intensity exactly once.
+        val intensity = cue.intensity.coerceIn(0f, 1f)
+        val def = defs[cue.name] ?: Def(listOf(cue.name to 1f), 0.25f)
         resetJob?.cancel()
         resetJob = null
         currentEmotion = cue.name
 
         startValues = owned.associateWith { currentValue(it) }
-        val intensity = cue.intensity.coerceIn(0f, 1f)
         val newTargets = def.targets.associate { (name, value) -> name to value * intensity }
         owned = owned + newTargets.keys
         targets = owned.associateWith { newTargets[it] ?: 0f }

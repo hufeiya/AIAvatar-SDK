@@ -80,6 +80,14 @@
   - 调试命令新增 `import_card` / `active_card` / `open_panel` / `list cards`（见 docs/ai-debug-intents.md）
   - 真机验证：PNG(V2)/JSON(V3) 导入激活 ✓、坏卡拒绝 ✓、开场白自动朗读（`*动作*` 剥离、宏替换、按序播放）✓、按人设回答 ✓、系统提示词重写（388/440 chars）✓、重启后卡片与激活态持久化 ✓、面板 UI 截图 ✓、全程无崩溃
   - 未覆盖：SAF 选择器手势流与面板内点按激活/删除（HyperOS 禁止 shell 注入触摸；二者与已验证的 import_card 命令共用同一条落盘/索引/激活路径）
+- **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
+  - **动作库扩容**：外置库 `fbx2vrma-converter/VRMA_Selected_Categorized` 除 02_行走跑步转向（位移类走出画面）外 9 类 309 个拷入 `assets/animations/<分类>/`（总计 334 个/47MB）；LLM 动作目录不再硬编码——`buildLlmActionCatalog` 全量扫描 assets 生成（文件名→小写下划线 tag，去重，分类取子文件夹名，按对话价值排序），外置动画模式下追加外置库（真机实测 prompt 含 455 个动作 tag）
+  - **表情全量暴露**：`<emo:>` 词表合并为一段——7 个标准情绪 + 当前模型全部可用表情原名（`FaceDriver.availableExpressions`，SK_Sun 实测 68 个含 ARKit 52 morph）；未知名经 `EmotionBlender` 回退为"单 morph 直驱"（0.25s ease + 3s 自动回 neutral），`AvatarSession` 分派时用 `FaceDriver.resolveExpression` 大小写不敏感地还原 morph 名
+  - **IDLE 待机**：corelib 引擎加 idle 槽——一次性动作播完或手动停止自动无缝切到 idle 循环（`idleAnchor` 相位锚定 + `consumeIdleSwap` 联动弹簧骨骼重置），无 idle 时回落 rest pose；app 默认自动选（Idle Stand Looking Around 优先），动画面板**长按**条目换待机（持久化 `ai_idle_animation`），`ai_cmd set_idle/idle_off` 调试
+  - **提示词工程（真机迭代 5 轮的结论）**：①few-shot 输出示例是格式遵循的最强杠杆，且要放在长提示词**最末尾**（近因效应）；②示例里的名字必须动态取自真实清单——硬编码 `blink_l` 在 ARKit 命名模型（blinkLeft）上不存在，模型照抄后被门控静默丢弃；③情绪与直接表情合并为一个 `<emo>` 词表段；④禁止"括号演戏"要显式写（模型爱用（括号）描写动作）；⑤LLM 温度 0.8→0.6（AiChatController）；⑥动作列表量大放末尾
+  - **观测点**：`AvatarSession` 新增两条日志——`system prompt: N chars, cameras=5, actions=N, directExpr=N`（注入是否生效）与 `raw reply: ...`（模型原始输出，区分"没发标签"vs"发了被丢弃"）；本次眨眼问题就是靠 raw reply 定位的（模型发了 `<emo:blinkLeft:1>` 被大小写卡掉）
+  - 真机验证：眨左眼 → `EmotionChanged blinkLeft intensity=1.0→0.0` 事件 + morph 直驱 ✓；庆祝手势 3.5s 播完后截屏差分角色持续运动（idle 接管，非冻结/T-pose）✓；set_idle × 3 切换 + idle_off 全部生效 ✓；单测 106 全绿（新增 EmotionBlenderTest 4 / FaceDriverResolveExpressionTest 2）
+
 - **任务 8 已完成（2026-10-03，真机 62fabe84 小米14/HyperOS Android16，硅基流动 DeepSeek-V3 + CosyVoice2）**：多模态行内标记协议——LLM 单流输出同时驱动文字(TTS/口型)/情绪(表情)/动作(VRMA)/镜头(CameraShot)，设计全文见第七节
   - adapter：`TagCue` sealed + `TagExtractor` 接口 + `InlineTagExtractor`（`<emo:名:强度>/<act:名>/<cam:机位>` 新三标签 + 老协议 `<|emotion|>` 兼容；跨 delta 缓冲/holdback/裸 `<` 防吞段）
   - orchestrator：AvatarSession 三路分派（映射在本层做，adapter 不碰 corelib）+ `gesture/GestureDriver`（目录可注入，interrupt 时 stop）+ `SystemPromptAssembler.multimodalProtocolBlock(cameras, actions)`（空段省略；顺带修 assemble/buildRequestMessages 双重注入）+ `speak()` 走 extractor（开场白支持标签）+ `AvatarEvent.ActionStarted/CameraChanged`；Options 加 `protocolInstructions/enableLlmGestures/enableLlmCamera`
@@ -360,6 +368,26 @@ LLM SSE delta
 - 老协议 `<|emotion|>` 保留识别；system prompt 只教新家族；历史 assistant 消息保留原始标签（§7.3 第 2 条）。
 - 真机证据（62fabe84，两轮对话）：`chat:` 事件流（CameraChanged MEDIUM_SHOT→ActionStarted wave→EmotionChanged happy 0.8，中段 CLOSE_UP；第二轮 celebrate+4 情绪）、SoulLinkRenderer `Loaded VRMA 5.08s / 8.54s`、截屏（特写机位 + 干净字幕）。协议遵循率初判良好：两轮全部自发正确标签、未编造名字；密度遵循"转折处一个"。
 
+### 7.10 第二轮迭代：动作库扩容 + 表情全量暴露 + IDLE 待机（2026-10-03）
+
+**① 动作库**：外置库 9 类 309 个（跳过 02_行走跑步转向——位移类会把角色走出画面）拷入 `assets/animations/<分类>/`，共 334 个/47MB。目录 = `buildLlmActionCatalog` 全量扫描 assets 生成（tag=文件名转小写下划线、去重、分类=子文件夹名、`CATEGORY_ORDER` 按对话价值排序），外置动画模式追加外置库文件。协议块动作段按分类分组、置于提示词最末（量大防稀释）。
+
+**② 表情全量暴露**：`<emo:>` 统一词表 = 7 标准情绪 + 模型全部可用表情原名（`FaceDriver.availableExpressions`，模型加载后捕获）。两条新链路：
+- `EmotionBlender.applyInternal` 未知名回退：`Def(listOf(name to 1f), 0.25f)` 单 morph 直驱——同款 easeInOutCubic + 3s 自动回 neutral，眨眼保持/微表情都由此实现；
+- `FaceDriver.resolveExpression`：大小写不敏感还原 morph 名（解析器统一小写 cue，morph 名大小写敏感——见 A.1 第 18 条）；`AvatarSession` 分派预过滤：规范情绪直通、可解析名直驱、其余静默丢弃。
+
+**③ IDLE 待机**：`VrmaAnimationEngine` 加 idle 槽（`setIdleAnimation` + `idleTakeover/idleAnchor` 相位锚定）——一次性动作播完或 `stop()` 自动切 idle 循环；`consumeIdleSwap()` 供 renderer 重置弹簧骨骼；无 idle 回落 rest pose。API：`controller.setVrmaIdleAnimation(FromFile)/clearVrmaIdleAnimation`；orchestrator：`session.idleAction` → `GestureDriver.setIdle`；app：默认自动选（`IDLE_PREFERENCE`：Idle Stand Looking Around 优先）+ 动画面板长按换待机 + `ai_idle_animation` 持久化 + `ai_cmd set_idle/idle_off`。
+
+**④ 提示词工程结论（真机 5 轮迭代）**：
+1. few-shot 输出示例是格式遵循的最强杠杆，且放长提示词**最末尾**（近因效应）——示例前置时模型仍发括号演戏；
+2. 示例名字必须动态取自真实清单：硬编码 `blink_l` 在 ARKit 模型（`blinkLeft`）上被门控静默丢弃，模型照抄示例名；
+3. 情绪 + 直接表情合并为一个 `<emo>` 词表段，规则里点名"要求具体表情必须从列表选名发标签"；
+4. 显式禁止"（括号）/*星号* 演戏"（DeepSeek-V3 默认爱这么干）；
+5. LLM 温度 0.8→0.6；动作列表（数百 tag）放提示词最后。
+已知取舍：系统提示词 ~14.5K chars（455 动作 + 68 表情），协议遵循率随 prompt 规模波动，靠示例+收尾强调兜底；若后续仍不稳，优先裁剪 prompt 内动作清单（库全量保留在本地）。
+
+**观测点**：`AvatarSession` 的 `system prompt: N chars, cameras=…, actions=…, directExpr=…`（注入核对）与 `raw reply: …`（模型原始输出——"没发标签"与"发了被丢弃"靠它区分）；`GestureDriver` 的 `idle set to …`；`SoulLinkRenderer` 的 `Loaded idle VRMA: …`。
+
 ## 附录 A：观感调参速查（成功路径验证后更新此表）
 
 ### A.1 任务 1 实测新坑（每条都真踩过，2026-10-03）
@@ -381,6 +409,7 @@ LLM SSE delta
 15. **FaceDriver 静止态必须"静默"，零值不能每帧重发**：`send()` 的去重守卫原本带 `&& value != 0f` 例外——说话结束后 else 分支每帧产出 0，守卫永不跳过，于是每帧 `setExpression(vowel, 0)`；而 corelib `VrmExpressionManager.setExpression` 对 `weight <= 0` 的语义是 **`targetWeights.remove(name)`**（见其源码 248-254 行，同名权重是替换、0 是删除），等于说话一结束就把手动设置的嘴部表情（面板 presetExpressions 的 aa/ih/ou/ee/oh）每帧抹掉。说话前 `sent` 缓存为空、零值走 `previous == null` 跳过，所以**只有说过话才复现**。已修：守卫去掉零值例外，静止时送最后一次清零即静默（所有权交还手动表情）；说话期间 viseme 变化超容差照常下发、独占嘴部不变。真机两轮验证：每轮结束后 `set_expression aa 1.0` 截屏差分集中在嘴部且 4 秒保持，第二轮说话口型日志正常。注意裁剪所有权时的行为模型：情绪活跃期（3s auto-reset 内）手动嘴部表情仍会被情绪通道覆盖，这是设计内所有权。
 16. **转换模型的 VRM preset 弱绑定会让口型/情绪整体变弱，解析时必须归一化**：换默认模型到 SK_Sun_PERFORMANCE（ARKit 52 词素 + 生成 preset 的转换模型）后嘴部动作非常小。解析其 GLB 发现全部 preset 绑定权重弱（aa 0.5 / ih·ou 0.2 / ee·oh 0.3 / sad·surprised 0.25 / happy 0.5），而 custom ARKit 词素全是 1.0——这意味着不只口型，LLM 情绪驱动的表情也只有 1/4~1/2 强度（blink 恰好 1.0 所以眨眼正常，最容易漏查）。驱动侧幅度正常（FaceDriver 日志 volume/top 与旧模型一致），纯模型资产问题。已修：`VrmExpressionManager.normalizeBindWeights` 在解析时（VRM 1.0 与 0.x 两条路径）把每个表达式的绑定权重缩放到最强 bind=1.0（比率保持；已全权重的模型恒等、零行为变化，四个仓库模型实测只有 SK_Sun 被放大）。注意副作用：同一 morph 组合、仅幅度不同的 preset（如此模型的 ee=[0.3×jaw,0.3×stretchL,0.3×stretchR] 与 ih=[0.2×同三 morph]）归一化后形状相同——幅度差异本就被 viseme 动态淹没，可接受。真机验证：aa=1.0 从半开变全开（截屏），说话中段嘴部帧间差 6~9%、句间停顿 1.7%。
 17. **release() 打断停在 wait() 的写线程 → FATAL 闪退（任务 8 期间实录于旧构建）**：`AudioTrackPlaybackQueue.release()` 先置 released 再 `writer?.interrupt()`，而 `writeLoop` 的 `lock.wait()` 没有捕获 InterruptedException——写线程正空等队列时 close/rebuild 会话（设置逐字符改动即重建、`AiChatController.ensure` 换配置）会让 `avatar-playback` 线程带未捕获异常死亡（MIUI 上 app 闪退重启）。打断主路径反而正常（写线程多半在 write//drain 里而非 wait 里），所以任务 1/2 冒烟没暴露。已修：wait 包 try/catch，中断即静默退出（released 已先置位，语义就是关停）。单测：构造队列→writer 停稳→release→用默认 UncaughtExceptionHandler 断言无未捕获异常。
+18. **标签名统一小写 vs 模型 morph 名大小写敏感（直接表情全灭的元凶，任务 8.1）**：`InlineTagExtractor` 沿用老协议把 cue 名 `lowercase()`，而 `AvatarState.Ready.expressions`/`getAvailableExpressions()` 返回的 morph 名是大小写敏感的（SK_Sun 是 ARKit 命名 `blinkLeft/eyeBlinkLeft/browInnerUp…`）——`<emo:blinkLeft:1>` 解析成 `blinkleft` 后被 availableExpressions 门控**静默丢弃**，事件都不发。最坑的是模型明明发了标签（`raw reply` 日志可见），表象却是"模型不遵守协议"。已修：`FaceDriver.resolveExpression` 大小写不敏感还原真实 morph 名（纯函数单测），分派时规范情绪走小写、直接表情走还原名。教训：**"模型不听话"先看 `AvatarSession` 的 `raw reply:` 日志再归因**——这次连试 4 轮提示词工程都无效，实际是客户端丢事件。
 
 ### A.2 调参速查表
 
@@ -396,6 +425,9 @@ LLM SSE delta
 | 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
 | 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
+| 模型不发标签/用（括号）演戏 | 先看 `AvatarSession` 的 `raw reply:` 日志区分"没发"vs"发了被丢弃"（A.1 第 18 条）；检查 `system prompt:` 行三段清单是否注入；示例是否在提示词末尾；温度是否 ≤0.6 |
+| 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
+| 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |
 
 验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。
 

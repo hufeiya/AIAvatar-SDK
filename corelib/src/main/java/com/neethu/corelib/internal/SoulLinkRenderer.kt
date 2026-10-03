@@ -251,6 +251,7 @@ internal class SoulLinkRenderer(
             // VRMA animation takes priority over built-in animations
             val vrma = vrmaEngine
             if (vrma != null && vrma.isActive()) {
+                if (vrma.consumeIdleSwap()) pendingSpringReset = true
                 val elapsed = (frameTimeNanos - vrmaStartTime).toDouble() / 1_000_000_000.0
                 vrma.update(elapsed.toFloat())
                 animator?.updateBoneMatrices()
@@ -1025,6 +1026,59 @@ internal class SoulLinkRenderer(
     }
 
     /**
+     * Set the looping idle animation from assets — what the model returns to
+     * after a one-shot VRMA (LLM gesture) or a manual stop. Without an idle
+     * the model falls back to its rest pose. Does not interrupt playback.
+     */
+    fun setVrmaIdleAnimation(assetsPath: String): Boolean {
+        return try {
+            val assets = surfaceView.context.assets
+            assets.open(assetsPath).use { input ->
+                parseVrmaIdleBytes(input.readBytes(), assetsPath)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Failed to load idle VRMA: $assetsPath", e)
+            false
+        }
+    }
+
+    /** Same as [setVrmaIdleAnimation] but from an absolute file path. */
+    fun setVrmaIdleAnimationFromFile(path: String): Boolean {
+        return try {
+            val file = java.io.File(path)
+            if (!file.isFile) {
+                android.util.Log.e("SoulLinkRenderer", "Idle VRMA file not found: $path")
+                false
+            } else {
+                file.inputStream().use { input ->
+                    parseVrmaIdleBytes(input.readBytes(), path)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Failed to load idle VRMA file: $path", e)
+            false
+        }
+    }
+
+    /** Drop the idle; one-shots and stops return to the rest pose again. */
+    fun clearVrmaIdleAnimation() {
+        vrmaEngine?.setIdleAnimation(null)
+    }
+
+    private fun parseVrmaIdleBytes(bytes: ByteArray, source: String): Boolean {
+        val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
+        return if (animation != null) {
+            vrmaEngine?.setIdleAnimation(animation)
+            android.util.Log.i("SoulLinkRenderer",
+                "Loaded idle VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
+            true
+        } else {
+            android.util.Log.e("SoulLinkRenderer", "Failed to parse idle VRMA: $source")
+            false
+        }
+    }
+
+    /**
      * Start playing the loaded VRMA animation.
      * Stops any built-in animation that's playing.
      */
@@ -1038,10 +1092,12 @@ internal class SoulLinkRenderer(
     }
 
     /**
-     * Stop the VRMA animation.
+     * Stop the VRMA animation. With an idle configured the engine resumes the
+     * idle loop, so restart the playback clock for a clean phase.
      */
     fun stopVrmaAnimation() {
         vrmaEngine?.stop()
+        vrmaStartTime = System.nanoTime()
         pendingSpringReset = true
     }
 

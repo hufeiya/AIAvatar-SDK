@@ -134,6 +134,17 @@ class AvatarSession(
             gestureDriver?.setCatalog(value)
         }
 
+    /**
+     * The looping idle the model returns to after one-shot gestures and
+     * manual stops (§7.10). Null = rest pose fallback. Applied through
+     * [GestureDriver.setIdle] whenever the model is (re)loaded.
+     */
+    var idleAction: ActionEntry? = null
+        set(value) {
+            field = value
+            if (value != null) gestureDriver?.setIdle(value) else gestureDriver?.clearIdle()
+        }
+
     private val queue: PlaybackQueue = playbackQueue ?: AudioTrackPlaybackQueue()
     private val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent)
     private val extractor: TagExtractor = InlineTagExtractor()
@@ -253,6 +264,8 @@ class AvatarSession(
                 chunker.flush().forEach { submitSentence(it, ttsCfg) }
                 pipeline.endTurn()
                 pipeline.awaitTurnComplete()
+                // 观测点：原始回复（含标签）——排查"模型没发标签/标签被丢弃"先看这行
+                Log.i("AvatarSession", "raw reply: ${replyBuffer}")
                 store.appendAssistant(replyBuffer.toString())
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
@@ -356,9 +369,24 @@ class AvatarSession(
     private fun dispatchCues(cues: List<TagCue>) {
         for (cue in cues) when (cue) {
             is TagCue.Emotion -> {
-                val emotion = EmotionCue(cue.name, cue.intensity)
-                faceDriver?.applyEmotion(emotion)
-                emit(AvatarEvent.EmotionChanged(emotion))
+                // Canonical emotions win (combo defs); other names resolve to the
+                // model's actual morph casing (extractor lowercases everything,
+                // morph names are case-sensitive — blinkLeft ≠ blinkleft, §7.10).
+                val fd = faceDriver
+                val canonical = cue.name.lowercase()
+                val isCanonical = fd != null && canonical in fd.knownEmotionNames
+                val direct = fd?.resolveExpression(cue.name)
+                if (fd == null || isCanonical || direct != null) {
+                    val emotion = EmotionCue(
+                        when {
+                            fd == null || isCanonical -> canonical
+                            else -> direct!!
+                        },
+                        cue.intensity,
+                    )
+                    fd?.applyEmotion(emotion)
+                    emit(AvatarEvent.EmotionChanged(emotion))
+                }
             }
             is TagCue.Action -> {
                 val entry = actionCatalog.firstOrNull { it.tag == cue.name }
@@ -390,18 +418,35 @@ class AvatarSession(
         val cameras =
             if (options.enableLlmCamera && controller != null) SystemPromptAssembler.DEFAULT_CAMERA_TAGS
             else emptyList()
-        val actions =
-            if (gestureDriver != null) actionCatalog.map { it.tag to it.label }
+        val actionGroups =
+            if (gestureDriver != null) actionCatalog.groupBy { it.category }
+                .map { (category, entries) -> category to entries.map { it.tag } }
             else emptyList()
+        // The model's own expression names (presets + ARKit morphs) so it can
+        // drive single morphs directly (§7.10).
+        val directExpressions =
+            faceDriver?.availableExpressions?.filter { it.isNotBlank() }?.sorted() ?: emptyList()
         val system = buildString {
             append(systemPrompt.trim())
             if (options.protocolInstructions) {
                 if (isNotEmpty()) append("\n\n")
-                append(options.assembler.multimodalProtocolBlock(cameras = cameras, actions = actions))
+                append(
+                    options.assembler.multimodalProtocolBlock(
+                        cameras = cameras,
+                        actionGroups = actionGroups,
+                        directExpressions = directExpressions,
+                    )
+                )
             }
         }
         if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
         list += store.messages()
+        // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
+        Log.i(
+            "AvatarSession",
+            "system prompt: ${system.length} chars, cameras=${cameras.size}, " +
+                "actions=${actionGroups.sumOf { it.second.size }}, directExpr=${directExpressions.size}",
+        )
         return list
     }
 

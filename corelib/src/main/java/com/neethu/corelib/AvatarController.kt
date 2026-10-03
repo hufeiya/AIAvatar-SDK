@@ -259,6 +259,29 @@ class AvatarController {
         return renderer?.getVrmaDuration() ?: 0f
     }
 
+    // ── Public API: VRMA Idle ─────────────────────────────────────────────
+
+    /**
+     * Set the looping idle animation (from assets) the model returns to after
+     * a one-shot VRMA or a manual stop. Without an idle the model falls back
+     * to its rest pose. Does not interrupt current playback.
+     *
+     * @return `true` if the animation was loaded successfully.
+     */
+    fun setVrmaIdleAnimation(assetPath: String): Boolean {
+        return renderer?.setVrmaIdleAnimation(assetPath) ?: false
+    }
+
+    /** Same as [setVrmaIdleAnimation] but from an absolute file path. */
+    fun setVrmaIdleAnimationFromFile(path: String): Boolean {
+        return renderer?.setVrmaIdleAnimationFromFile(path) ?: false
+    }
+
+    /** Drop the idle; one-shots and stops return to the rest pose again. */
+    fun clearVrmaIdleAnimation() {
+        renderer?.clearVrmaIdleAnimation()
+    }
+
     // ── Public API: Spring Bone ──────────────────────────────────────────
 
     /**

@@ -49,10 +49,26 @@ class FaceDriver(
     private var visemeReturnProgress = 0f
     private var visemeReturnDuration = 0.4f
 
-    private var availableExpressions: Set<String> = emptySet()
+    private var supportedExpressions: Set<String> = emptySet()
     private val sent = HashMap<String, Float>()
     private var running = false
     private var lastFrameNanos = 0L
+
+    /** Expression names the loaded model supports (captured at [start]). */
+    val availableExpressions: Set<String> get() = supportedExpressions
+
+    /** Canonical emotion names with combo defs (take precedence over direct expressions). */
+    val knownEmotionNames: Set<String> get() = blender.defs.keys
+
+    /**
+     * Resolve a (possibly mis-cased) expression name to the model's actual
+     * morph name, or null when unsupported. The tag extractor lowercases cue
+     * names, but morph names are case-sensitive (`blinkLeft` ≠ `blinkleft`) —
+     * direct-expression cues must be re-cased before hitting the controller
+     * (真机踩过：全被这里的大小写卡掉).
+     */
+    fun resolveExpression(rawName: String): String? =
+        resolveExpressionName(supportedExpressions, rawName)
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -72,7 +88,7 @@ class FaceDriver(
     fun start() {
         if (running) return
         controller.setExpressionTransitionDuration(0L)
-        availableExpressions = controller.getAvailableExpressions().toSet()
+        supportedExpressions = controller.getAvailableExpressions().toSet()
         vowelDriver.setPhonemeGroups(VowelDriver.defaultLayoutFor(DEFAULT_PHONEMES))
         running = true
         lastFrameNanos = 0L
@@ -195,7 +211,7 @@ class FaceDriver(
     }
 
     private fun send(name: String, value: Float) {
-        if (availableExpressions.isNotEmpty() && name !in availableExpressions) return
+        if (supportedExpressions.isNotEmpty() && name !in supportedExpressions) return
         val previous = sent[name]
         // Dedup guard including zeros: at rest (no playback, no blend-back, emotion
         // decayed to 0) the driver must go QUIET after its one final zero write.
@@ -217,5 +233,12 @@ class FaceDriver(
 
         /** Default wLipSync phoneme order used when no explicit layout is bound. */
         private val DEFAULT_PHONEMES = listOf("A", "I", "U", "E", "O", "S")
+
+        /** Pure lookup for [resolveExpression] (unit-testable without a renderer). */
+        fun resolveExpressionName(supported: Set<String>, rawName: String): String? {
+            if (rawName in supported) return rawName
+            val byLowercase = supported.firstOrNull { it.equals(rawName, ignoreCase = true) }
+            return byLowercase
+        }
     }
 }

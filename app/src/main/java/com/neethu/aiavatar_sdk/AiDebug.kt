@@ -111,7 +111,10 @@ fun aiDebugHelp(): String = """
     |  set_expression <arg>     Apply expression. arg = name, ai_weight = 0..1 (default 1)
     |  clear_expression         Reset face to neutral
     |  play_animation <arg>     Play .vrma from assets/animations. ai_loop = true/false
-    |  stop_animation           Stop animation, restore rest pose
+    |  stop_animation           Stop animation (returns to idle if one is set)
+    |  set_idle <arg>           Set .vrma as looping idle (LLM gestures return to it).
+    |                           arg = file name fragment; persist across restarts
+    |  idle_off                 Clear idle; one-shots fall back to rest pose
     |Motion:
     |  move                     Move avatar in world units. ai_x/ai_y/ai_z = deltas
     |                           (+x right, +y up, +z toward camera)

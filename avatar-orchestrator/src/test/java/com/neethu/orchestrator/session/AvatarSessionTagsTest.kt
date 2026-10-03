@@ -91,11 +91,22 @@ class AvatarSessionTagsTest {
     private class FakeGestureDriver(private val accepted: Set<String> = setOf("wave")) :
         GestureDriver(AvatarController()) {
         val played = mutableListOf<String>()
+        val idlesSet = mutableListOf<String>()
         var stopCalls = 0
+        var clearIdleCalls = 0
         override fun play(tag: String): Boolean {
             if (tag !in accepted) return false
             played += tag
             return true
+        }
+
+        override fun setIdle(entry: ActionEntry): Boolean {
+            idlesSet += entry.tag
+            return true
+        }
+
+        override fun clearIdle() {
+            clearIdleCalls++
         }
 
         override fun stop() {
@@ -164,10 +175,10 @@ class AvatarSessionTagsTest {
         )
         // 标签不进语音，文字完整送 TTS
         assertEquals(listOf("你好呀。"), tts.synthesized)
-        // 协议块出现在系统提示词，且含动作目录（模板 <act:动作> + tag(标签) 列表）
+        // 协议块出现在系统提示词，动作按分类分组列出
         val system = llm.requests[0].first { it.role == ChatRole.SYSTEM }
         assertTrue(system.content.contains("<act:动作>"))
-        assertTrue(system.content.contains("wave(挥手问候)"))
+        assertTrue(system.content.contains("基础动作: wave"))
         assertTrue(system.content.contains("<cam:机位>"))
     }
 
@@ -247,6 +258,38 @@ class AvatarSessionTagsTest {
 
         session.interrupt()
         assertEquals(1, gestures.stopCalls)
+    }
+
+    @Test
+    fun `unknown emotion names are dropped while canonical ones pass`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val session = newSession(llm, tts, RecordingQueue(), FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // unicorn 不是规范情绪、也查不到模型支持 → 静默；happy 是规范情绪 → 通过
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:unicorn:1><emo:happy:0.5>好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
+        assertEquals(listOf("happy"), emotions.map { it.cue.name })
+        assertEquals(listOf("好。"), tts.synthesized)
+    }
+
+    @Test
+    fun `idleAction routes to the gesture driver`() = runTest {
+        val gestures = FakeGestureDriver()
+        val session = newSession(SharedFlowLlm(), FakeTts(), RecordingQueue(), gestures)
+
+        session.idleAction = ActionEntry("idle_stand", "Idle Stand Looking Around", assetPath = "animations/i.vrma")
+        assertEquals(listOf("idle_stand"), gestures.idlesSet)
+        session.idleAction = null
+        assertEquals(1, gestures.clearIdleCalls)
     }
 
     @Test

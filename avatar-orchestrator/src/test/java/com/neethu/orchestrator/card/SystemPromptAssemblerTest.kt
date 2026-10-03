@@ -40,26 +40,40 @@ class SystemPromptAssemblerTest {
     }
 
     @Test
-    fun `protocol block lists cameras emotions and actions`() {
-        val block = SystemPromptAssembler()
-            .multimodalProtocolBlock(actions = listOf("wave" to "挥手问候", "nod" to "点头认可"))
+    fun `protocol block lists cameras grouped actions and direct expressions`() {
+        val block = SystemPromptAssembler().multimodalProtocolBlock(
+            actionGroups = listOf("04_交流手势" to listOf("wave", "nod"), "05_情绪表达" to listOf("pumping_a_fist")),
+            directExpressions = listOf("aa", "blink_l"),
+        )
         assertTrue(block.contains("<cam:机位>"))
         assertTrue(block.contains("close_up(面部特写)"))
         assertTrue(block.contains("<act:动作>"))
-        assertTrue(block.contains("wave(挥手问候)"))
-        assertTrue(block.contains("<emo:情绪:强度>"))
+        assertTrue(block.contains("04_交流手势: wave nod"))
+        assertTrue(block.contains("05_情绪表达: pumping_a_fist"))
+        assertTrue(block.contains("<emo:名字:强度>"))
         assertTrue(block.contains("neutral"))
-        assertTrue(block.contains("0.0~1.0"))
+        // 直接表情段：原名直驱 + 0 恢复说明
+        assertTrue(block.contains("blink_l"))
+        assertTrue(block.contains("0=恢复"))
     }
 
     @Test
     fun `protocol block omits sections with empty usable lists`() {
-        val noActions = SystemPromptAssembler().multimodalProtocolBlock(actions = emptyList())
+        val noActions = SystemPromptAssembler().multimodalProtocolBlock(actionGroups = emptyList())
         assertFalse(noActions.contains("<act:"))
         assertTrue(noActions.contains("<cam:"))
 
         val noCameras = SystemPromptAssembler().multimodalProtocolBlock(cameras = emptyList())
         assertFalse(noCameras.contains("<cam:"))
         assertTrue(noCameras.contains("<emo:"))
+
+        // 关掉的通道连示例里都不能出现（few-shot 示例按启用清单条件拼接）
+        val bare = SystemPromptAssembler().multimodalProtocolBlock(
+            cameras = emptyList(), actionGroups = emptyList(), directExpressions = emptyList(),
+        )
+        assertFalse(bare.contains("<cam:"))
+        assertFalse(bare.contains("<act:"))
+        assertFalse(bare.contains("原生名"))
+        assertTrue(bare.contains("<emo:happy:0.8>"))
     }
 }

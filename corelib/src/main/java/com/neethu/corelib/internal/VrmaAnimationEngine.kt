@@ -51,6 +51,14 @@ internal class VrmaAnimationEngine(
     private var isLooping = true
     private var targetHipsY: Float = 1.0f
 
+    // Idle takeover: when set, a finished one-shot (or manual stop) switches
+    // to the looping idle animation instead of the rest pose — the VRM rest
+    // pose is the A-pose, which reads as "arms spread" (§7.10).
+    private var idleAnimation: VrmaParser.VrmaAnimation? = null
+    private var idleTakeover = false
+    private var idleAnchor = 0f
+    private var idleSwapPending = false
+
     // ── Model Binding ────────────────────────────────────────────────────
 
     fun bindToModel(asset: FilamentAsset, vrmGlbBytes: ByteArray) {
@@ -112,13 +120,44 @@ internal class VrmaAnimationEngine(
     }
 
     fun setAnimation(animation: VrmaParser.VrmaAnimation) { currentAnimation = animation }
-    fun play(loop: Boolean = true) { isPlaying = true; isLooping = loop }
-    fun stop() { isPlaying = false; restoreRestPose() }
+
+    /** Set the looping idle the engine returns to after one-shots / stops (null = rest pose). */
+    fun setIdleAnimation(animation: VrmaParser.VrmaAnimation?) { idleAnimation = animation }
+    fun getIdleDuration(): Float = idleAnimation?.duration ?: 0f
+
+    fun play(loop: Boolean = true) { isPlaying = true; isLooping = loop; idleTakeover = false }
+
+    /**
+     * Stop playback. With an idle configured this resumes the idle loop
+     * (manual stop = "return to idle"); without one it restores the rest pose.
+     */
+    fun stop() {
+        val idle = idleAnimation
+        if (idle != null) {
+            currentAnimation = idle
+            isPlaying = true
+            isLooping = true
+            idleTakeover = true
+            idleAnchor = 0f
+            idleSwapPending = true
+        } else {
+            isPlaying = false
+            restoreRestPose()
+        }
+    }
+
     fun isActive(): Boolean = isPlaying && currentAnimation != null
     fun getVrmMetaVersion(): String = vrmMetaVersion
 
     /** Duration of the currently loaded animation in seconds (0 when none). */
     fun getDuration(): Float = currentAnimation?.duration ?: 0f
+
+    /** One-shot→idle transition happened since the last call (renderer resets spring bones). */
+    fun consumeIdleSwap(): Boolean {
+        val pending = idleSwapPending
+        idleSwapPending = false
+        return pending
+    }
 
     // ── Frame Update ─────────────────────────────────────────────────────
 
@@ -126,8 +165,10 @@ internal class VrmaAnimationEngine(
         val anim = currentAnimation ?: return
         if (!isPlaying || anim.duration <= 0f) return
 
-        val time = if (isLooping) elapsedSeconds % anim.duration
-                   else elapsedSeconds.coerceAtMost(anim.duration)
+        // After an idle takeover the clock restarts from the swap moment.
+        val elapsed = if (idleTakeover) (elapsedSeconds - idleAnchor).coerceAtLeast(0f) else elapsedSeconds
+        val time = if (isLooping) elapsed % anim.duration
+                   else elapsed.coerceAtMost(anim.duration)
 
         val tm = engine.transformManager
 
@@ -190,13 +231,22 @@ internal class VrmaAnimationEngine(
             }
         }
 
-        // One-shot playback: restore the rest pose once the animation has run
-        // its full duration instead of freezing on the last frame. LLM-driven
-        // gestures (`<act:…>`) rely on this to return to idle automatically;
-        // curation prefers clips whose last frame is near the rest pose so the
-        // snap is invisible (docs/ai-layer-handoff.md §7.6).
-        if (!isLooping && elapsedSeconds >= anim.duration) {
-            stop()
+        // One-shot playback finished: with an idle configured, seamlessly take
+        // over with the looping idle (LLM gestures `<act:…>` return to idle
+        // automatically); without one, restore the rest pose. Curation prefers
+        // clips whose last frame is near the rest pose so the snap is
+        // invisible (docs/ai-layer-handoff.md §7.6/§7.10).
+        if (!isLooping && !idleTakeover && elapsedSeconds >= anim.duration) {
+            val idle = idleAnimation
+            if (idle != null) {
+                currentAnimation = idle
+                idleAnchor = elapsedSeconds
+                idleTakeover = true
+                isLooping = true
+                idleSwapPending = true
+            } else {
+                stop()
+            }
         }
     }
 

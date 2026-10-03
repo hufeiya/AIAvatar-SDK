@@ -33,7 +33,9 @@
 | `set_expression` | `ai_arg`=表情名，可选 `ai_weight` | 设置表情；应用前会清空旧表情 |
 | `clear_expression` | — | 清空全部表情，恢复中性表情 |
 | `play_animation` | `ai_arg`=文件名，可选 `ai_loop` | 播放 assets/animations 下的 .vrma 动作 |
-| `stop_animation` | — | 停止动作，恢复待机姿态 |
+| `stop_animation` | — | 停止动作（设了待机时回到待机循环，否则回 rest pose） |
+| `set_idle` | `ai_arg`=文件名片段 | 把一个 .vrma 设为循环待机（LLM 手势播完/手动停止后回到它），持久化到 demo_settings；不设则用内置优先级自动选（Idle Stand Looking Around 优先） |
+| `idle_off` | — | 清除待机，一次性动作播完回落 rest pose |
 | `move` | `ai_x` `ai_y` `ai_z` | 平移人物（世界坐标米）：+x 右、+y 上、+z 朝相机 |
 | `zoom` | `ai_x` | 相机推拉，取值为「双指张开距离」像素：正数放大、负数缩小 |
 | `pan` | `ai_x` `ai_y` | 相机平移（屏幕像素，等效双指拖动） |

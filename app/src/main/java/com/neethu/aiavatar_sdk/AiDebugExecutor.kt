@@ -28,6 +28,10 @@ internal class AiChatDebugHooks(
     val importCard: (ByteArray) -> String? = { null },
     /** One-line snapshot of the active card + system prompt for `active_card`. */
     val cardSnapshot: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd set_idle：(相对路径, 是否外置) → 设为待机并持久化，返回结果行。 */
+    val setIdle: (String, Boolean) -> String = { _, _ -> "AI chat not wired in this screen" },
+    /** ai_cmd idle_off：清除待机，回 rest pose。 */
+    val clearIdle: () -> String = { "AI chat not wired in this screen" },
 )
 
 /**
@@ -64,6 +68,9 @@ internal suspend fun executeAiCommand(
                 uiState.selectedAnimation = null
                 "animation stopped"
             }
+            "set_idle" -> setIdleCommand(uiState, command, chat)
+            "idle_off" -> chat?.clearIdle?.invoke()
+                ?: "no AI chat session — configure the AI service first"
             "move" -> moveCommand(controller, command)
             "zoom" -> zoomCommand(controller, command)
             "pan" -> panCommand(controller, command)
@@ -258,6 +265,17 @@ private fun playAnimationCommand(
     uiState.selectedAnimation = name
     val source = if (uiState.useExternalAnimations) "external" else "assets"
     return "playing $name (loop=${command.loop}, source=$source)"
+}
+
+/** ai_cmd set_idle：把一个 .vrma 设为待机（LLM 手势播完/手动停止后回到它）。 */
+private fun setIdleCommand(
+    uiState: DemoUiState,
+    command: AiDebugCommand,
+    chat: AiChatDebugHooks?,
+): String {
+    val name = resolveAssetFile(command.arg, uiState.animationFiles, "animations", listOf(".vrma"))
+    return chat?.setIdle?.invoke(name, uiState.useExternalAnimations)
+        ?: "no AI chat session — configure the AI service first"
 }
 
 private fun moveCommand(controller: AvatarController, command: AiDebugCommand): String {
