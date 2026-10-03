@@ -22,3 +22,5 @@ dependencyResolutionManagement {
 rootProject.name = "AIAvatar-SDK"
 include(":app")
 include(":corelib")
+include(":avatar-ai-adapter")
+include(":avatar-orchestrator")

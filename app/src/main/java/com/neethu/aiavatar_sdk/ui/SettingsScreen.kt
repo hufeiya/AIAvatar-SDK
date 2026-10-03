@@ -22,6 +22,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -35,8 +36,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarRenderSettings
@@ -56,8 +60,10 @@ internal fun SettingsScreen(
     settings: AvatarRenderSettings,
     useExternalAnimations: Boolean,
     externalRootPath: String?,
+    aiPrefs: AiChatPrefs,
     onAnimationSourceChange: (Boolean) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
+    onAiPrefsChange: (AiChatPrefs) -> Unit,
     onDismiss: () -> Unit
 ) {
     Box(
@@ -136,6 +142,50 @@ internal fun SettingsScreen(
                                 "目录：${externalRootPath ?: "外部存储不可用"}\n将 .vrma 文件放入该目录即可（支持子文件夹分类）"
                             )
                         }
+                    }
+
+                    // ── AI 对话 ────────────────────────────────────────
+                    item { SettingsSectionHeader("AI 对话 (AI Chat · OpenAI 兼容)") }
+                    item {
+                        SettingsGroupLabel(
+                            if (aiPrefs.isConfigured) "已配置，保存后立即生效" else "填写以下五项后即可对话"
+                        )
+                    }
+                    item {
+                        SettingsTextFieldRow(
+                            title = "API Base URL",
+                            value = aiPrefs.baseUrl,
+                            placeholder = "https://api.openai.com/v1"
+                        ) { onAiPrefsChange(aiPrefs.copy(baseUrl = it)) }
+                    }
+                    item {
+                        SettingsTextFieldRow(
+                            title = "API Key",
+                            value = aiPrefs.apiKey,
+                            placeholder = "sk-...",
+                            password = true
+                        ) { onAiPrefsChange(aiPrefs.copy(apiKey = it)) }
+                    }
+                    item {
+                        SettingsTextFieldRow(
+                            title = "LLM 模型",
+                            value = aiPrefs.llmModel,
+                            placeholder = "gpt-4o-mini / deepseek-chat / ..."
+                        ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
+                    }
+                    item {
+                        SettingsTextFieldRow(
+                            title = "TTS 模型",
+                            value = aiPrefs.ttsModel,
+                            placeholder = "tts-1 / playai-tts / ..."
+                        ) { onAiPrefsChange(aiPrefs.copy(ttsModel = it)) }
+                    }
+                    item {
+                        SettingsTextFieldRow(
+                            title = "音色 Voice",
+                            value = aiPrefs.voice,
+                            placeholder = "alloy /Arabella / ..."
+                        ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
                     }
 
                     // ── 画质预设 ─────────────────────────────────────
@@ -632,4 +682,44 @@ private fun SettingsGroupLabel(title: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp)
     )
+}
+
+/**
+ * A labeled single-line text input for AI provider configuration.
+ * Changes stream straight through [onValueChange]; the caller decides
+ * when to persist / rebuild the session.
+ */
+@Composable
+private fun SettingsTextFieldRow(
+    title: String,
+    value: String,
+    placeholder: String,
+    password: Boolean = false,
+    onValueChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(text = placeholder, fontSize = 13.sp) },
+            singleLine = true,
+            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+            textStyle = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+        )
+    }
 }

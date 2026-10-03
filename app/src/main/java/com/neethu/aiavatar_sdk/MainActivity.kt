@@ -22,7 +22,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
@@ -38,6 +41,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
@@ -49,8 +54,12 @@ import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.rememberAvatarController
+import com.neethu.orchestrator.session.AvatarEvent
+import com.neethu.orchestrator.session.AvatarSession
+import com.neethu.orchestrator.session.ConversationPhase
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -206,6 +215,10 @@ internal class DemoUiState(context: Context) {
     /** 渲染设置，初始值来自上一次会话的持久化。 */
     var renderSettings by mutableStateOf(prefs.loadRenderSettings())
 
+    /** AI 对话配置（端点/Key/模型/音色），持久化到 demo_settings。 */
+    var aiPrefs by mutableStateOf(prefs.loadAiPrefs())
+        private set
+
     init {
         refreshAnimationFiles(context)
     }
@@ -223,6 +236,12 @@ internal class DemoUiState(context: Context) {
     fun updateRenderSettings(new: AvatarRenderSettings) {
         renderSettings = new
         prefs.saveRenderSettings(new)
+    }
+
+    /** 更新 AI 对话配置并持久化。 */
+    fun updateAiPrefs(p: AiChatPrefs) {
+        aiPrefs = p
+        prefs.saveAiPrefs(p)
     }
 
     /** 外置动画根目录：App 外部存储私有区（`/sdcard/Android/data/<pkg>/files`）。 */
@@ -360,6 +379,47 @@ private fun DemoScreen(
         }
     }
 
+    // ── AI 对话：装配 AvatarSession 并订阅其状态 ──────────────────────────
+    val scope = rememberCoroutineScope()
+    val aiChat = remember { AiChatController(scope, controller) }
+    val session by produceState<AvatarSession?>(initialValue = null, state, uiState.aiPrefs) {
+        value = aiChat.ensure(uiState.aiPrefs, state is AvatarState.Ready)
+    }
+
+    var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
+    var replyText by remember { mutableStateOf("") }
+    var chatError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(session) {
+        val s = session ?: return@LaunchedEffect
+        launch { s.phase.collect { chatPhase = it } }
+        launch {
+            s.events.collect { ev ->
+                when (ev) {
+                    is AvatarEvent.SentenceStarted -> replyText += ev.text
+                    is AvatarEvent.TurnFailed -> chatError = ev.error.message ?: "对话失败"
+                    is AvatarEvent.SentenceQueued,
+                    is AvatarEvent.SentenceEnded,
+                    is AvatarEvent.SentenceFailed,
+                    is AvatarEvent.EmotionChanged,
+                    is AvatarEvent.TurnCompleted,
+                    is AvatarEvent.PlaybackInterrupted -> Unit
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(chatError) {
+        if (chatError != null) {
+            delay(6000)
+            chatError = null
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { aiChat.shutdown() }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         // 3D Avatar (full-screen background)
         AvatarView(
@@ -399,7 +459,24 @@ private fun DemoScreen(
             label = shotLabel,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 96.dp)
+                .padding(bottom = 180.dp)
+        )
+
+        // AI 对话条（输入 + 发送 + 打断）与回复字幕
+        AiChatBar(
+            phase = chatPhase,
+            replyText = replyText,
+            error = chatError,
+            enabled = session != null,
+            onSend = { text ->
+                replyText = ""
+                session?.send(text)
+            },
+            onInterrupt = { session?.interrupt() },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 96.dp)
         )
 
         // Drag mode FAB at bottom-start
@@ -650,8 +727,10 @@ private fun DemoScreen(
                 settings = uiState.renderSettings,
                 useExternalAnimations = uiState.useExternalAnimations,
                 externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
+                aiPrefs = uiState.aiPrefs,
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
+                onAiPrefsChange = { uiState.updateAiPrefs(it) },
                 onDismiss = { uiState.activePanel = PanelType.NONE }
             )
         }
@@ -678,6 +757,138 @@ private fun CameraShotLabelBadge(label: String?, modifier: Modifier = Modifier) 
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             )
+        }
+    }
+}
+
+/**
+ * AI 对话条：状态徽标 + 当前轮回复字幕 + 输入框（发送/打断）。
+ * `enabled = false`（未配置或未就绪）时输入框仍可见但不可发送。
+ */
+@Composable
+private fun AiChatBar(
+    phase: ConversationPhase,
+    replyText: String,
+    error: String?,
+    enabled: Boolean,
+    onSend: (String) -> Unit,
+    onInterrupt: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var input by remember { mutableStateOf("") }
+    val busy = phase != ConversationPhase.IDLE
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (replyText.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color.Black.copy(alpha = 0.55f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = replyText,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = error != null, enter = fadeIn(), exit = fadeOut()) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = error.orEmpty(),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            tonalElevation = 4.dp,
+            shadowElevation = 8.dp
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)
+            ) {
+                AnimatedVisibility(visible = busy) {
+                    Text(
+                        text = when (phase) {
+                            ConversationPhase.THINKING -> "思考中"
+                            ConversationPhase.SPEAKING -> "说话中"
+                            ConversationPhase.IDLE -> ""
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 12.dp, end = 6.dp)
+                    )
+                }
+                TextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    placeholder = {
+                        Text(
+                            text = if (enabled) "说点什么，回车或发送…" else "先在 ⚙️ 设置里配置 AI 服务",
+                            fontSize = 13.sp
+                        )
+                    },
+                    singleLine = true,
+                    enabled = enabled,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (enabled && input.isNotBlank()) {
+                            onSend(input)
+                            input = ""
+                        }
+                    }),
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        onSend(input)
+                        input = ""
+                    },
+                    enabled = enabled && input.isNotBlank()
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "发送",
+                        tint = if (enabled && input.isNotBlank())
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (busy) {
+                    IconButton(onClick = onInterrupt) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "打断"
+                        )
+                    }
+                }
+            }
         }
     }
 }
