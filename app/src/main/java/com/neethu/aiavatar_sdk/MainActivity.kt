@@ -246,20 +246,35 @@ internal class DemoUiState(context: Context) {
     var isDragMode by mutableStateOf(false)
 
     /**
-     * 对话输入三模式（任务 4，互斥）：手动打字=完整 UI（全部按钮可见），
+     * 对话输入三模式（任务 4，互斥）：手动点击=完整 UI（全部按钮可见），
      * 打字输入/语音模式=隐藏所有界面按钮只留输入条/按住说话。持久化。
      */
     var inputMode by mutableStateOf(prefs.enumValue(KEY_AI_INPUT_MODE, InputMode.MANUAL))
         private set
 
+    /**
+     * 按钮显隐开关（模式下拉框旁）：手动点击模式默认显示，进入打字/语音
+     * 模式自动隐藏；任何模式下都可临时翻转（语音模式里偶尔也要换模型/
+     * 开设置）。刻意不持久化——每次切模式/冷启动都回到该模式的默认值。
+     */
+    var buttonsVisible by mutableStateOf(inputMode == InputMode.MANUAL)
+        private set
+
+    /** 翻转按钮显隐；隐藏时顺手收起面板（面板入口本身也被藏了）。 */
+    fun toggleButtons() {
+        buttonsVisible = !buttonsVisible
+        if (!buttonsVisible) activePanel = PanelType.NONE
+    }
+
     /** 语音输入配置（ASR 模型/直接发送），与 AI 会话身份解耦，改它不重建会话。 */
     var voicePrefs by mutableStateOf(prefs.loadVoicePrefs())
         private set
 
-    /** 切换输入模式并持久化；离开手动模式时收起一切面板（那些按钮要藏起来）。 */
+    /** 切换输入模式并持久化；按钮显隐回到该模式默认（手动点击=显示，其余=隐藏）。 */
     fun switchInputMode(mode: InputMode) {
         if (mode == inputMode) return
         inputMode = mode
+        buttonsVisible = mode == InputMode.MANUAL
         if (mode != InputMode.MANUAL) activePanel = PanelType.NONE
         prefs.edit().putString(KEY_AI_INPUT_MODE, mode.name).apply()
     }
@@ -682,7 +697,7 @@ private fun DemoScreen(
     /** 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。 */
     fun asrFor(): OpenAiCompatibleAsrAdapter {
         val p = uiState.aiPrefs
-        check(p.isConfigured) { "请先在设置里配置 AI 服务（切回手动打字模式 ⚙️）" }
+        check(p.isConfigured) { "请先在设置里配置 AI 服务（⚙️ 设置入口在手动点击模式或点「显示按钮」后可见）" }
         return OpenAiCompatibleAsrAdapter(p.baseUrl, p.apiKey)
     }
 
@@ -919,6 +934,18 @@ private fun DemoScreen(
                 uiState.switchInputMode(mode)
                 "input mode = ${mode.name.lowercase()} (${mode.label})"
             },
+            showButtons = { arg ->
+                val show = when (arg?.lowercase()) {
+                    null -> !uiState.buttonsVisible
+                    "on", "true", "1", "show" -> true
+                    "off", "false", "0", "hide" -> false
+                    else -> throw IllegalArgumentException(
+                        "show_buttons expects on|off (omit ai_arg to toggle), got '$arg'"
+                    )
+                }
+                if (show != uiState.buttonsVisible) uiState.toggleButtons()
+                "buttons visible=${uiState.buttonsVisible} (mode=${uiState.inputMode.name.lowercase()})"
+            },
         )
     }
 
@@ -971,14 +998,23 @@ private fun DemoScreen(
                 .padding(bottom = 180.dp)
         )
 
-        // 输入模式下拉框（左上角，唯一常驻控制；三模式互斥，任务 4）
-        InputModeSelector(
-            current = uiState.inputMode,
-            onSelect = { uiState.switchInputMode(it) },
+        // 左上角常驻控制：输入模式下拉框 + 按钮显隐开关（任务 4）
+        Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(12.dp),
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            InputModeSelector(
+                current = uiState.inputMode,
+                onSelect = { uiState.switchInputMode(it) },
+            )
+            ButtonsToggle(
+                visible = uiState.buttonsVisible,
+                onToggle = { uiState.toggleButtons() },
+            )
+        }
 
         // AI 对话条（输入区按模式切换：打字 or 按住说话）与回复字幕
         AiChatBar(
@@ -1004,13 +1040,13 @@ private fun DemoScreen(
                 .fillMaxWidth()
                 .padding(
                     start = 12.dp, end = 12.dp,
-                    // 手动打字模式底部两端有 FAB 列，抬高让位；纯净两档贴底
-                    bottom = if (uiState.inputMode == InputMode.MANUAL) 96.dp else 12.dp,
+                    // 按钮显示时底部两端有 FAB 列，抬高让位；隐藏时贴底
+                    bottom = if (uiState.buttonsVisible) 96.dp else 12.dp,
                 )
         )
 
-        // Drag mode FAB at bottom-start（仅手动打字模式；打字/语音模式隐藏所有按钮）
-        if (uiState.inputMode == InputMode.MANUAL) {
+        // Drag mode FAB at bottom-start（跟随按钮显隐开关；打字/语音模式默认隐藏）
+        if (uiState.buttonsVisible) {
             SmallFloatingActionButton(
                 onClick = { uiState.isDragMode = !uiState.isDragMode },
                 modifier = Modifier
@@ -1029,8 +1065,8 @@ private fun DemoScreen(
             }
         }
 
-        // Row of FABs at bottom-end（仅手动打字模式；打字/语音模式隐藏所有按钮）
-        if (uiState.inputMode == InputMode.MANUAL) {
+        // Row of FABs at bottom-end（跟随按钮显隐开关；打字/语音模式默认隐藏）
+        if (uiState.buttonsVisible) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -1606,7 +1642,7 @@ private fun HoldToTalk(
     }
 }
 
-/** 左上角输入模式下拉框：手动打字 / 打字输入 / 语音模式，三模式互斥切换。 */
+/** 左上角输入模式下拉框：手动点击 / 打字输入 / 语音模式，三模式互斥切换。 */
 @Composable
 private fun InputModeSelector(
     current: InputMode,
@@ -1654,6 +1690,32 @@ private fun InputModeSelector(
                 )
             }
         }
+    }
+}
+
+/**
+ * 模式下拉框旁的按钮显隐开关：任何模式下都可临时显示/隐藏所有悬浮按钮
+ * （打字/语音模式进入时自动隐藏，语音模式里偶尔要换模型/开设置就用它）。
+ */
+@Composable
+private fun ButtonsToggle(
+    visible: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Black.copy(alpha = 0.45f),
+        modifier = modifier,
+    ) {
+        Text(
+            text = if (visible) "隐藏按钮" else "显示按钮",
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+        )
     }
 }
 

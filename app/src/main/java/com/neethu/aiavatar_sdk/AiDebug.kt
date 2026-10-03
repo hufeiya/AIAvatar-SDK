@@ -152,6 +152,9 @@ fun aiDebugHelp(): String = """
 |                           MediaRecorder path as push-to-talk, then transcribe
 |Modes:
 |  set_mode <arg>           Switch input mode: manual | text | voice
+|  show_buttons <arg>       Show/hide all floating buttons: on | off
+|                           (omit ai_arg to toggle). Reveals the manual
+|                           buttons while staying in text/voice mode
 |Other:
     |  screenshot               Save a PNG of the current frame (path is logged here)
     |

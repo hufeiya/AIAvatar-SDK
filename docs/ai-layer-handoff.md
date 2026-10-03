@@ -99,7 +99,8 @@
 
 - **任务 4 已完成（2026-10-03，真机 62fabe84，硅基流动）**：语音输入（ASR）+ 三种输入模式——
   - **adapter**：`api/AsrAdapter`（`suspend transcribe(audio: ByteArray, mime: String, config): String`，对齐 TtsAdapter 风格）+ `AsrConfig(model, language?, prompt?)` + `OpenAiCompatibleAsrAdapter`——multipart 上传 `/audio/transcriptions`；错误全带响应预览（`ASR HTTP 4xx` / `non-JSON body`）
-  - **三种输入模式（互斥，持久化 `ai_input_mode`，左上角 InputModeSelector 下拉框切换、唯一常驻控制）**：`MANUAL 手动打字`=完整 UI（全部 FAB 可见）；`TEXT 打字输入`/`VOICE 语音模式`=**隐藏所有界面按钮**（拖拽 FAB + 整列 FAB 都不渲染，切离手动时自动收起面板）。聊天条按模式变形：VOICE 且输入空=整条"按住 说话"；关闭"语音直接发送"且识别出文本=小按住键 + 可改文本框 + 发送键（确认形态）。聊天条贴底位置也随模式变（手动 96dp 给 FAB 让位，纯净两档 12dp）
+  - **三种输入模式（互斥，持久化 `ai_input_mode`，左上角 InputModeSelector 下拉框切换）**：`MANUAL 手动点击`=完整 UI（全部 FAB 可见）；`TEXT 打字输入`/`VOICE 语音模式`=**进入时自动隐藏所有界面按钮**（拖拽 FAB + 整列 FAB 都不渲染，切离手动时自动收起面板）。聊天条按模式变形：VOICE 且输入空=整条"按住 说话"；关闭"语音直接发送"且识别出文本=小按住键 + 可改文本框 + 发送键（确认形态）。聊天条贴底位置随按钮显隐变（按钮显示 96dp 给 FAB 让位，隐藏 12dp）
+  - **按钮显隐开关（用户反馈第二轮）**：模式下拉框右侧的「隐藏按钮/显示按钮」药丸——任何模式下都可临时翻转 FAB 显隐（打字/语音模式里偶尔要换模型/开设置）；`buttonsVisible` **刻意不持久化**，每次切模式/冷启动回到该模式默认（MANUAL=显示，其余=隐藏），隐藏时顺手收起面板；`ai_cmd show_buttons on|off`（无参翻转）供 adb 驱动验证
   - **录音**：`VoiceRecorder`——MediaRecorder AAC/16kHz/单声道/MPEG_4(.m4a) 到 cacheDir（识别后即删）；`stop()` 抛 RuntimeException（按太短/无采样）返回 null 并清理；按住手势 = `pointerInput + detectTapGestures(onPress){ start; tryAwaitRelease; end }`；**半双工**：按下的瞬间 `phase==SPEAKING` 先 `session.interrupt()`（对齐 AIRI 说话时抑制聆听）；`DisposableEffect` onDispose `voiceRecorder.cancel()` 防切模式/退出占麦；RECORD_AUDIO 运行时权限：无权限首按弹系统框（拒绝上错误条）
   - **ASR 配置**：`VoicePrefs(asrModel 留空=自动, autoSend 默认开)` 持久化 `ai_asr_model`/`ai_voice_auto_send`——**刻意不并入 AiChatPrefs**（会话身份 = AiChatPrefs + 上下文，改 ASR 配置不应重建会话杀掉在播回复）；`resolveAsrModel`：baseUrl 含 siliconflow → **`Qwen/Qwen3-ASR-1.7B`**（需求指定），其他 → `whisper-1`；设置页「AI 配置」加 ASR 模型行 + 直接发送开关
   - **调试命令**：`transcribe <音频文件>`（不走麦克风、无需权限，与按住说话同一 ASR 链路）/ `voice_record <秒>`（真录音链路，录前先打断）/ `set_mode manual|text|voice`（MIUI 禁触摸注入的 UI 驱动）

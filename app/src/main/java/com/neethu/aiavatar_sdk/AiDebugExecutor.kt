@@ -50,6 +50,8 @@ internal class AiChatDebugHooks(
     },
     /** ai_cmd set_mode manual|text|voice：切换输入模式（MIUI 禁触摸注入，用命令切）。 */
     val setInputMode: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd show_buttons on|off（无参=翻转）：显隐所有悬浮按钮（切换输入模式外的话题）。 */
+    val showButtons: (String?) -> String = { _ -> "AI chat not wired in this screen" },
 )
 
 /**
@@ -178,6 +180,10 @@ internal suspend fun executeAiCommand(
             "set_mode" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setInputMode(command.arg)
+            }
+            "show_buttons" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.showButtons(command.arg)
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
