@@ -9,11 +9,12 @@ package com.neethu.orchestrator.card
  * deliberately NOT injected here (position-sensitive); expose them to
  * integrators via the card object.
  *
- * The multimodal protocol block ([multimodalProtocolBlock]) is appended
- * separately by AvatarSession.buildRequestMessages at send time — once, with
- * the live tag catalog. assemble() intentionally does NOT include it (the
- * old emotion block was double-appended for card users), so the protocol
- * always reflects the current session configuration.
+ * The multimodal protocol block ([multimodalProtocolBlock]) is injected
+ * separately by AvatarSession as its own system message — assembled once per
+ * conversation context and reused verbatim across turns (the catalog only
+ * depends on the loaded model, not the turn). assemble() intentionally does
+ * NOT include it (the old emotion block was double-appended for card users),
+ * so the protocol always reflects the live session configuration.
  */
 class SystemPromptAssembler(
     private val emotionNames: List<String> =

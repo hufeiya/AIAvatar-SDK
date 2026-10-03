@@ -162,6 +162,8 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, C
 internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
+/** 当前上下文创建时的大模型身份签名（[llmIdentitySignature]）；换模型即轮换上下文。 */
+private const val KEY_AI_CONTEXT_LLM_SIG = "ai_context_llm_sig"
 private const val KEY_AI_INPUT_MODE = "ai_input_mode"
 private const val KEY_VIDEO_PIP_X = "ai_video_pip_x"
 private const val KEY_VIDEO_PIP_Y = "ai_video_pip_y"
@@ -355,10 +357,21 @@ internal class DemoUiState(context: Context) {
     var contextId by mutableStateOf(prefs.getString(KEY_AI_CONTEXT_ID, null) ?: newContextId())
         private set
 
+    /**
+     * 当前上下文对应的大模型身份（[llmIdentitySignature]）。与 contextId 一起
+     * 持久化：设置页换服务商/模型时签名变化 → 同步新开上下文（协议目录随模型
+     * 实现可能不同，旧对话里的标签对新模型不再可靠）。升级首次启动无记录时
+     * 只采纳当前值不轮换（无从判断上次用的什么模型）。
+     */
+    var contextLlmSig: String? = null
+        private set
+
     init {
         if (prefs.getString(KEY_AI_CONTEXT_ID, null) == null) {
             prefs.edit().putString(KEY_AI_CONTEXT_ID, contextId).apply()
         }
+        contextLlmSig = prefs.getString(KEY_AI_CONTEXT_LLM_SIG, null) ?: llmIdentitySignature(aiPrefs)
+        prefs.edit().putString(KEY_AI_CONTEXT_LLM_SIG, contextLlmSig).apply()
     }
 
     /** 切换到已有上下文并持久化；会话由 produceState 依 contextId 重建。 */
@@ -405,10 +418,20 @@ internal class DemoUiState(context: Context) {
         prefs.saveRenderSettings(new)
     }
 
-    /** 更新 AI 对话配置并持久化。 */
+    /**
+     * 更新 AI 对话配置并持久化。大模型身份（服务商/模型）变化时同步新开
+     * 上下文：协议目录按所配模型钉住（AvatarSession 每上下文只注入一次），
+     * 换模型后旧历史里的标签对新模型不再可靠，历史跟着换新。语音/Key 等
+     * 不影响模型能力的字段变化不轮换，对话延续。
+     */
     fun updateAiPrefs(p: AiChatPrefs) {
+        val oldSig = contextLlmSig
         aiPrefs = p
         prefs.saveAiPrefs(p)
+        val newSig = llmIdentitySignature(p)
+        if (oldSig != null && newSig != oldSig) newContext()
+        contextLlmSig = newSig
+        prefs.edit().putString(KEY_AI_CONTEXT_LLM_SIG, newSig).apply()
     }
 
     // ── 人物卡 ────────────────────────────────────────────────────────────

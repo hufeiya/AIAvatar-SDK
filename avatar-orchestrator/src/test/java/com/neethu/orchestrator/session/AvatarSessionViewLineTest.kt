@@ -24,15 +24,17 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * 需求 2：每轮请求的 system prompt 都注入【当前镜头视角】行（挂 controller
- * 时=自由视角占位或活动机位；headless 不注入）。活动机位分支由真机验证
- * （getActiveCameraShot 需要渲染器）。
+ * 需求 2：每轮请求都注入【当前镜头视角】行（挂 controller 时=自由视角占位或
+ * 活动机位；headless 不注入）。视角行是请求里唯一逐轮变化的指令，挂在末尾
+ * user 消息上（离生成最近，且不破坏 [人设][协议][历史] 前缀的稳定）；
+ * 活动机位分支由真机验证（getActiveCameraShot 需要渲染器）。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AvatarSessionViewLineTest {
@@ -93,32 +95,48 @@ class AvatarSessionViewLineTest {
     }
 
     @Test
-    fun `view line injected with a bound controller - free view placeholder`() = runTest {
+    fun `view line rides the trailing user message with a bound controller`() = runTest {
         val (session, llm) = newSession(AvatarController())
         session.sendAndAwait("你好")
-        val system = llm.requests.last().first { it.role == ChatRole.SYSTEM }
-        assertTrue(system.content.contains("【当前镜头视角】"))
-        assertTrue(system.content.contains("自由视角"))
+        val req = llm.requests.last()
+        // system 通道（人设/协议）不出现视角行——它是逐轮变化的，进了 system
+        // 就会打断请求前缀的逐字节稳定
+        assertTrue(
+            req.filter { it.role == ChatRole.SYSTEM }.none { it.content.contains("【当前镜头视角】") },
+        )
+        val last = req.last()
+        assertEquals(ChatRole.USER, last.role)
+        assertTrue(last.content.contains("【当前镜头视角】"))
+        assertTrue(last.content.contains("自由视角"))
+        // 视角行是前缀，用户原文完整保留在其后
+        assertTrue(last.content.endsWith("你好"))
     }
 
     @Test
     fun `no view line when headless`() = runTest {
         val (session, llm) = newSession(null)
         session.sendAndAwait("你好")
-        val system = llm.requests.last().firstOrNull { it.role == ChatRole.SYSTEM }
-        // headless + 协议关闭时整个 system 为空(不伪造视角行);出现时也必须不含视角
-        if (system != null) assertFalse(system.content.contains("【当前镜头视角】"))
+        val req = llm.requests.last()
+        assertTrue(
+            req.filter { it.role == ChatRole.SYSTEM }.none { it.content.contains("【当前镜头视角】") },
+        )
+        // headless 连视角行都不挂：末尾 user 消息就是干净的原文
+        val last = req.last()
+        assertEquals(ChatRole.USER, last.role)
+        assertEquals("你好", last.content)
     }
 
     @Test
-    fun `view line sits before protocol block keeps few-shot last`() = runTest {
+    fun `view line sits after the pinned protocol - few-shot stays in the stable prefix`() = runTest {
         val (session, llm) = newSession(AvatarController(), protocolInstructions = true)
         session.sendAndAwait("你好")
-        val system = llm.requests.last().first { it.role == ChatRole.SYSTEM }.content
-        val viewIdx = system.indexOf("【当前镜头视角】")
-        assertTrue(viewIdx >= 0)
-        // 协议块的 few-shot 示例必须保持在视角行之后(提示词最末,§7.10 近因效应)
-        val exampleIdx = system.lastIndexOf("输出示例")
-        if (exampleIdx >= 0) assertTrue("view must precede the few-shot example", viewIdx < exampleIdx)
+        val req = llm.requests.last()
+        assertEquals(ChatRole.USER, req.last().role)
+        // 协议块整条（含 few-shot 输出示例）在稳定前缀的 system 消息里，
+        // 不含视角行；视角行只出现在末尾 user 消息上（离生成位置最近）
+        val protocol = req.first { it.role == ChatRole.SYSTEM }.content
+        assertTrue(protocol.contains("输出示例"))
+        assertFalse(protocol.contains("【当前镜头视角】"))
+        assertTrue(req.last().content.startsWith("【当前镜头视角】"))
     }
 }

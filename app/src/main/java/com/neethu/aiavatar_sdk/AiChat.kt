@@ -170,6 +170,15 @@ fun resolveAsrModel(baseUrl: String, configured: String): String =
     }
 
 /**
+ * 大模型身份签名：只含影响对话能力的字段（服务商 + 解析后的模型名）。
+ * 协议里的表情/动作目录由所配模型实现决定，切换签名即同步轮换对话上下文
+ * （历史清空、新上下文首请求带新目录，见 MainActivity.updateAiPrefs）。
+ * 语音/镜头开关与 API Key 不在此列——它们不改变模型能力，历史可以延续。
+ */
+fun llmIdentitySignature(p: AiChatPrefs): String =
+    "${p.provider.name}|${resolveLlmModel(p.provider, p.llmModel)}"
+
+/**
  * Demo 的会话装配器：把 [AiChatPrefs] + 上下文 id 变成一条 [AvatarSession]。
  * 配置或上下文变化时用 [rebuild] 丢弃旧会话重建（AIRI getProviderInstance 的
  * "凭据变化即重建实例"语义）；上下文 id 变化即切换对话历史（任务 3）。
@@ -230,7 +239,8 @@ class AiChatController(
             AvatarSession.Options(
                 enableLlmCamera = prefs.llmCamera,
                 // Room 持久化后上下文可无限增长；请求只带最近 40 条 user/assistant
-                //（≈20 轮），system 提示词（~14.5K chars）本就每次现拼不受影响
+                //（≈20 轮）。人设与协议两条 system 消息不进 store、不受裁剪；
+                // 协议块（~12K chars 目录）每上下文只钉一次，不逐轮重拼
                 recentTurnLimit = 40,
             ),
             store = store,

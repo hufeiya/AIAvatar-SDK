@@ -88,16 +88,22 @@ class AvatarSession(
         val chunkerOptions: SentenceChunker.Options = SentenceChunker.Options(),
         val enableFaceDriving: Boolean = true,
         val assembler: SystemPromptAssembler = SystemPromptAssembler(),
-        /** Append the multimodal-tag protocol to every system prompt. */
+        /**
+         * 把多模态协议块（全量表情/动作/镜头目录）作为一条独立 system 消息
+         * 注入请求。目录只与当前加载的模型/目录有关、与轮次无关，因此每个
+         * 上下文只组装一次并逐轮复用同一文本（[pinnedProtocol]），不逐轮重拼
+         * 进人设 system——请求前缀 [人设][协议][历史] 逐字节稳定，服务商的
+         * 前缀缓存可以全程命中。
+         */
         val protocolInstructions: Boolean = true,
         /** Let `<act:…>` tags play gestures from the action catalog. */
         val enableLlmGestures: Boolean = true,
         /** Let `<cam:…>` tags switch the preset camera framing. */
         val enableLlmCamera: Boolean = true,
         /**
-         * LLM 请求只带最近 N 条 user/assistant 历史（system 消息始终在请求
-         * 顶部且不受影响）；null = 全量发送。持久化存储下上下文会无限增长，
-         * 长会话建议设置。
+         * LLM 请求只带最近 N 条 user/assistant 历史（人设 system 与协议
+         * system 消息恒置顶、不受裁剪影响）；null = 全量发送。持久化存储下
+         * 上下文会无限增长，长会话建议设置。
          */
         val recentTurnLimit: Int? = null,
     )
@@ -165,6 +171,11 @@ class AvatarSession(
     private val replyBuffer = StringBuilder()
     /** 标签剥离后的正文（与 [replyBuffer] 同步累积，LlmPrompt 日志的"解析后"一路）。 */
     private val cleanBuffer = StringBuilder()
+    /**
+     * 当前上下文已注入的协议块文本（每上下文只组装一次）；null = 尚未注入。
+     * 目录变化（重载模型、镜头开关）时原地重钉，历史保留。
+     */
+    private var pinnedProtocol: String? = null
     private var turnJob: Job? = null
 
     init {
@@ -446,8 +457,9 @@ class AvatarSession(
     /**
      * 每轮请求注入当前镜头视角（需求 2：任何模式的提示词都告知大模型所在
      * 视角，让 <cam:> 建议与描述符合用户实际看到的取景）。headless（无
-     * controller）不注入。位置刻意放在人设之后、协议块之前——协议块的
-     * few-shot 示例必须保持在提示词最末（近因效应，§7.10）。
+     * controller）不注入。视角行是请求里唯一逐轮变化的指令，挂在末尾 user
+     * 消息上（只改本轮请求的副本，store 始终存干净文本）：离生成位置最近，
+     * 且不破坏 [人设][协议][历史] 前缀的逐字节稳定（前缀缓存友好）。
      */
     private fun currentViewLine(): String? {
         val c = controller ?: return null
@@ -457,60 +469,86 @@ class AvatarSession(
     }
 
     private fun buildRequestMessages(turnImages: List<String>): List<ChatMessage> {
-        val viewLine = currentViewLine()
-        val system = systemPromptWithProtocol(viewLine)
         val list = mutableListOf<ChatMessage>()
-        if (system.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, system)
-        // 历史裁剪（任务 3）：store 里只有 user/assistant，system 每次请求
-        // 现拼现置顶，天然不受 recentTurnLimit 影响。
+        // 人设 system：小而稳定，与协议块分开两条——协议只在上下文开始时
+        // 钉一次（见 [pinnedProtocolMessage]），人设变更换卡时也只动自己这条。
+        val persona = systemPrompt.trim()
+        if (persona.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, persona)
+        pinnedProtocolMessage()?.let { list += it }
+        // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两条
+        // system 都不进 store，天然不受 recentTurnLimit 影响。
         val history = store.messages()
         list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
-        // 本轮抓拍（视频模式）：挂到刚 append 的末尾 user 消息上——请求里带图，
-        // store 里的历史始终只有文字（见 send 的注释）。
-        if (turnImages.isNotEmpty() && list.lastOrNull()?.role == ChatRole.USER) {
-            list[list.size - 1] = list.last().copy(images = turnImages)
+        // 视角行 + 本轮抓拍（视频模式）：都挂到刚 append 的末尾 user 消息上——
+        // 请求里带，store 里的历史始终只有干净文字（见 send 的注释）。
+        val viewLine = currentViewLine()
+        if ((viewLine != null || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
+            val last = list.last()
+            list[list.size - 1] = last.copy(
+                content = if (viewLine != null) "$viewLine\n\n${last.content}" else last.content,
+                images = turnImages,
+            )
         }
         // 需求 4：提示词落到专用 tag（LlmPrompt），分段绕开 logcat 单条上限
-        val lastUser = list.lastOrNull()?.takeIf { it.role == ChatRole.USER }
         Log.i(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} view=${viewLine ?: "n/a"} " +
-                "system=${system.length}ch history=${history.size} sent=${trimmedSent(history)} " +
-                "images=${turnImages.size} ===",
+                "persona=${persona.length}ch protocol=${pinnedProtocol?.length ?: 0}ch " +
+                "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",
         )
-        lastUser?.let { Log.i(PROMPT_TAG, "${STREAM_PREFIX}REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
-        logChunked(PROMPT_TAG, "REQUEST system", system)
+        list.lastOrNull()
+            ?.takeIf { it.role == ChatRole.USER }
+            ?.let { Log.i(PROMPT_TAG, "${STREAM_PREFIX}REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
+        if (persona.isNotEmpty()) logChunked(PROMPT_TAG, "REQUEST persona", persona)
+        pinnedProtocol?.let { logChunked(PROMPT_TAG, "REQUEST protocol", it) }
         // 观测点：协议块规模与三段可用清单是否注入（排查"模型不用标签"时先看这行）
         Log.i(
             "AvatarSession",
-            "${STREAM_PREFIX}system prompt: ${system.length} chars, cameras=${currentCameraTags().size}, " +
-                "actions=${currentActionGroups().sumOf { it.second.size }}, " +
+            "${STREAM_PREFIX}prompt: persona=${persona.length}ch protocol=${pinnedProtocol?.length ?: 0}ch, " +
+                "cameras=${currentCameraTags().size}, actions=${currentActionGroups().sumOf { it.second.size }}, " +
                 "directExpr=${currentDirectExpressions().size}, history=${history.size} " +
                 "sent=${trimmedSent(history)} images=${turnImages.size}",
         )
         return list
     }
 
+    /**
+     * 协议块（全量表情/动作/镜头目录）每上下文只组装一次：文本只取决于当前
+     * 加载的模型与开关，与轮次无关，逐轮重拼纯属浪费。这里缓存上次注入的
+     * 文本，内容没变就逐轮复用同一份（请求前缀稳定，服务商前缀缓存全程
+     * 命中）；目录变了（重载模型/镜头开关切换）就原地重钉并打日志——历史
+     * 保留，旧回复里的旧标签由门控静默丢弃，无需清上下文。LLM 模型切换的
+     * "新开上下文"由集成方轮换上下文 id 实现（demo 见 MainActivity）。
+     */
+    private fun pinnedProtocolMessage(): ChatMessage? {
+        if (!options.protocolInstructions) return null
+        val block = options.assembler.multimodalProtocolBlock(
+            cameras = currentCameraTags(),
+            actionGroups = currentActionGroups(),
+            directExpressions = currentDirectExpressions(),
+        )
+        if (block.isBlank()) return null
+        if (block != pinnedProtocol) {
+            pinnedProtocol = block
+            Log.i(
+                "AvatarSession",
+                "${STREAM_PREFIX}protocol pinned: ${block.length} chars, " +
+                    "cameras=${currentCameraTags().size}, " +
+                    "actions=${currentActionGroups().sumOf { it.second.size }}, " +
+                    "directExpr=${currentDirectExpressions().size}",
+            )
+        }
+        return ChatMessage(ChatRole.SYSTEM, block)
+    }
+
     /** 实际发送的历史条数（观测点用）：null 上限 = 全量。 */
     private fun trimmedSent(history: List<ChatMessage>): Int =
         options.recentTurnLimit?.let { minOf(it, history.size) } ?: history.size
 
-    /** system prompt = 人设 + 当前视角行 + 多模态协议块（协议关闭时只有前两者）。 */
-    private fun systemPromptWithProtocol(viewLine: String?): String = buildString {
-        append(systemPrompt.trim())
-        if (viewLine != null) {
-            if (isNotEmpty()) append("\n\n")
-            append(viewLine)
-        }
-        if (options.protocolInstructions) {
-            if (isNotEmpty()) append("\n\n")
-            append(protocolBlock())
-        }
-    }
-
     /**
-     * 多模态协议块，与每次请求实际注入的内容逐字一致——设置页的「协议提示词」
-     * 只读展示走这里，保证 UI 看到的就是模型收到的。
+     * 多模态协议块全文——即请求里那条独立 system 消息的内容（每上下文钉一次，
+     * 见 [pinnedProtocolMessage]）。设置页的「协议提示词」只读展示走这里，
+     * 保证 UI 看到的就是模型收到的。
      */
     fun protocolBlock(): String {
         // Sections of the protocol block that cannot run are omitted so the

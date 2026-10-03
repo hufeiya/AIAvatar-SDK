@@ -58,7 +58,7 @@
 | `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s |
 | `face/SaccadeEngine.kt` | 视线 saccade（任务 5）：AIRI eye-motions.ts 精确移植——注视点 0.8-4.8s 分段均匀换点 + ±0.25 抖动 + snap 重注视；`GazeMode`(CAMERA 默认/POINT/NONE)，FaceDriver.tick 写 corelib，头颈眼骨骼解算与平滑在 corelib `VrmLookAtEngine` |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
-| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 在 send 时统一追加一次（修掉旧版卡片双重注入） |
+| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 作为**独立 system 消息每上下文钉一次**（2026-10-04 起，修掉旧版卡片双重注入；目录变更原地重钉不丢历史） |
 | `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；`ConversationDatabase.kt`（Room 实体/DAO/单例库，任务3）+ `RoomConversationStore.kt`（镜像读+异步落库，任务3） |
 
 ### 2.3 `:app` 集成
@@ -166,6 +166,13 @@
   - **ai_cmd**：`voice_free on|off`（无参翻转）、`chat_state` 尾部 `freeTalk=true(listening,hearing)` 状态；help 同步。**生命周期**：语音/视频模式+开关+麦克风权限+硅基流动 Key 四条件齐才跑（`LaunchedEffect(inputMode, freeTalk, micGranted)`），切模式/关开关/组合销毁即停。
   - **单测 +7（203 全绿）**：WAV 头逐字段；VAD 安静无事件/起音+悬停判句尾/短促丢弃/超长断句/barge-in 三重门(宽限内中等声不触发·大声持续恰好一次·不重复)/说话期中等声不捕获且 VAD 存活/reset 清态。
   - **真机 62fabe84 已验**：`voice_free on` → `FreeSpeech: free speech started (aec=true)`、`chat_state` 显示 `freeTalk=true(listening)`、截屏确认「自由/说话」药丸+「● 自由说话中，直接开口」指示条、`off` → `stopped`、零 FATAL。**待用户真口实测**：说话断句触发率（VAD 门限适配度）、句尾等待感（悬停 800ms）、barge-in 是否误触发/不触发、识别准确率与按住说话对比。
+
+- **协议目录每上下文只发一次 + 换模型即新开上下文（2026-10-04，用户需求「全量表情/动作目录别每轮都发」，218 单测 +9）**：
+  - **背景**：协议块（全量表情/动作/镜头目录，~12K chars）此前每轮重拼进 system 提示词整体发送。目录内容只取决于当前加载的模型与开关、与轮次无关——逐轮重拼纯属浪费。
+  - **orchestrator（AvatarSession）**：请求结构改为 **`[人设 system][协议 system（钉住）][历史][末尾 user]`** 四段——①人设与协议拆成两条独立 system 消息（`pinnedProtocol` 缓存已注入文本，内容没变逐轮复用同一份，**请求前缀逐字节稳定**，服务商前缀缓存可全程命中；目录变了=重载模型/镜头开关，原地重钉并打日志 `protocol pinned:`，历史保留）；②**视角行从 system 挪到末尾 user 消息前缀**（请求里唯一逐轮变化的指令，只改请求副本、store 仍存干净文字——放 system 会打断前缀稳定性；离生成位置最近，相机语境最新鲜）；③协议消息不进 store、不受 `recentTurnLimit` 裁剪。旧的 `systemPromptWithProtocol()` 已删，`protocolBlock()`（设置页只读展示）保留且与实际注入逐字一致。
+  - **app（换模型即新开上下文）**：`AiChat.kt` 新增 `llmIdentitySignature(prefs)` = 服务商+**解析后**模型名（清单外残留值会归位成默认，不会误判轮换）；`MainActivity.updateAiPrefs` 对比新旧签名，变了就 `newContext()`（历史清空、新上下文首请求带新目录）——签名刻意**不含** TTS/音色/Key/镜头开关（不影响模型能力，对话延续）；签名随 `ai_context_llm_sig` 持久化，升级首启无记录时只采纳不轮换。注意：历史仍随每条请求发送（chat API 无状态），本改造的收益=①协议文本不逐轮重拼/重复出现，②前缀稳定吃得满硅基流动/方舟的前缀缓存（真实省钱+降延迟），③`recentTurnLimit` 之外提示词结构不再随轮次膨胀。
+  - **单测 +9（218 全绿）**：`AvatarSessionProtocolPinTest` 4（人设/协议分离且协议不进人设/同上下文两轮协议逐字节相同/目录变更原地重钉且历史无损/协议开关关闭不注入）；`AvatarSessionViewLineTest` 重写 3（视角行挂末尾 user 前缀、headless 连前缀都不挂、视角行在钉住协议之后）；`LlmIdentitySignatureTest` 5（同配置同签名/换模型换签名/换服务商必换签名/清单外残留归位不误判/TTS·Key·镜头开关不换签名）。
+  - **观测点变化**：LlmPrompt REQUEST 头行 `system=` 拆为 `persona=`+`protocol=`；分段键 `REQUEST system` → `REQUEST persona`/`REQUEST protocol`；**视角行在 `REQUEST user:` 行里**（前缀形态，grep 该行即可看到当轮机位）；AvatarSession 的 `system prompt:` 观测行更名 `prompt: persona=Nch protocol=Nch`，新增 `protocol pinned:` 行（何时重钉一目了然）。
 
 
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
@@ -366,7 +373,7 @@ D. app: 内置策展动作目录(6个对话手势)+外置库关键词匹配回�
 - **机位不采纳** look_down/dynamic_orbit：项目不存在，不教模型不存在的参数。dynamic_orbit 可作 V2（`orbitCamera` 原语已在，需自建运镜循环）。
 - **老协议兼容**：`<|emotion:名[:强度]|>` 继续识别（老卡片/旧提示词零成本过渡），但 prompt 只教新家族。
 
-**协议块由 `SystemPromptAssembler.multimodalProtocolBlock()` 生成**，可用列表参数化、空段整体省略（headless 无 controller 时机位/动作段不出现在 prompt）。
+**协议块由 `SystemPromptAssembler.multimodalProtocolBlock()` 生成**，可用列表参数化、空段整体省略（headless 无 controller 时机位/动作段不出现在 prompt）。**注入节奏（2026-10-04 起）**：AvatarSession 把它作为**独立的一条 system 消息每上下文只组装一次**（`pinnedProtocol` 钉住，目录变更原地重钉），不逐轮重拼进人设 system——请求前缀 `[人设][协议][历史]` 逐字节稳定（前缀缓存友好）；换 LLM 模型的新开上下文由 app 层签名轮换 contextId 实现（见 2.4 最新条目）。
 
 ### 7.2 ActCatalog（动作目录动态生成——防胡编的根治）
 
@@ -526,7 +533,7 @@ LLM SSE delta
 | 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
 | 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
-| 模型不发标签/用（括号）演戏 | 先看 **`LlmPrompt` 的 RESPONSE raw 段**（`adb logcat -s LlmPrompt`）区分"没发"vs"发了被丢弃"（A.1 第 18 条）；REQUEST 段核对 system 三段清单与【当前镜头视角】行是否注入；示例是否在提示词末尾；温度是否 ≤0.6 |
+| 模型不发标签/用（括号）演戏 | 先看 **`LlmPrompt` 的 RESPONSE raw 段**（`adb logcat -s LlmPrompt`）区分"没发"vs"发了被丢弃"（A.1 第 18 条）；REQUEST 段核对 protocol（协议三段清单）与 REQUEST user 行里的【当前镜头视角】前缀是否注入（视角行挂在末尾 user 消息上，2026-10-04 起）；协议只在每上下文首请求钉一次（`protocol pinned:` 行=重钉时机）；温度是否 ≤0.6 |
 | 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
 | 冷启动就是 T-pose | idle 挂载失败或被清：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`（demo 现在与 AI 会话解耦，模型加载即自动挂，默认 Arms Down）；挂上了仍 T-pose 则查引擎版本是否含"挂 idle 即接管"语义 |
 | 直接表情（眨左眼等）不生效 | `list expressions` 核对模型真实 morph 名 → 协议块示例名是否动态生成（勿硬编码）→ A.1 第 18 条大小写解析 |
@@ -544,7 +551,7 @@ LLM SSE delta
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
 | 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
 
-验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。**问答链路日志统一前缀 `[InfoStreamDectect] `（2026-10-04，用户排查等待时长用，拼写保留用户原样）**：覆盖 LlmPrompt 的 REQUEST/RESPONSE 全部行、AvatarSession 的 multimodal turn/system prompt/raw reply/clip/sentence failed 行、AIDebug 的 `chat:` 事件流、FreeSpeech 的 utterance/barge-in——`adb logcat | grep InfoStreamDectect` 即得完整时序（REQUEST 时间戳→首条 SentenceQueued=LLM 出句耗时，SentenceQueued→SentenceStarted=TTS 合成耗时，首句 Started−REQUEST=用户感知的等待下限）。
+验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。**问答链路日志统一前缀 `[InfoStreamDectect] `（2026-10-04，用户排查等待时长用，拼写保留用户原样）**：覆盖 LlmPrompt 的 REQUEST/RESPONSE 全部行、AvatarSession 的 multimodal turn/prompt(persona+protocol 规模)/raw reply/clip/sentence failed 行、AIDebug 的 `chat:` 事件流、FreeSpeech 的 utterance/barge-in——`adb logcat | grep InfoStreamDectect` 即得完整时序（REQUEST 时间戳→首条 SentenceQueued=LLM 出句耗时，SentenceQueued→SentenceStarted=TTS 合成耗时，首句 Started−REQUEST=用户感知的等待下限）。
 
 ## 附录 B：记忆索引（新会话自动加载）
 
