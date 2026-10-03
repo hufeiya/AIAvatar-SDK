@@ -1,9 +1,11 @@
 package com.neethu.orchestrator.face
 
 import kotlin.math.abs
+import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * 1D One-Euro filter (Casiez et al. 2012) — the adaptive low-pass used for
@@ -55,33 +57,40 @@ class OneEuroFilter(
  * 用户摄像头人脸位置 → 世界坐标注视点的投影器（视频模式，任务 5 预留的
  * POINT 注入缝：结果喂 `FaceDriver.setGazePoint` + `GazeMode.POINT`）。
  *
- * 输入约定（由采集端归一化，见 app 侧 UserCameraTracker）：
+ * **角度语义**（二轮调参定稿）：脸在画面里的位置映射为人物转角——
+ * nx/ny = ±1（脸贴画面边缘）对应 [maxLateralDegrees]/[maxVerticalDegrees]
+ * 的转角上限，乘以当前相机到被注视点的实际距离换算成世界偏移。这样特写
+ * （相机距人物 ~1 世界单位）与全景（~3-4）下同一脸位置产生同样的转角观感
+ * （首版用固定世界偏移 1.4/1.0，特写下边缘脸直接打到 ±55° 限幅——"扭头
+ * 扭过去了"；全景又几乎无感）。
+ *
+ * 输入约定（由采集端归一化，见 app 侧 UserCameraTracker/FaceFrameMath）：
  *  - [nx] ∈ [-1,1]，**世界对齐**：+1 = 用户（脸）在屏幕右边缘——前置摄像头
  *    原始帧是镜像前的（脸在屏幕右侧时落在画面左侧），采集端必须翻转 x，
  *    本投影器不再翻转；
  *  - [ny] ∈ [-1,1]，+1 = 脸在画面下缘（图像 y 向下），竖直方向不镜像；
- *  - [area] = 人脸包围框面积 / 全画面面积 ∈ (0,1]，用于估相对深度。
+ *  - [area] = 人脸包围框面积 / 全画面面积 ∈ (0,1]，用于估相对深度：越近
+ *    （面积越大）注视点越向模型方向前伸，但前伸量钳制在距离的
+ *    [maxAlongFraction] 以内——否则特写下深度项会放大转角（低头过头的
+ *    另一半成因）。
  *
- * 输出：世界系注视点 = 相机眼位 + 朝向模型方向的前后偏移 + 相机系横向/
- * 纵向偏移。参考深度 [refDepth] 对应用户「正常持机距离」，面积越大（越近）
- * 注视点越向模型方向收；横向/纵向幅度随深度放大（归一化坐标是角度量）。
  * One-Euro 平滑在 nx/ny/depth 三路上内置，滤掉检测框抖动。
- *
- * 所有量纲是 demo 世界尺度（相机距模型 ~2-4 世界单位）下的调参常量，
- * 真机观感不对先调 [lateralRange]/[verticalRange]/[refDepth]/[areaRef]。
+ * 观感调参：默认 22°/15° 是"自然瞟一眼"档；用户嫌弱/嫌狠只动这两个角度。
  */
 class FacePointProjector(
-    /** nx=±1 时的横向偏移（世界单位，参考深度处）。 */
-    private val lateralRange: Float = 1.4f,
-    /** ny=±1 时的纵向偏移。 */
-    private val verticalRange: Float = 1.0f,
-    /** 参考深度（世界单位）：area == [areaRef] 时认为用户在这个距离。 */
+    /** 脸贴画面左右边缘（nx=±1）时的水平转角上限（度）。 */
+    private val maxLateralDegrees: Float = 22f,
+    /** 脸贴画面上下边缘（ny=±1）时的垂直转角上限（度）。 */
+    private val maxVerticalDegrees: Float = 15f,
+    /** 参考深度（世界单位）：area == [areaRef] 时用户在此距离。 */
     private val refDepth: Float = 1.2f,
     /** 参考面积占比：典型持机距离/取景下人脸框占全画面的比例。 */
     private val areaRef: Float = 0.10f,
-    /** 深度钳制（世界单位），防面积异常时注视点飞出。 */
-    private val minDepth: Float = 0.5f,
-    private val maxDepth: Float = 3.0f,
+    /** 深度钳制（世界单位），防面积异常时深度项发散。 */
+    private val minDepth: Float = 0.6f,
+    private val maxDepth: Float = 2.5f,
+    /** 前伸偏移上限 = 该比例 × 相机到被注视点的距离。 */
+    private val maxAlongFraction: Float = 0.2f,
 ) {
     private val fx = OneEuroFilter()
     private val fy = OneEuroFilter()
@@ -93,8 +102,8 @@ class FacePointProjector(
 
     /**
      * 投影并平滑一个观测。[eye]/[target]/[up] 来自
-     * `AvatarController.getCameraLookAt()`（eye=用户侧机位=注视用户的名义位置，
-     * target=模型，up=相机上方向）。任一轴过滤异常输入时安全退化到 eye 本身。
+     * `AvatarController.getCameraLookAt()`（eye=用户侧机位，target=模型被
+     * 注视区域，二者距离决定偏移的换算比例）。任一轴异常输入时安全退化。
      */
     fun project(
         nx: Float,
@@ -125,9 +134,15 @@ class FacePointProjector(
         val depth = fd.filter((refDepth * sqrt(areaRef / safeArea)), deltaSeconds)
             .coerceIn(minDepth, maxDepth)
 
-        val along = refDepth - depth // 越近(深度小)越朝模型方向(+forward)前伸
-        val lateral = snx * lateralRange * (depth / refDepth)
-        val vertical = -sny * verticalRange * (depth / refDepth)
+        // 相机到被注视点（≈人物头部区域）的距离 = 角度→世界偏移的换算比例
+        val dist = coerceDist(dist(eye, target))
+        // 前后偏移：越近(深度小)越朝模型方向(+forward)前伸，双向钳制为距离的比例
+        val along = (refDepth - depth).coerceIn(-0.25f * dist, maxAlongFraction * dist)
+        // 从人物头部看注视点的有效基线（前伸会缩短它，转角按它算才准）
+        val baseDist = (dist - along).coerceAtLeast(0.2f)
+        val lateral = tan(Math.toRadians(snx * maxLateralDegrees.toDouble())).toFloat() * baseDist
+        val vertical =
+            tan(Math.toRadians(-sny * maxVerticalDegrees.toDouble())).toFloat() * baseDist
 
         lastPoint = floatArrayOf(
             eye[0] + f[0] * along + r[0] * lateral + u[0] * vertical,
@@ -142,6 +157,11 @@ class FacePointProjector(
         fx.reset(); fy.reset(); fd.reset()
     }
 
+    private fun dist(a: FloatArray, b: FloatArray): Float =
+        sqrt((a[0] - b[0]).let { it * it } + (a[1] - b[1]).let { it * it } + (a[2] - b[2]).let { it * it })
+
+    private fun coerceDist(d: Float): Float = d.coerceIn(0.4f, 8f)
+
     companion object {
         private fun normalize3(x: Float, y: Float, z: Float): FloatArray? {
             val len = sqrt(x * x + y * y + z * z)
@@ -151,6 +171,14 @@ class FacePointProjector(
 
         /** 探测向量：绕 +Y 旋 [angleDeg] 的单位向量（单测构造斜交基用）。 */
         internal fun yawProbe(angleDeg: Float): FloatArray =
-            floatArrayOf(sin(Math.toRadians(angleDeg.toDouble())).toFloat(), 0f, cos(Math.toRadians(angleDeg.toDouble())).toFloat())
+            floatArrayOf(
+                sin(Math.toRadians(angleDeg.toDouble())).toFloat(),
+                0f,
+                cos(Math.toRadians(angleDeg.toDouble())).toFloat(),
+            )
+
+        /** 从人物头部到注视点的转角（度）——单测用：锁"角度语义"不随距离漂移。 */
+        internal fun offsetAngleDegrees(lateralOffset: Float, baseDist: Float): Float =
+            Math.toDegrees(atan((lateralOffset / baseDist).toDouble())).toFloat()
     }
 }

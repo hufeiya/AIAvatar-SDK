@@ -148,7 +148,8 @@
     3. 顺带：`debugStatus()` 的 `"%.0fB".format(Int)` 抛 `f != java.lang.Integer` 把 state 命令打挂——String.format 的 %f 只吃浮点，Int 必须直接插值。
   - **端到端闭环（2026-10-04 真机，权限就绪后）**：PiP 实时画面（screencap 裁 PiP 区域 std=52 非黑、圆角+边框+前后摄钮正常）；`state` 输出 `video: active=true lens=front face=(x,y) area=0.14 age=30ms ring=3 best=27552B sharpness=3976.1`；**多模态回合**：`send_chat "描述一下你现在通过摄像头看到的画面"` → logcat `multimodal turn: 1 image(s)` + `system prompt: ... images=1` → 模型回复**准确描述真实场景**（圆框眼镜/吸顶灯/空调出风口格栅/白色书架/关着的门，与 PiP 截图一致），自发 `<cam:close_up><emo:…><act:…>` 标签全通道触发，8 句流水播完 TurnCompleted。
   - **观测点补注**：①视频模式下 `look_at` 手动命令会被追踪器 33ms 内覆盖（视频模式视线归追踪器所有，设计内）；②冷启动后立刻采 state 可能读到 yaw/pitch=0 的瞬态（首帧未收敛），连采 2-3 次再看；③`raw reply:` 日志多行回复首行可能显示为空（回复以 `\n<cam:…>` 开头），grep -A 续行才见全文。
-  - **剩余待真手**：PiP 拖动手感与前后摄真手点按（adb 禁注入；`video_camera` 命令侧已可驱动）；注视幅度/平滑的观感调参（`FacePointProjector` 构造参数 lateralRange/verticalRange/refDepth/areaRef，用户觉得太狠/太弱时动这里）。
+  - **剩余待真手**：PiP 拖动手感与前后摄真手点按（adb 禁注入；`video_camera` 命令侧已可驱动）；注视幅度的观感调参（`FacePointProjector` 构造参数 maxLateralDegrees/maxVerticalDegrees，见 A.2）。
+  - **三轮调参（2026-10-04 用户反馈"幅度太大"）**：投影器从**世界单位线性映射改为角度语义**——脸贴画面边缘 = 水平 22°/垂直 15° 转角上限（`maxLateralDegrees`/`maxVerticalDegrees`），乘以当前相机到人物的实际距离换算偏移，特写/全景手感一致（首版固定偏移 1.4/1.0 世界单位，特写机位距离 ~1 时边缘脸=50°+ 直接打到 ±55° 限幅："扭头扭过去了"）；"凑近画面"的前伸深度项钳制在距离的 20% 以内（`maxAlongFraction`，深度项缩短注视基线会放大转角，是"低头低太多"的另一半成因）。单测按"头部处量到的转角"锁死：边缘脸在 d=1 与 d=4 机位下都必须 ≈22°。修后真机采样 yaw ±19°/pitch ±9° 内随位置成比例。
 
 
 - **任务 8.1 已完成（2026-10-03，真机 62fabe84）**：多模态协议第二轮——动作库扩容 + 表情全量暴露 + IDLE 待机（设计见 7.10）
@@ -520,7 +521,7 @@ LLM SSE delta
 | 视频模式进不去 | `chat_state` 看 `vision=`：false 就是当前模型不可收图——`set_llm_model Qwen/Qwen3.8-27B`（硅基流动）或 `set_provider volcano`（默认即视觉）；错误条文案里有原因 |
 | 视频模式没有画面/抓拍 | 先看系统相机权限（A.1 第 28 条，真手授权一次）；`state` 看 `video: active=` 与 `ring=`；`video_snapshot` 探测缓存；logcat `VideoTracker` 的 `camera bound`(preview=true 才对)/`released` 与 face detect 失败行；**小窗黑屏但 state active=true** = Preview 没绑上（A.1 第 29 条①的守卫失效时查这里） |
 | 注视点恒定偏向一侧（与脸位置无关） | 坐标系/分辨率错位而非翻转符号：查归一化用的是直立系还是缓冲系尺寸（A.1 第 29 条②，FaceFrameMath）；偏向随位置左右镜像才去翻 nx 符号 |
-| 视线转头太狠/太弱（视频模式） | `FacePointProjector` 构造参数：lateralRange/verticalRange（幅度）、refDepth/areaRef（深度基准）——先在 `look_at` 用世界点验证骨骼链，再调投影 |
+| 视线转头太狠/太弱（视频模式） | `FacePointProjector` 构造参数 `maxLateralDegrees`（默认 22°）/`maxVerticalDegrees`（默认 15°）——脸贴画面边缘时的转角上限，角度语义与机位无关；只动这两个度数。"凑近画面低头太多"则调 `maxAlongFraction`（默认 0.2，前伸钳制比例）。saccade 抖动（±0.25 世界单位）与该幅度独立，嫌眼神飘另调 SaccadeEngine 的 jitterAmplitude |
 | 回复不提画面内容 | logcat 搜 `multimodal turn:`——没有=没带图（非视频模式/无相机权限/模型非视觉任一），有=带了图是模型理解问题（换 Qwen3-VL 或 doubao-pro 观察） |
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
 | 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
