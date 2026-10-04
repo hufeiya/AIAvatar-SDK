@@ -38,13 +38,30 @@ data class LlmConfig(
     val extraBody: JsonObject? = null,
 )
 
+/**
+ * Token usage reported in the stream's final chunk
+ * (`stream_options.include_usage`, supported by the OpenAI-compatible
+ * providers in use). Observability input for prompt-prefix cache
+ * verification: `cachedTokens > 0` means the provider served part of the
+ * (pinned protocol) prefix from its cache — first-token latency and cost
+ * both drop accordingly; `null` = provider didn't report the breakdown.
+ */
+data class LlmUsage(
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val cachedTokens: Int? = null,
+)
+
 /** Streaming events emitted by [com.neethu.aiadapter.api.LlmAdapter]. */
 sealed interface LlmStreamEvent {
     /** An incremental piece of the assistant reply text. */
     data class TextDelta(val text: String) : LlmStreamEvent
 
-    /** The stream finished. [reason] is the provider finish reason, e.g. `stop`. */
-    data class Finish(val reason: String?) : LlmStreamEvent
+    /**
+     * The stream finished. [reason] is the provider finish reason, e.g. `stop`;
+     * [usage] carries the token counts when the provider reports them.
+     */
+    data class Finish(val reason: String?, val usage: LlmUsage? = null) : LlmStreamEvent
 
     /** The stream failed. Delivered as an event (the Flow also completes normally). */
     data class Error(val throwable: Throwable) : LlmStreamEvent

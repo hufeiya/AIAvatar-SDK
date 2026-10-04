@@ -1,5 +1,6 @@
 package com.neethu.orchestrator.session
 
+import android.os.SystemClock
 import android.util.Log
 import com.neethu.aiadapter.api.LipSyncProcessor
 import com.neethu.aiadapter.api.LlmAdapter
@@ -13,6 +14,7 @@ import com.neethu.aiadapter.model.ChatMessage
 import com.neethu.aiadapter.model.ChatRole
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.LlmStreamEvent
+import com.neethu.aiadapter.model.LlmUsage
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
@@ -285,14 +287,23 @@ class AvatarSession(
             cleanBuffer.setLength(0)
             pipeline.beginTurn()
             store.appendUser(text)
+            // 首句延迟三段法（grep InfoStreamDectect）：REQUEST→首个 TextDelta 的
+            // ttfb + SentenceQueued→SentenceStarted 的 TTS 合成，都在本行/事件流里
+            val turnStartMs = SystemClock.elapsedRealtime()
+            var ttfbMs = -1L
+            var usage: LlmUsage? = null
             try {
                 llm.streamChat(buildRequestMessages(images), llmCfg).collect { event ->
                     when (event) {
-                        is LlmStreamEvent.TextDelta -> handleDelta(event.text, ttsCfg)
-                        is LlmStreamEvent.Finish -> Unit
+                        is LlmStreamEvent.TextDelta -> {
+                            if (ttfbMs < 0) ttfbMs = SystemClock.elapsedRealtime() - turnStartMs
+                            handleDelta(event.text, ttsCfg)
+                        }
+                        is LlmStreamEvent.Finish -> usage = event.usage
                         is LlmStreamEvent.Error -> throw event.throwable
                     }
                 }
+                val streamMs = SystemClock.elapsedRealtime() - turnStartMs
                 // Drain the extractor tail, then any chunker remainder.
                 val tail = extractor.flush()
                 cleanBuffer.append(tail.cleanText)
@@ -304,8 +315,14 @@ class AvatarSession(
                 pipeline.awaitTurnComplete()
                 // 观测点：原始回复（含标签）——排查"模型没发标签/标签被丢弃"先看这行
                 Log.i("AvatarSession", "${STREAM_PREFIX}raw reply: ${replyBuffer}")
-                // 需求 5：原始与解析后的完整回复落到专用 tag（分段+单行化，方便排查）
-                Log.i(PROMPT_TAG, "${STREAM_PREFIX}=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch ===")
+                // 需求 5：原始与解析后的完整回复落到专用 tag（分段+单行化，方便排查）。
+                // ttfb=首 token 延迟（首句等待的大头）；tok 一段=prompt/cached/completion
+                // token（cached>0=服务商前缀缓存命中，钉住协议的省钱验证位）
+                Log.i(
+                    PROMPT_TAG,
+                    "${STREAM_PREFIX}=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch " +
+                        "ttfb=${ttfbMs}ms stream=${streamMs}ms${usagePart(usage)} ===",
+                )
                 logChunked(PROMPT_TAG, "RESPONSE raw", replyBuffer.toString())
                 logChunked(PROMPT_TAG, "RESPONSE clean", cleanBuffer.toString())
                 store.appendAssistant(replyBuffer.toString())
@@ -489,10 +506,15 @@ class AvatarSession(
                 images = turnImages,
             )
         }
-        // 需求 4：提示词落到专用 tag（LlmPrompt），分段绕开 logcat 单条上限
+        // 需求 4：提示词落到专用 tag（LlmPrompt），分段绕开 logcat 单条上限。
+        // thinking= 是否显式关闭（关思考的参数各家不同：火山 thinking.type /
+        // 硅基流动 enable_thinking，见 AiProviders.llmExtraBody）
+        val eb = llmConfig?.extraBody
+        val thinkingOff = eb?.containsKey("thinking") == true || eb?.containsKey("enable_thinking") == true
         Log.i(
             PROMPT_TAG,
-            "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} view=${viewLine ?: "n/a"} " +
+            "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
+                "view=${viewLine ?: "n/a"} " +
                 "persona=${persona.length}ch protocol=${pinnedProtocol?.length ?: 0}ch " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",
         )
@@ -544,6 +566,12 @@ class AvatarSession(
     /** 实际发送的历史条数（观测点用）：null 上限 = 全量。 */
     private fun trimmedSent(history: List<ChatMessage>): Int =
         options.recentTurnLimit?.let { minOf(it, history.size) } ?: history.size
+
+    /** RESPONSE 头行的 token 用量段：`tok: prompt=A cached=B completion=C`，未上报时缺省。 */
+    private fun usagePart(usage: LlmUsage?): String = when (usage) {
+        null -> ""
+        else -> " tok: prompt=${usage.promptTokens} cached=${usage.cachedTokens ?: -1} completion=${usage.completionTokens}"
+    }
 
     /**
      * 多模态协议块全文——即请求里那条独立 system 消息的内容（每上下文钉一次，

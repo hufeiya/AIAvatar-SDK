@@ -245,13 +245,18 @@ class AiChatController(
             ),
             store = store,
         )
+        val model = resolveLlmModel(prefs.provider, prefs.llmModel)
         session.llmConfig = LlmConfig(
             baseUrl = prefs.provider.baseUrl,
             apiKey = prefs.apiKeyFor(prefs.provider),
-            model = resolveLlmModel(prefs.provider, prefs.llmModel),
+            model = model,
             // 略低于默认 0.8：多模态行内标签协议对指令遵循敏感（真机实测
             // 0.8 下模型偶尔完全忽略标签/用括号演戏），0.6 是遵循与创意折中
             temperature = 0.6f,
+            // 关深度思考（首句延迟治理，见 [llmExtraBody]）：火山 doubao-seed 系
+            // 与硅基流动 Qwen3 系默认都开思考，思考 token 全成首句前的隐形等待；
+            // 其他模型无额外参数
+            extraBody = llmExtraBody(prefs.provider, model),
         )
         session.ttsConfig = TtsConfig(
             model = resolveTtsModel(ttsProvider, prefs.ttsModel),

@@ -4,6 +4,7 @@ import com.neethu.aiadapter.api.LlmAdapter
 import com.neethu.aiadapter.model.ChatMessage
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.LlmStreamEvent
+import com.neethu.aiadapter.model.LlmUsage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -46,6 +48,9 @@ class OpenAiCompatibleLlmAdapter(
                 put("model", config.model)
                 put("messages", buildJsonMessages(messages))
                 put("stream", true)
+                // Ask for the final usage chunk (prompt/cached/completion tokens) —
+                // the prefix-cache hit-rate probe for the pinned-protocol prompt.
+                put("stream_options", buildJsonObject { put("include_usage", true) })
                 put("temperature", config.temperature)
                 put("top_p", config.topP)
                 put("max_tokens", config.maxTokens)
@@ -75,21 +80,31 @@ class OpenAiCompatibleLlmAdapter(
                             return@use
                         }
                         var finished = false
+                        var finishReason: String? = null
+                        var usage: LlmUsage? = null
                         while (true) {
                             val line = source.readUtf8Line() ?: break
                             if (!line.startsWith("data:")) continue
                             val payload = line.removePrefix("data:").trim()
                             if (payload == "[DONE]") break
-                            val delta = parseDelta(payload) ?: continue
+                            val root = try {
+                                json.parseToJsonElement(payload).jsonObject
+                            } catch (_: Exception) {
+                                continue
+                            }
+                            // include_usage providers append a trailing chunk with
+                            // empty choices and the usage object — hoard it for Finish.
+                            (root["usage"] as? JsonObject)?.let { usage = parseUsage(it) ?: usage }
+                            val delta = parseDelta(root) ?: continue
                             delta.first?.let { text ->
                                 if (text.isNotEmpty()) send(LlmStreamEvent.TextDelta(text))
                             }
                             if (!finished && delta.second != null) {
                                 finished = true
-                                send(LlmStreamEvent.Finish(delta.second))
+                                finishReason = delta.second
                             }
                         }
-                        if (!finished) send(LlmStreamEvent.Finish(null))
+                        send(LlmStreamEvent.Finish(finishReason, usage))
                     }
                 } catch (t: Throwable) {
                     if (!call.isCanceled()) {
@@ -138,8 +153,7 @@ class OpenAiCompatibleLlmAdapter(
     }
 
     /** Returns `(deltaText, finishReason)` — either may be null. */
-    private fun parseDelta(payload: String): Pair<String?, String?>? = try {
-        val root = json.parseToJsonElement(payload).jsonObject
+    private fun parseDelta(root: JsonObject): Pair<String?, String?>? = try {
         val choice = (root["choices"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull() ?: return null
         val choiceObj = choice.jsonObject
         val content = (choiceObj["delta"]?.jsonObject?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf {
@@ -149,6 +163,17 @@ class OpenAiCompatibleLlmAdapter(
             (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p !is kotlinx.serialization.json.JsonNull }?.jsonPrimitive?.content
         }
         Pair(content?.contentOrNullSafe(), finish)
+    } catch (_: Exception) {
+        null
+    }
+
+    /** OpenAI usage chunk → [LlmUsage]; `cached_tokens` stays null when unreported. */
+    private fun parseUsage(u: JsonObject): LlmUsage? = try {
+        val prompt = u["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: return null
+        val completion = u["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0
+        val cached = (u["prompt_tokens_details"] as? JsonObject)
+            ?.get("cached_tokens")?.jsonPrimitive?.intOrNull
+        LlmUsage(promptTokens = prompt, completionTokens = completion, cachedTokens = cached)
     } catch (_: Exception) {
         null
     }

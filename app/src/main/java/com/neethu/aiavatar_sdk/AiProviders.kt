@@ -1,5 +1,9 @@
 package com.neethu.aiavatar_sdk
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
 /**
  * AI 服务商目录：端点、可选模型、音色清单与默认值全部收口在这一个枚举——
  * 设置页除 API Key 外的所有 AI 配置都是下拉框选择，杜绝手输模型名（2026-10
@@ -159,6 +163,32 @@ fun resolveLlmModel(provider: AiProvider, configured: String): String {
 fun resolveTtsModel(provider: AiProvider, configured: String): String {
     val v = configured.trim()
     return if (v in provider.ttsModels) v else provider.defaultTtsModel
+}
+
+/**
+ * LLM 请求体的服务商专属参数（[LlmConfig.extraBody] 原样并入请求 JSON）。
+ * 各家「关思考」的参数名互不相认，按 服务商+模型族 分发：
+ *
+ * - 火山 doubao-seed 系：`thinking: {"type":"disabled"}`。默认「自适应深度
+ *   思考」，思考 token 走 `reasoning_content` 流式返回而适配器只读
+ *   `delta.content`，聊天场景下全部变成首句前的纯等待（2026-10-04 真机
+ *   4.5s 首句的主因，关掉后立竿见影）。
+ * - 硅基流动 Qwen3 系：`enable_thinking: false`（参数平铺在请求体顶层）。
+ *   Qwen3 系混合推理模型**默认开思考**，不显式传 false 就会思考——同样的
+ *   `reasoning_content` 隐形等待（2026-10-04 用户实测千问慢的根因）。
+ *   Qwen3-VL-Instruct 本身非思考模型，该参数对其是无害 no-op 一并带上。
+ *
+ * 其余模型（deepseek 系等）不认识这些参数，返回 null 不发，避免严格端点 400。
+ */
+fun llmExtraBody(provider: AiProvider, model: String): JsonObject? {
+    val m = model.trim()
+    return when {
+        provider == AiProvider.VOLCANO && m.startsWith("doubao-seed") ->
+            buildJsonObject { put("thinking", buildJsonObject { put("type", "disabled") }) }
+        provider == AiProvider.SILICONFLOW && m.startsWith("Qwen/Qwen3") ->
+            buildJsonObject { put("enable_thinking", false) }
+        else -> null
+    }
 }
 
 /**

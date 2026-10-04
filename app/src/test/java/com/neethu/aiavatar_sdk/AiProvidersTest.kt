@@ -231,4 +231,41 @@ class AiProvidersTest {
         // 大小写敏感：不在清单内就是不支持，不模糊匹配
         assertFalse(isVisionLlm(AiProvider.SILICONFLOW, "qwen/qwen3.8-27b"))
     }
+
+    // ── 请求体专属参数（关深度思考 = 首句延迟治理，2026-10-04）────────────
+    @Test
+    fun `volcano doubao-seed models get thinking disabled`() {
+        val body = llmExtraBody(AiProvider.VOLCANO, "doubao-seed-2-0-mini-260428")!!
+        val thinking = body["thinking"] as kotlinx.serialization.json.JsonObject
+        assertEquals("disabled", (thinking["type"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // character 模型同族同样关
+        val character = llmExtraBody(AiProvider.VOLCANO, "doubao-seed-character-260628")!!
+        assertEquals(
+            "disabled",
+            ((character["thinking"] as kotlinx.serialization.json.JsonObject)["type"] as kotlinx.serialization.json.JsonPrimitive).content,
+        )
+        // 火山 deepseek 系不认识 thinking 参数：不发，避免严格端点 400
+        assertEquals(null, llmExtraBody(AiProvider.VOLCANO, "deepseek-v4-flash-ga-260731"))
+    }
+
+    @Test
+    fun `siliconflow qwen3 models get enable_thinking false`() {
+        // Qwen3 混合推理模型默认开思考，必须显式 false（用户实测千问慢的根因）
+        val body = llmExtraBody(AiProvider.SILICONFLOW, "Qwen/Qwen3.8-27B")!!
+        assertEquals("false", (body["enable_thinking"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // Qwen3-VL-Instruct 本身非思考模型：参数无害 no-op，一并带上
+        val vl = llmExtraBody(AiProvider.SILICONFLOW, "Qwen/Qwen3-VL-32B-Instruct")!!
+        assertEquals("false", (vl["enable_thinking"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // SF 的 deepseek 系不发（DeepSeek-V3 是纯 chat 模型，参数不认识）
+        assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, "deepseek-ai/DeepSeek-V3"))
+        assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, "deepseek-ai/DeepSeek-V4-Flash"))
+    }
+
+    @Test
+    fun `thinking params never leak across providers`() {
+        // 火山的 thinking 参数不发给硅基流动，反之亦然
+        assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, "doubao-seed-2-0-mini-260428"))
+        assertEquals(null, llmExtraBody(AiProvider.VOLCANO, "Qwen/Qwen3.8-27B"))
+        assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, ""))
+    }
 }

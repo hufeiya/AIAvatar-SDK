@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -100,5 +101,77 @@ class OpenAiCompatibleLlmAdapterTest {
         )
         // history message must remain a plain string (text-only-safe)
         assertTrue(msgs[0].jsonObject["content"]!!.jsonPrimitive.content == "之前的回复")
+    }
+
+    /** Reads the raw request body of the most recent (or only) enqueued call. */
+    private suspend fun lastRequestBody(): kotlinx.serialization.json.JsonObject = runBlocking {
+        Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+    }
+
+    @Test
+    fun `request asks for stream_options include_usage`() = runBlocking {
+        server.enqueue(MockResponse().setBody(sseBody()).setHeader("Content-Type", "text/event-stream"))
+        adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()
+        val body = lastRequestBody()
+        assertEquals(
+            true,
+            body["stream_options"]!!.jsonObject["include_usage"]!!.jsonPrimitive.content.toBooleanStrict(),
+        )
+    }
+
+    @Test
+    fun `extraBody is merged verbatim into the request`() = runBlocking {
+        server.enqueue(MockResponse().setBody(sseBody()).setHeader("Content-Type", "text/event-stream"))
+        val cfg = config.copy(
+            extraBody = kotlinx.serialization.json.buildJsonObject {
+                put("thinking", kotlinx.serialization.json.buildJsonObject { put("type", "disabled") })
+            },
+        )
+        adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), cfg).toList()
+        val body = lastRequestBody()
+        assertEquals(
+            "disabled",
+            body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `usage chunk is parsed and carried on Finish`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setBody(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n" +
+                        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1234," +
+                        "\"completion_tokens\":56,\"prompt_tokens_details\":{\"cached_tokens\":1024}}}\n\n" +
+                        "data: [DONE]\n\n",
+                )
+                .setHeader("Content-Type", "text/event-stream"),
+        )
+        val events = adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()
+        val finish = events.filterIsInstance<LlmStreamEvent.Finish>().single()
+        // no finish_reason chunk in this stream — usage is the point of the test
+        assertEquals(null, finish.reason)
+        val usage = finish.usage!!
+        assertEquals(1234, usage.promptTokens)
+        assertEquals(56, usage.completionTokens)
+        assertEquals(1024, usage.cachedTokens)
+    }
+
+    @Test
+    fun `usage without cached breakdown keeps cachedTokens null`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setBody(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"好\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n" +
+                        "data: [DONE]\n\n",
+                )
+                .setHeader("Content-Type", "text/event-stream"),
+        )
+        val events = adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()
+        val finish = events.filterIsInstance<LlmStreamEvent.Finish>().single()
+        assertEquals("stop", finish.reason)
+        assertEquals(10, finish.usage!!.promptTokens)
+        assertEquals(null, finish.usage!!.cachedTokens)
     }
 }
