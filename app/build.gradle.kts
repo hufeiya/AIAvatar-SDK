@@ -58,6 +58,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.face.detection)
+    // 预置卡导入映射/提示词覆盖的纯 JSON 逻辑（JVM 单测可跑；android.jar 的
+    // org.json 是抛 "not mocked" 的桩，进不了单测）
+    implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

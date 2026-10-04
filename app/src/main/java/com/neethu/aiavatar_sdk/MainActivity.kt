@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
@@ -29,6 +30,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +45,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
@@ -50,7 +55,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +89,7 @@ import com.neethu.corelib.CameraShot
 import com.neethu.corelib.rememberAvatarController
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
+import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.face.GazeMode
 import com.neethu.orchestrator.gesture.ActionEntry
@@ -95,6 +104,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.graphics.BitmapFactory
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -167,9 +177,26 @@ private const val KEY_AI_CONTEXT_LLM_SIG = "ai_context_llm_sig"
 private const val KEY_AI_INPUT_MODE = "ai_input_mode"
 private const val KEY_VIDEO_PIP_X = "ai_video_pip_x"
 private const val KEY_VIDEO_PIP_Y = "ai_video_pip_y"
+/** 预置卡导入映射（assetPath→已落盘文件名，[PresetCardImport]）。 */
+private const val KEY_AI_PRESET_CARDS = "ai_preset_cards"
+/** 人物卡提示词人工编辑覆盖（fileName→文本，[CardPromptOverrides]）。 */
+private const val KEY_AI_CARD_PROMPT_OVERRIDES = "ai_card_prompt_overrides"
 
 /** 新上下文的随机 id（UUID；ai_cmd select_context 支持前缀匹配）。 */
 private fun newContextId(): String = java.util.UUID.randomUUID().toString()
+
+/**
+ * 卡片人设应用到会话：卡片默认人设 + 设置页人工编辑覆盖（session 重建也必须
+ * 重放覆盖，否则编辑会被 assemble 冲掉）。预置 grid、导入列表、adb 导入共用。
+ */
+private fun applyCardToSession(
+    session: AvatarSession,
+    entry: CharacterCardStore.Entry,
+    overrideFor: (String) -> String?,
+) {
+    session.setCharacterCard(entry.card)
+    overrideFor(entry.fileName)?.takeIf { it.isNotEmpty() }?.let { session.systemPrompt = it }
+}
 
 /** 读取枚举设置项；名字失效（如改过枚举名）时回落到默认值。 */
 private inline fun <reified T : Enum<T>> SharedPreferences.enumValue(
@@ -440,6 +467,19 @@ internal class DemoUiState(context: Context) {
     fun cardByFile(fileName: String?): CharacterCardStore.Entry? =
         cards.firstOrNull { it.fileName == fileName }
 
+    // ── 预置卡（assets/cards，点选即导入激活）────────────────────────────
+
+    /** APK 内置的预置卡（官方 SillyTavern 卡 + 原创中文卡）。 */
+    var presetCards: List<PresetCard> = PresetCardLibrary(context).load()
+        private set
+
+    /** 预置卡导入映射（assetPath→落盘文件名）的持久化 JSON。 */
+    private var presetImportMapJson: String? = prefs.getString(KEY_AI_PRESET_CARDS, null)
+
+    /** 按落盘文件名反查预置卡 asset 路径；null = 该卡不是从预置 grid 导入的。 */
+    fun presetAssetByFile(fileName: String?): String? =
+        PresetCardImport.reverseGet(presetImportMapJson, fileName)
+
     /** 从 SAF Uri 导入；null = 不可读或解析失败。成功后刷新列表。 */
     fun importCard(context: Context, uri: Uri): CharacterCardStore.Entry? {
         val entry = cardLibrary.import(context, uri) ?: return null
@@ -469,6 +509,40 @@ internal class DemoUiState(context: Context) {
             activeCardFile = null
             pendingGreetingFile = null
         }
+    }
+
+    /**
+     * 点选预置卡：先查导入映射复用已落盘的文件（用户删过则重新导入），
+     * 没有就从 assets 读 bytes 走同一条 [importCardBytes] 落盘路径并记映射。
+     * 返回 null = assets 不可读或解析失败。
+     */
+    fun importPresetCard(context: Context, preset: PresetCard): CharacterCardStore.Entry? {
+        val (existing, newMap) = PresetCardImport.resolve(
+            presetImportMapJson, preset.assetPath, cards.map { it.fileName }.toSet(),
+        )
+        presetImportMapJson = newMap
+        prefs.edit().putString(KEY_AI_PRESET_CARDS, newMap).apply()
+        existing?.let { return cardByFile(it) }
+        val bytes = PresetCardLibrary(context).readBytes(preset.assetPath) ?: return null
+        val entry = importCardBytes(bytes) ?: return null
+        presetImportMapJson = PresetCardImport.record(presetImportMapJson, preset.assetPath, entry.fileName)
+        prefs.edit().putString(KEY_AI_PRESET_CARDS, presetImportMapJson).apply()
+        return entry
+    }
+
+    // ── 人物卡提示词的人工编辑覆盖 ────────────────────────────────────────
+
+    /** 覆盖映射的持久化 JSON（fileName→自定义提示词）。 */
+    private var cardPromptOverridesJson: String? = prefs.getString(KEY_AI_CARD_PROMPT_OVERRIDES, null)
+
+    /** 激活卡的提示词覆盖；null = 未编辑，用卡片默认人设。 */
+    fun cardPromptOverride(fileName: String?): String? =
+        CardPromptOverrides.get(cardPromptOverridesJson, fileName)
+
+    /** 保存/清除（传 null）激活卡的提示词覆盖并持久化。 */
+    fun setCardPromptOverride(fileName: String, text: String?) {
+        cardPromptOverridesJson = CardPromptOverrides.set(cardPromptOverridesJson, fileName, text)
+        prefs.edit().putString(KEY_AI_CARD_PROMPT_OVERRIDES, cardPromptOverridesJson).apply()
     }
 
     /** 外置动画根目录：App 外部存储私有区（`/sdcard/Android/data/<pkg>/files`）。 */
@@ -706,11 +780,11 @@ private fun DemoScreen(
 
     LaunchedEffect(session) {
         val s = session ?: return@LaunchedEffect
-        // 会话（重）建后让激活的人物卡重新生效；激活时若 AI 尚未配置，
-        // pendingGreetingFile 记着开场白意图，这里补播一次。
+        // 会话（重）建后让激活的人物卡重新生效（含提示词人工编辑覆盖）；
+        // 激活时若 AI 尚未配置，pendingGreetingFile 记着开场白意图，这里补播一次。
         uiState.activeCardFile?.let { file ->
             uiState.cardByFile(file)?.let { entry ->
-                s.setCharacterCard(entry.card)
+                applyCardToSession(s, entry) { fileName -> uiState.cardPromptOverride(fileName) }
                 if (uiState.pendingGreetingFile == file) {
                     uiState.pendingGreetingFile = null
                     val greeting = entry.card.spokenGreeting()
@@ -1011,28 +1085,47 @@ private fun DemoScreen(
         }
     }
 
-    // ── 人物卡：激活/删除逻辑，卡片面板与 adb import_card 共用 ────────────
+    // ── 人物卡：激活/删除逻辑（卡片人设进会话统一走 [applyCardToSession]）────
+    val applyOverrideFor: (String) -> String? = { fileName -> uiState.cardPromptOverride(fileName) }
+    val deactivateCard: () -> Unit = {
+        if (uiState.activeCardFile != null) {
+            uiState.setActiveCard(null)
+            session?.clearCharacterCard()
+            session?.clearHistory()
+        }
+    }
+    val activateEntry: (CharacterCardStore.Entry) -> Unit = { entry ->
+        if (uiState.activeCardFile != entry.fileName) {
+            uiState.setActiveCard(entry.fileName)
+            val s = session
+            when {
+                s != null -> {
+                    applyCardToSession(s, entry, applyOverrideFor)
+                    s.clearHistory()
+                    val greeting = entry.card.spokenGreeting()
+                    if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+                }
+                else -> uiState.pendingGreetingFile = entry.fileName
+            }
+        }
+    }
+    // 导入列表保持旧行为：点已激活的卡 = 取消激活（预置 grid 的取消走空卡片）
     val activateCard: (CharacterCardStore.Entry) -> Unit = { entry ->
-        val wasActive = uiState.activeCardFile == entry.fileName
-        uiState.setActiveCard(if (wasActive) null else entry.fileName)
-        val s = session
-        when {
-            wasActive -> {
-                s?.clearCharacterCard()
-                s?.clearHistory()
-            }
-            s != null -> {
-                s.setCharacterCard(entry.card)
-                s.clearHistory()
-                val greeting = entry.card.spokenGreeting()
-                if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
-            }
-            else -> uiState.pendingGreetingFile = entry.fileName
+        if (uiState.activeCardFile == entry.fileName) deactivateCard() else activateEntry(entry)
+    }
+    // 预置卡点选：导入（或复用已导入）并激活；取消只能点空卡片
+    val selectPresetCard: (PresetCard) -> Unit = { preset ->
+        val entry = uiState.importPresetCard(context, preset)
+        if (entry == null) {
+            chatError = "预置卡不可读（${preset.assetPath}）"
+        } else {
+            activateEntry(entry)
         }
     }
     val deleteCard: (CharacterCardStore.Entry) -> Unit = { entry ->
         val wasActive = uiState.activeCardFile == entry.fileName
         uiState.deleteCard(entry.fileName)
+        uiState.setCardPromptOverride(entry.fileName, null)
         if (wasActive) {
             session?.clearCharacterCard()
             session?.clearHistory()
@@ -1763,6 +1856,10 @@ private fun DemoScreen(
             CardsPanel(
                 cards = uiState.cards,
                 activeFile = uiState.activeCardFile,
+                presets = uiState.presetCards,
+                activePresetAsset = uiState.presetAssetByFile(uiState.activeCardFile),
+                onSelectPreset = selectPresetCard,
+                onClearCard = deactivateCard,
                 onImport = { cardPicker.launch(arrayOf("image/png", "application/json")) },
                 onActivate = activateCard,
                 onDelete = deleteCard,
@@ -1776,6 +1873,12 @@ private fun DemoScreen(
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.fillMaxSize()
         ) {
+            // 人物卡提示词 = 卡片默认人设（SystemPromptAssembler 拼装）+ 人工编辑覆盖
+            val activeCardEntry = uiState.activeCardFile?.let { uiState.cardByFile(it) }
+            val cardPromptDefault = activeCardEntry
+                ?.let { SystemPromptAssembler().assemble(it.card) }
+                .orEmpty()
+            val cardPromptOverride = uiState.activeCardFile?.let { uiState.cardPromptOverride(it) }
             SettingsScreen(
                 settings = uiState.renderSettings,
                 useExternalAnimations = uiState.useExternalAnimations,
@@ -1786,6 +1889,30 @@ private fun DemoScreen(
                 activeContextId = uiState.contextId,
                 protocolPrompt = session?.protocolBlock().orEmpty(),
                 cardNameFor = { characterId -> uiState.cardByFile(characterId)?.card?.name },
+                activeCardName = activeCardEntry?.card?.name,
+                activeCardPromptDefault = cardPromptDefault,
+                activeCardPromptOverride = cardPromptOverride,
+                onSaveCardPrompt = { text ->
+                    val file = uiState.activeCardFile
+                    if (file != null) {
+                        uiState.setCardPromptOverride(file, text)
+                        // 空文本 = 视为还原默认（CardPromptOverrides.set 会清除该键）
+                        val entry = uiState.cardByFile(file)
+                        if (text.isEmpty()) {
+                            if (entry != null) session?.let { applyCardToSession(it, entry, applyOverrideFor) }
+                        } else {
+                            session?.systemPrompt = text
+                        }
+                    }
+                },
+                onResetCardPrompt = {
+                    val file = uiState.activeCardFile
+                    val entry = file?.let { uiState.cardByFile(it) }
+                    if (file != null && entry != null) {
+                        uiState.setCardPromptOverride(file, null)
+                        session?.let { applyCardToSession(it, entry, applyOverrideFor) }
+                    }
+                },
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onSettingsChange = applyRenderSettings,
                 onAiPrefsChange = { uiState.updateAiPrefs(it) },
@@ -2378,6 +2505,10 @@ private fun VideoCallPip(
 private fun CardsPanel(
     cards: List<CharacterCardStore.Entry>,
     activeFile: String?,
+    presets: List<PresetCard>,
+    activePresetAsset: String?,
+    onSelectPreset: (PresetCard) -> Unit,
+    onClearCard: () -> Unit,
     onImport: () -> Unit,
     onActivate: (CharacterCardStore.Entry) -> Unit,
     onDelete: (CharacterCardStore.Entry) -> Unit,
@@ -2390,14 +2521,39 @@ private fun CardsPanel(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "预置角色",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 6.dp, start = 4.dp)
+            )
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.heightIn(max = 320.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 空卡片 = 取消人物卡；仅当完全没有激活卡（含手工导入）时才高亮
+                item(key = "preset_none") {
+                    EmptyCardCell(selected = activeFile == null, onClick = onClearCard)
+                }
+                items(presets, key = { it.assetPath }) { preset ->
+                    PresetCardCell(
+                        preset = preset,
+                        selected = preset.assetPath == activePresetAsset,
+                        onClick = { onSelectPreset(preset) },
+                    )
+                }
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 4.dp, start = 4.dp)
+                    .padding(top = 10.dp, bottom = 4.dp, start = 4.dp)
             ) {
                 Text(
-                    text = "角色卡",
+                    text = "我的卡片",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -2408,7 +2564,7 @@ private fun CardsPanel(
             }
 
             LazyColumn(
-                modifier = Modifier.heightIn(max = 240.dp),
+                modifier = Modifier.heightIn(max = 200.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(cards, key = { it.fileName }) { entry ->
@@ -2474,17 +2630,146 @@ private fun CardsPanel(
                 if (cards.isEmpty()) {
                     item {
                         Text(
-                            text = "还没有卡片。导入 SillyTavern 导出的 PNG / JSON 角色卡后，\n" +
-                                "点按卡片激活人设，AI 会按人设回答并朗读开场白。",
+                            text = "点上方预置角色即可开始对话；从 SillyTavern 导出的 PNG / JSON " +
+                                "卡导入后也会出现在这里。",
                             fontSize = 12.sp,
                             lineHeight = 17.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp)
+                            modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/** assets 卡图缩略图：按 ~256px 目标边解码，避免整图位图进内存。 */
+@Composable
+private fun rememberPresetCardBitmap(assetPath: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(assetPath) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.assets.open(assetPath).use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 256) sample *= 2
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            context.assets.open(assetPath).use {
+                BitmapFactory.decodeStream(it, null, opts)
+            }?.asImageBitmap()
+        }.getOrNull()
+    }
+}
+
+/** 预置卡 grid 单元：卡图 + 名称；选中描边高亮。 */
+@Composable
+private fun PresetCardCell(
+    preset: PresetCard,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val bitmap = rememberPresetCardBitmap(preset.assetPath)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+            )
+            .border(
+                width = if (selected) 2.dp else 0.dp,
+                color = MaterialTheme.colorScheme.primary,
+                shape = RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(6.dp)
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = preset.card.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Face,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Text(
+            text = preset.card.name,
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected)
+                MaterialTheme.colorScheme.onPrimaryContainer
+            else
+                MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+/** 空卡片单元：取消人物卡。 */
+@Composable
+private fun EmptyCardCell(selected: Boolean, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+            )
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = "取消人物卡",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = "无人物卡",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 

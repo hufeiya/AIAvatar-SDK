@@ -198,6 +198,13 @@
   - 单测：adapter 32 + orchestrator 51 全绿（新增 InlineTagExtractorTest 15 / AvatarSessionTagsTest 6 / 音频 release 回归 1，重写 assembler 测试）
   - 真机验证：首轮对话 LLM 自发 `<cam:medium_shot><act:wave><emo:happy:0.8>` 开场、中段 `<cam:close_up><emo:happy:1.0>`——CameraChanged/ActionStarted/EmotionChanged 按序触发（`Loaded VRMA 5.08s, 53 bone tracks` 证实手势真加载，播完自动归位），字幕零标签泄漏，5 句按序 TurnCompleted；第二轮 `ActionStarted celebrate`（VRMA 8.54s）+ 4 次情绪变化 + 机位切换，打断 ✕ 后 23ms PlaybackInterrupted、动作停止，全程零 FATAL/TurnFailed
   - 顺带修真崩溃：release() 打断停在 wait() 的写线程 → FATAL（见 A.1 第 17 条）
+
+- **预置人物卡 grid + 人设提示词编辑（2026-10-04，用户需求"点卡按钮显示预置角色 grid / 设置页可编辑人设提示词"；真机 62fabe84，单测 +10 全绿）**：
+  - **卡源（重要背景）**：用户原想从本地 sillytavernassets 合集挑选，逐张人工审核后确认该合集整体尺度不可用（性暗示渗透到命名/描述层，关键词过滤拦不住），第二轮改走官方源——**SillyTavern 官方全部角色卡只有 7 张**（SillyTavern-Content 官方内容仓库 `assets/character` 6 张 + 主仓库默认 Seraphina），其中适合语音陪伴场景的 5 张全收（Seraphina 治愈/Gloria 理性秘书/Sakana 傲娇/Amy 毒舌/Coding Sensei 理性导师；CapoGPT 犯罪教唆、Flux 不会说话两剔除）；chub.ai 全线地域封锁、character-tavern 无公开 API、HF 上都是随意备份——**剩余 13 张按官方 V3 规范自创**（中文原创人设：元气萝莉/傲娇同桌/认真班长/杂货铺看板娘/腹黑甜品师/深夜咖啡师/天才发明少女/天体物理研究生/图书馆管理员/急诊科医生/CEO 御姐/古风说书少女/旅行摄影师，全部原创零 ACG 依赖、SFW），头像用方舟 seedream-5-0-pro 统一扁平插画风生成（构建脚本思路：PIL 缩 512² + tEXt(ccv3+chara) 内嵌 JSON 进 PNG，与 ST 导出卡同构），产物 `app/src/main/assets/cards/`（18 张 6.8MB，全部可被 CharacterCardParser 解析）
+  - **app**：`PresetCards.kt` 新增三件——`PresetCardLibrary`（assets 逐个解析、坏卡跳过）、`PresetCardImport`（纯 JSON 去重映射 assetPath→落盘文件名：点选即导入激活、重复点选复用不重复落盘、用户删卡后映射自动失效重导）、`CardPromptOverrides`（纯 JSON 按卡文件名存提示词人工编辑覆盖）；CARDS 面板重排=顶部「预置角色」三列 grid（BitmapFactory 按 256px 采样的缩略图 + 名称 + 选中描边，**首位"无人物卡"空卡片=取消人物卡**，仅当完全没有激活卡才高亮）+ 下方「我的卡片」导入/激活/删除原功能保留
+  - **提示词编辑**：设置页新增「人物卡 (Character Card · 人设提示词)」折叠区——只读展示当前激活卡的完整人设（`SystemPromptAssembler().assemble(card)`，与实际注入逐字一致）+「编辑」→ OutlinedTextField + 「OK」保存覆盖并立即改写 `session.systemPrompt`（空文本=还原默认）+「还原默认」清除覆盖；覆盖按卡文件名持久化（prefs `ai_card_prompt_overrides`），**session 重建时经 `applyCardToSession` 重放**（否则 assemble 冲掉编辑）；删卡时覆盖一并清除
+  - **org.json 坑**：映射/覆盖逻辑最初用 org.json 写，JVM 单测全挂（`Method put in org.json.JSONObject not mocked`——android.jar 是抛异常的桩，见 A.1 第 33 条）；改用 kotlinx.serialization 的 `Json.parseToJsonElement` 纯 API（不需要序列化插件），app 模块加 `libs.kotlinx.serialization.json` 依赖
+  - 真机验证（62fabe84）：预置 grid 渲染（图+名+空卡片默认高亮）✓；`import_card` 走同一条落盘/激活路径 → 阿枣开场白 TTS 播报 ✓、`active_card` 显示 sysPromptChars=372（description+personality+scenario 拼装正确）✓、我的卡片「使用中」徽标 ✓、激活后空卡片取消高亮 ✓；设置页人物卡区（卡名+只读人设+编辑钮）✓；HyperOS 禁 shell input 依旧，grid 点选与编辑保存的手势流未真机点按（与已验证的 import_card/activateEntry 同路径，纯逻辑部分 10 条单测覆盖）
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts；视频模式再加 CameraX 1.4.2（core/camera2/lifecycle/view）与 `com.google.mlkit:face-detection:16.1.7`（**bundled 版**自带 BlazeFace 模型，不依赖 GMS，国产机可跑）
 
 ## 三、关键设计决策（改代码前必读）
@@ -270,6 +277,22 @@ API Key: <在这里贴上Key>
    卡片激活后自动 speak(firstMessage)。
 5. 单测: 卡片文件持久化往返(存→读→parse→setCharacterCard 后 systemPrompt 包含 description)。
 验收: 把任意 SillyTavern 导出的 PNG 卡导入后,提问角色能按人设回答,开场白自动朗读。提交代码,风格 TYPE: feat 中文描述。
+```
+
+### 任务 2.5：预置人物卡 grid + 人设提示词编辑（✅ 已完成，2026-10-04，见第二章 2.4 末条）
+
+```
+继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章;本次做预置人物卡。
+卡源结论: SillyTavern 官方全部角色卡只有 7 张(SillyTavern-Content 仓库 assets/character 6 张 + 主仓库 default_Seraphina),
+可用的 5 张(Seraphina/Gloria/Sakana/Amy/Coding Sensei)已拷入 app/src/main/assets/cards/;
+另按官方 V3 规范自创 13 张中文原创卡(PNG 内嵌 ccv3+chara tEXt,头像 seedream 生成)。本地 sillytavernassets 合集尺度不可用,勿再从那里挑卡。
+要求:
+1. CARDS 面板顶部加「预置角色」三列 grid:图(assets PNG 按 256px 采样解码)+名称;首位"无人物卡"空卡片=取消激活(仅当无激活卡才高亮);
+   点预置卡=导入落盘+激活(PresetCardImport 去重映射 ai_preset_cards,重复点选复用,用户删卡后映射失效重导);「我的卡片」导入/删除保留。
+2. 设置页加「人物卡」折叠区:只读展示当前卡人设(SystemPromptAssembler().assemble(card));编辑→OutlinedTextField→OK 保存覆盖
+   (CardPromptOverrides 按 ai_card_prompt_overrides 持久化,session.systemPrompt 立即生效,session 重建重放);还原默认=清除覆盖。
+3. 映射/覆盖用 kotlinx.serialization 纯 JSON(org.json 进 JVM 单测会 not-mocked 崩,A.1 第 33 条)。
+验收: 点卡→人设生效+开场白朗读;设置页编辑提示词→按编辑后人设回答;还原默认→恢复。纯逻辑单测锁死(PresetCardsTest)。
 ```
 
 ### 任务 3：Room 会话存储 + 历史裁剪（✅ 已完成，2026-10-03，见第二章 2.4）
@@ -545,6 +568,7 @@ LLM SSE delta
 31. **首句等待长的排查顺序（2026-10-04 用户"发送→说话间隔太久"实测归因）**：先按三分法分段（见下方观测点段），**大头几乎总在 LLM ttfb**。本轮实测拆解：REQUEST 27.96s → 首条 SentenceQueued 32.44s（**LLM 首句 4.48s**）→ SentenceStarted 33.69s（TTS 合成 1.24s），感知等待 5.72s。LLM 侧两个叠加因素：①**各家混合推理模型默认开思考**——思考 token 走 `reasoning_content` 流式返回而适配器只读 `delta.content`，思考时间全部变成首句前的纯等待；修法=`llmExtraBody()`（AiProviders.kt）按服务商方言分发：火山 doubao-seed 系 `thinking: {"type":"disabled"}`、**硅基流动 Qwen3 系 `enable_thinking: false`（2026-10-04 用户实测千问慢的根因，Qwen3 混合推理默认开思考；Qwen3-VL-Instruct 非思考模型带上是 no-op）**；deepseek 系两边都不认识对方参数，返回 null 不发防 400。REQUEST 头行 `thinking=off` 确认生效（两种参数名都认）；②前缀缓存是否命中此前无观测——LLM 适配器已带 `stream_options.include_usage`，usage（prompt/cached/completion tokens）解析进 `LlmStreamEvent.Finish.usage`，RESPONSE 头行 `tok: prompt=A cached=B completion=C`，**cached>0 = 钉住协议的前缀缓存命中**（首请求冷缓存数值小属正常，看同上下文第二请求起）。TTS 侧 1.24s 是结构性的：火山适配器每句新建 WS 连接（TLS 握手+StartConnection+StartSession 2-3 个 RTT）且收齐整段音频才返回（`TtsAdapter` 句级整段语义）——要再降需做"连接复用/首包即播"，是改 `PlaybackItem` 语义的中型工程，等 thinking-off 真机复测后再决定。
 
 32. **表情三连坑（2026-10-04 用户"表情没变化/一帧/口型掩盖"实测归因，第三轮已修，见 7.11）**：①**标签即发即执行 × TTS 排队延迟 = 表情必然提前衰减**——`<emo:>` 吐出瞬间应用，句子开播晚数秒，3 秒归零在出声前把表情吃掉；凡"cue→视觉通道"的链路都要问一句"这个通道的持续态会不会被时间吃掉"，会就必须挂到播放时刻（act/cam 是长持续态/模式所以幸免）。②**def 引用模型不存在的预设 = 整条静默失效**——SK_Sun 无 `think` 预设，`<emo:think>` 一个 morph 都不落；组合表必须用模型实有 morph 叠层，且词表与 defs 键集要有单测锁死（`SystemPromptAssemblerTest`）。③**全局 instant 模式下任何直写控制器的路径都是一帧**——FaceDriver 为自绘缓动把控制器切 0ms，手动表情必须走 blender 通道（`HOLD_NO_RESET`）而不是 `controller.setExpression`。另：VRM 预设在 ARKit 模型上的 bind 极粗（angry=嘴角下压、sad=browDown、relaxed=browInnerUp），单预设当"全脸表情"用观感必然单薄；`normalizeBindWeights` 把每条预设的最强 bind 归一到 1.0，预设权重 0.5 → 实际幅度比老模型大，def 里的权重按 0.12~0.6 起。
+33. **org.json 在 JVM 单测里是"not mocked"桩（2026-10-04 预置卡导入映射/提示词覆盖单测全挂的根因）**：app 模块里用 `JSONObject/JSONArray` 写的纯逻辑一旦进 `testDebugUnitTest` 就抛 `RuntimeException: Method put in org.json.JSONObject not mocked`——单元测试跑在 JVM 上，android.jar 只提供签名桩。对策二选一：①逻辑改用 kotlinx.serialization 的 `Json.parseToJsonElement`/`buildJsonObject` 纯 API（不需要序列化插件，orchestrator 全模块都是这么活的）；②`testOptions.unitTests.returnDefaultValues = true`（会掩盖其他未 mock 的 Android 调用，别开）。本次选 ①，app 模块补 `libs.kotlinx.serialization.json` 依赖。**顺带：`adb shell am start --es ai_cmd` 的命令与参数是两个 extra（`ai_cmd open_panel --es ai_arg cards`），写进同一个 extra 带空格不会拆分（"open_panel cards" 整体被当成命令名报 Unknown）。**
 
 ### A.2 调参速查表
 

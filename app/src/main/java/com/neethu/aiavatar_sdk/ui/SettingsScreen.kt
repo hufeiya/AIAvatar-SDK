@@ -24,11 +24,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -36,9 +39,11 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -46,6 +51,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -86,6 +92,7 @@ import kotlin.math.roundToInt
 
 /** 折叠类别的稳定 key。 */
 private const val SECTION_AI = "ai"
+private const val SECTION_CARD = "card"
 private const val SECTION_CONTEXT = "context"
 private const val SECTION_ANIMATIONS = "animations"
 private const val SECTION_QUALITY = "quality"
@@ -159,6 +166,11 @@ internal fun SettingsScreen(
     activeContextId: String,
     protocolPrompt: String,
     cardNameFor: (String?) -> String? = { null },
+    activeCardName: String? = null,
+    activeCardPromptDefault: String = "",
+    activeCardPromptOverride: String? = null,
+    onSaveCardPrompt: (String) -> Unit = {},
+    onResetCardPrompt: () -> Unit = {},
     onAnimationSourceChange: (Boolean) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
     onAiPrefsChange: (AiChatPrefs) -> Unit,
@@ -182,7 +194,7 @@ internal fun SettingsScreen(
 
     // ── 折叠类别：默认全部展开 ────────────────────────────────────────────
     var expandedSections by remember {
-        mutableStateOf(setOf(SECTION_AI, SECTION_CONTEXT, SECTION_ANIMATIONS, SECTION_QUALITY))
+        mutableStateOf(setOf(SECTION_AI, SECTION_CARD, SECTION_CONTEXT, SECTION_ANIMATIONS, SECTION_QUALITY))
     }
     val toggleSection: (String) -> Unit = { key ->
         expandedSections =
@@ -405,6 +417,23 @@ internal fun SettingsScreen(
                                 subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
                                 checked = aiPrefs.llmCamera
                             ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
+                        }
+                    }
+
+                    // ── 人物卡提示词 ──────────────────────────────────────
+                    item {
+                        CollapsibleSection(
+                            title = "人物卡 (Character Card · 人设提示词)",
+                            expanded = SECTION_CARD in expandedSections,
+                            onToggle = { toggleSection(SECTION_CARD) }
+                        ) {
+                            CardPromptSection(
+                                cardName = activeCardName,
+                                defaultPrompt = activeCardPromptDefault,
+                                override = activeCardPromptOverride,
+                                onSave = onSaveCardPrompt,
+                                onReset = onResetCardPrompt,
+                            )
                         }
                     }
 
@@ -854,6 +883,102 @@ private fun ContextRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp)
             )
+        }
+    }
+}
+
+/**
+ * 人物卡人设提示词区：默认只读展示当前激活卡的完整人设（与实际注入 system
+ * 的 persona 段一致）；点「编辑」进入可改文本框，「OK」保存覆盖并立即生效，
+ * 「还原默认」清除覆盖回到卡片原始人设。未激活卡片时显示引导文案。
+ */
+@Composable
+private fun CardPromptSection(
+    cardName: String?,
+    defaultPrompt: String,
+    override: String?,
+    onSave: (String) -> Unit,
+    onReset: () -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+
+    if (cardName == null) {
+        SettingsGroupLabel(
+            "未激活人物卡。在「卡」面板点选一位角色后，这里会显示该卡的人设提示词，" +
+                "并可以编辑成你自己想要的版本。"
+        )
+        return
+    }
+
+    val effective = override ?: defaultPrompt
+
+    if (!editing) {
+        SettingsGroupLabel(
+            buildString {
+                append("当前：$cardName")
+                append(if (override != null) "（人工编辑版，只读展示）" else "（卡片默认，只读展示）")
+            }
+        )
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = effective.ifEmpty { "（该卡没有人设文本）" },
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp)
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.End,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            TextButton(onClick = {
+                draft = effective
+                editing = true
+            }) {
+                Text(text = "编辑", fontSize = 13.sp)
+            }
+        }
+    } else {
+        SettingsGroupLabel("编辑人物卡提示词（该卡的完整 system 人设，逐字替换）")
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 6,
+            maxLines = 12,
+            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, lineHeight = 16.sp),
+        )
+        Row(
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (override != null) {
+                TextButton(onClick = {
+                    onReset()
+                    editing = false
+                }) {
+                    Text(text = "还原默认", fontSize = 13.sp)
+                }
+            }
+            TextButton(onClick = { editing = false }) {
+                Text(text = "取消", fontSize = 13.sp)
+            }
+            FilledTonalButton(onClick = {
+                onSave(draft.trim())
+                editing = false
+            }) {
+                Text(text = "OK", fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
