@@ -58,7 +58,7 @@
 | `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s |
 | `face/SaccadeEngine.kt` | 视线 saccade（任务 5）：AIRI eye-motions.ts 精确移植——注视点 0.8-4.8s 分段均匀换点 + ±0.25 抖动 + snap 重注视；`GazeMode`(CAMERA 默认/POINT/NONE)，FaceDriver.tick 写 corelib，头颈眼骨骼解算与平滑在 corelib `VrmLookAtEngine` |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
-| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 作为**独立 system 消息每上下文钉一次**（2026-10-04 起，修掉旧版卡片双重注入；目录变更原地重钉不丢历史） |
+| `card/SystemPromptAssembler.kt` | AIRI resolveSystemPrompt 顺序 `[systemPrompt,description,personality,scenario]` join `\n\n`；任务 8 起 assemble() **只拼人设**，`multimodalProtocolBlock(cameras, actions)` 由 AvatarSession 每上下文钉一次（2026-10-04 起，修掉旧版卡片双重注入；目录变更原地重钉不丢历史）；**发送时与人设合并为一条 system**（2026-10-04 晚：硅基流动对两条 system 直接 400，A.1 第 34 条） |
 | `history/ConversationStore.kt` | 接口 + InMemoryConversationStore(80条环形)；`ConversationDatabase.kt`（Room 实体/DAO/单例库，任务3）+ `RoomConversationStore.kt`（镜像读+异步落库，任务3） |
 
 ### 2.3 `:app` 集成
@@ -176,7 +176,7 @@
 
 - **协议目录每上下文只发一次 + 换模型即新开上下文（2026-10-04，用户需求「全量表情/动作目录别每轮都发」，218 单测 +9）**：
   - **背景**：协议块（全量表情/动作/镜头目录，~12K chars）此前每轮重拼进 system 提示词整体发送。目录内容只取决于当前加载的模型与开关、与轮次无关——逐轮重拼纯属浪费。
-  - **orchestrator（AvatarSession）**：请求结构改为 **`[人设 system][协议 system（钉住）][历史][末尾 user]`** 四段——①人设与协议拆成两条独立 system 消息（`pinnedProtocol` 缓存已注入文本，内容没变逐轮复用同一份，**请求前缀逐字节稳定**，服务商前缀缓存可全程命中；目录变了=重载模型/镜头开关，原地重钉并打日志 `protocol pinned:`，历史保留）；②**视角行从 system 挪到末尾 user 消息前缀**（请求里唯一逐轮变化的指令，只改请求副本、store 仍存干净文字——放 system 会打断前缀稳定性；离生成位置最近，相机语境最新鲜）；③协议消息不进 store、不受 `recentTurnLimit` 裁剪。旧的 `systemPromptWithProtocol()` 已删，`protocolBlock()`（设置页只读展示）保留且与实际注入逐字一致。
+  - **orchestrator（AvatarSession）**：请求结构改为 **`[人设 system][协议 system（钉住）][历史][末尾 user]`** 四段——①协议文本每上下文钉一次（`pinnedProtocol` 缓存已注入文本，内容没变逐轮复用同一份，**请求前缀逐字节稳定**，服务商前缀缓存可全程命中；目录变了=重载模型/镜头开关，原地重钉并打日志 `protocol pinned:`，历史保留）；**人设与协议在发送时合并为一条 system**（初版拆两条独立 system 被硅基流动 400 拒收——"System message must be at the beginning"，实测两条即使在开头也不行，当晚修复 A.1 第 34 条）；②**视角行从 system 挪到末尾 user 消息前缀**（请求里唯一逐轮变化的指令，只改请求副本、store 仍存干净文字——放 system 会打断前缀稳定性；离生成位置最近，相机语境最新鲜）；③协议消息不进 store、不受 `recentTurnLimit` 裁剪。旧的 `systemPromptWithProtocol()` 已删，`protocolBlock()`（设置页只读展示）保留且与实际注入逐字一致。
   - **app（换模型即新开上下文）**：`AiChat.kt` 新增 `llmIdentitySignature(prefs)` = 服务商+**解析后**模型名（清单外残留值会归位成默认，不会误判轮换）；`MainActivity.updateAiPrefs` 对比新旧签名，变了就 `newContext()`（历史清空、新上下文首请求带新目录）——签名刻意**不含** TTS/音色/Key/镜头开关（不影响模型能力，对话延续）；签名随 `ai_context_llm_sig` 持久化，升级首启无记录时只采纳不轮换。注意：历史仍随每条请求发送（chat API 无状态），本改造的收益=①协议文本不逐轮重拼/重复出现，②前缀稳定吃得满硅基流动/方舟的前缀缓存（真实省钱+降延迟），③`recentTurnLimit` 之外提示词结构不再随轮次膨胀。
   - **单测 +9（218 全绿）**：`AvatarSessionProtocolPinTest` 4（人设/协议分离且协议不进人设/同上下文两轮协议逐字节相同/目录变更原地重钉且历史无损/协议开关关闭不注入）；`AvatarSessionViewLineTest` 重写 3（视角行挂末尾 user 前缀、headless 连前缀都不挂、视角行在钉住协议之后）；`LlmIdentitySignatureTest` 5（同配置同签名/换模型换签名/换服务商必换签名/清单外残留归位不误判/TTS·Key·镜头开关不换签名）。
   - **观测点变化**：LlmPrompt REQUEST 头行 `system=` 拆为 `persona=`+`protocol=`；分段键 `REQUEST system` → `REQUEST persona`/`REQUEST protocol`；**视角行在 `REQUEST user:` 行里**（前缀形态，grep 该行即可看到当轮机位）；AvatarSession 的 `system prompt:` 观测行更名 `prompt: persona=Nch protocol=Nch`，新增 `protocol pinned:` 行（何时重钉一目了然）。
@@ -205,6 +205,7 @@
   - **提示词编辑**：设置页新增「人物卡 (Character Card · 人设提示词)」折叠区——只读展示当前激活卡的完整人设（`SystemPromptAssembler().assemble(card)`，与实际注入逐字一致）+「编辑」→ OutlinedTextField + 「OK」保存覆盖并立即改写 `session.systemPrompt`（空文本=还原默认）+「还原默认」清除覆盖；覆盖按卡文件名持久化（prefs `ai_card_prompt_overrides`），**session 重建时经 `applyCardToSession` 重放**（否则 assemble 冲掉编辑）；删卡时覆盖一并清除
   - **org.json 坑**：映射/覆盖逻辑最初用 org.json 写，JVM 单测全挂（`Method put in org.json.JSONObject not mocked`——android.jar 是抛异常的桩，见 A.1 第 33 条）；改用 kotlinx.serialization 的 `Json.parseToJsonElement` 纯 API（不需要序列化插件），app 模块加 `libs.kotlinx.serialization.json` 依赖
   - 真机验证（62fabe84）：预置 grid 渲染（图+名+空卡片默认高亮）✓；`import_card` 走同一条落盘/激活路径 → 阿枣开场白 TTS 播报 ✓、`active_card` 显示 sysPromptChars=372（description+personality+scenario 拼装正确）✓、我的卡片「使用中」徽标 ✓、激活后空卡片取消高亮 ✓；设置页人物卡区（卡名+只读人设+编辑钮）✓；HyperOS 禁 shell input 依旧，grid 点选与编辑保存的手势流未真机点按（与已验证的 import_card/activateEntry 同路径，纯逻辑部分 10 条单测覆盖）
+- **当晚两连修（用户实测选卡后对话 400 + 面板默认弹开反馈）**：①**硅基流动对两条 system 直接 400**（协议钉住改造把人设/协议拆两条 system，标注真机待验；用户第一次带卡对话即触发）——buildRequestMessages 改为人设+协议合并单条 system（curl 复现→合并通过；A.1 第 34 条，ProtocolPinTest 重写锁单条不变量 +2）；②**AI 未就绪时切卡 clearHistory 被跳过**（延迟激活补挂路径不清历史，Room 旧对话泄漏进新卡请求）——pendingGreetingFile 消费时补 clearHistory（A.1 第 35 条）+ LLM 适配器读超时 10s→60s（14K 协议首 token 超默认超时）；真机复验：冷启动 3s 即 import_card（复刻延迟激活）→ 补挂时 history=1（无泄漏）→ 你叫什么名字 TurnCompleted 50 字 ✓。另：用户反馈的「卡面板默认弹出」是调试 ai_cmd 遗留状态（冷启动实测默认关闭），非代码问题
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts；视频模式再加 CameraX 1.4.2（core/camera2/lifecycle/view）与 `com.google.mlkit:face-detection:16.1.7`（**bundled 版**自带 BlazeFace 模型，不依赖 GMS，国产机可跑）
 
 ## 三、关键设计决策（改代码前必读）
@@ -403,7 +404,7 @@ D. app: 内置策展动作目录(6个对话手势)+外置库关键词匹配回�
 - **机位不采纳** look_down/dynamic_orbit：项目不存在，不教模型不存在的参数。dynamic_orbit 可作 V2（`orbitCamera` 原语已在，需自建运镜循环）。
 - **老协议兼容**：`<|emotion:名[:强度]|>` 继续识别（老卡片/旧提示词零成本过渡），但 prompt 只教新家族。
 
-**协议块由 `SystemPromptAssembler.multimodalProtocolBlock()` 生成**，可用列表参数化、空段整体省略（headless 无 controller 时机位/动作段不出现在 prompt）。**注入节奏（2026-10-04 起）**：AvatarSession 把它作为**独立的一条 system 消息每上下文只组装一次**（`pinnedProtocol` 钉住，目录变更原地重钉），不逐轮重拼进人设 system——请求前缀 `[人设][协议][历史]` 逐字节稳定（前缀缓存友好）；换 LLM 模型的新开上下文由 app 层签名轮换 contextId 实现（见 2.4 最新条目）。
+**协议块由 `SystemPromptAssembler.multimodalProtocolBlock()` 生成**，可用列表参数化、空段整体省略（headless 无 controller 时机位/动作段不出现在 prompt）。**注入节奏（2026-10-04 起，当晚修正合并细节）**：AvatarSession 每上下文只组装一次协议文本（`pinnedProtocol` 钉住，目录变更原地重钉），不逐轮重拼；**发送时与人设合并为一条 system 消息**（硅基流动对多条 system 直接 400，A.1 第 34 条）——请求前缀 `[人设+协议一条 system][历史]` 逐字节稳定（前缀缓存友好）；换 LLM 模型的新开上下文由 app 层签名轮换 contextId 实现（见 2.4 最新条目）。
 
 ### 7.2 ActCatalog（动作目录动态生成——防胡编的根治）
 
@@ -569,6 +570,9 @@ LLM SSE delta
 
 32. **表情三连坑（2026-10-04 用户"表情没变化/一帧/口型掩盖"实测归因，第三轮已修，见 7.11）**：①**标签即发即执行 × TTS 排队延迟 = 表情必然提前衰减**——`<emo:>` 吐出瞬间应用，句子开播晚数秒，3 秒归零在出声前把表情吃掉；凡"cue→视觉通道"的链路都要问一句"这个通道的持续态会不会被时间吃掉"，会就必须挂到播放时刻（act/cam 是长持续态/模式所以幸免）。②**def 引用模型不存在的预设 = 整条静默失效**——SK_Sun 无 `think` 预设，`<emo:think>` 一个 morph 都不落；组合表必须用模型实有 morph 叠层，且词表与 defs 键集要有单测锁死（`SystemPromptAssemblerTest`）。③**全局 instant 模式下任何直写控制器的路径都是一帧**——FaceDriver 为自绘缓动把控制器切 0ms，手动表情必须走 blender 通道（`HOLD_NO_RESET`）而不是 `controller.setExpression`。另：VRM 预设在 ARKit 模型上的 bind 极粗（angry=嘴角下压、sad=browDown、relaxed=browInnerUp），单预设当"全脸表情"用观感必然单薄；`normalizeBindWeights` 把每条预设的最强 bind 归一到 1.0，预设权重 0.5 → 实际幅度比老模型大，def 里的权重按 0.12~0.6 起。
 33. **org.json 在 JVM 单测里是"not mocked"桩（2026-10-04 预置卡导入映射/提示词覆盖单测全挂的根因）**：app 模块里用 `JSONObject/JSONArray` 写的纯逻辑一旦进 `testDebugUnitTest` 就抛 `RuntimeException: Method put in org.json.JSONObject not mocked`——单元测试跑在 JVM 上，android.jar 只提供签名桩。对策二选一：①逻辑改用 kotlinx.serialization 的 `Json.parseToJsonElement`/`buildJsonObject` 纯 API（不需要序列化插件，orchestrator 全模块都是这么活的）；②`testOptions.unitTests.returnDefaultValues = true`（会掩盖其他未 mock 的 Android 调用，别开）。本次选 ①，app 模块补 `libs.kotlinx.serialization.json` 依赖。**顺带：`adb shell am start --es ai_cmd` 的命令与参数是两个 extra（`ai_cmd open_panel --es ai_arg cards`），写进同一个 extra 带空格不会拆分（"open_panel cards" 整体被当成命令名报 Unknown）。**
+
+34. **硅基流动拒绝多条 system 消息（2026-10-04 用户选卡后对话 400 的根因）**：请求带两条 system（人设+钉住协议）直接 400 `{"code":20015,"message":"\"messages\" in request are illegal: System message must be at the beginning..."}`——**即使两条都在最开头**（curl 实测复现，合并成一条立即通过）；火山 Ark/OpenAI 官方都收多条。教训：OpenAI 兼容 ≠ 消息结构完全兼容，**system 消息永远只发一条**（多段指令在发送时拼接即可，各段文本仍可各自钉住缓存）；"真机待验"的请求结构改动必须覆盖每个已配服务商各跑一轮。修法：AvatarSession.buildRequestMessages 把 persona 与 pinnedProtocol 文本 join("\n\n") 进同一条 system（协议钉住/重钉语义不变，AvatarSessionProtocolPinTest 锁死单条不变量）。
+35. **AI 未就绪时激活人物卡 = clearHistory 被跳过，旧对话泄漏进新角色（2026-10-04 真机踩）**：activateEntry 只有 session != null 才清历史；模型还在加载时切卡走 pendingGreetingFile 延迟分支，而 LaunchedEffect(session) 的补挂路径只重放人设+开场白不清历史——新会话的 RoomConversationStore 懒加载把上一个角色的对话整段带进新卡的请求（用户侧表现：换卡后第一轮就带着旧角色上下文）。修法：pendingGreetingFile 被消费（=延迟激活的真正生效时刻）时补 clearHistory；常规 session 重建（换音色等）不动历史。**同类教训：凡"激活动作依赖会话就绪"的副作用，延迟补执行的路径必须逐项核对**。另：LLM 适配器 OkHttpClient 的读超时从默认 10s 提到 60s（14K+ 字符钉住协议的首 token 排队+预填充会超 10s，真机 TurnFailed: timeout）。
 
 ### A.2 调参速查表
 

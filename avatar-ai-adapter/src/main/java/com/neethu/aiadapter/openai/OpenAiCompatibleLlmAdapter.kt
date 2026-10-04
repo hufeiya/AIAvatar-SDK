@@ -22,6 +22,7 @@ import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -36,7 +37,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class OpenAiCompatibleLlmAdapter(
     baseUrl: String,
     private val apiKey: String,
-    private val client: OkHttpClient = OkHttpClient(),
+    // 读超时给足 60s：SSE 首字节前的排队+预填充（14K+ 字符的钉住协议）可能
+    // 超过 OkHttp 默认的 10s（真机 TurnFailed: timeout），首字节之后逐 delta
+    // 读取远低于超时；connectTimeout 保持默认。
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build(),
 ) : LlmAdapter {
 
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"

@@ -34,10 +34,12 @@ import org.junit.Test
 
 /**
  * 协议块（全量表情/动作/镜头目录）每上下文只组装一次（用户需求：目录不逐轮
- * 重发重拼）：请求 = [人设 system][协议 system][历史][末尾 user]。同一上下文
- * 内逐轮复用同一份协议文本（前缀逐字节稳定，服务商前缀缓存友好）；目录变化
- * （重载模型/镜头开关）原地重钉，历史保留——"换模型即新开上下文"由集成方
- * 轮换上下文 id 实现（demo 见 MainActivity.updateAiPrefs）。
+ * 重发重拼）：请求 = [人设+协议合并的一条 system][历史][末尾 user]。**必须
+ * 合并为单条 system**——实测硅基流动对两条 system 直接 400（"System message
+ * must be at the beginning"，即使两条都在最前，A.1 第 34 条）。同一上下文内
+ * 协议文本逐轮逐字节复用（服务商前缀缓存友好）；目录变化（重载模型/镜头开关）
+ * 原地重钉，历史保留——"换模型即新开上下文"由集成方轮换上下文 id 实现
+ * （demo 见 MainActivity.updateAiPrefs）。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AvatarSessionProtocolPinTest {
@@ -97,25 +99,28 @@ class AvatarSessionProtocolPinTest {
         }
     }
 
-    private fun protocolOf(request: List<ChatMessage>): ChatMessage =
-        request.last { it.role == ChatRole.SYSTEM }
+    /** 人设+协议合并后的那条 system；断言全请求只有这一条 system。 */
+    private fun singleSystemOf(request: List<ChatMessage>): ChatMessage {
+        val systems = request.filter { it.role == ChatRole.SYSTEM }
+        assertEquals("expected exactly ONE system message", 1, systems.size)
+        return systems.single()
+    }
 
     @Test
-    fun `protocol and persona are separate system messages - protocol absent from persona`() = runTest {
+    fun `persona and protocol merge into one leading system message`() = runTest {
         val session = newSession()
         session.systemPrompt = "你是测试人设。"
         session.actionCatalog = listOf(ActionEntry("wave", "挥手问候", assetPath = "animations/wave.vrma"))
         session.sendAndAwait("一")
 
         val req = llm.requests.last()
-        val persona = req.first { it.role == ChatRole.SYSTEM }
-        val protocol = protocolOf(req)
-        assertEquals("你是测试人设。", persona.content)
-        assertTrue("persona must not carry the catalog", !persona.content.contains("<act:"))
-        assertTrue(protocol.content.contains("<act:动作>"))
-        assertTrue(protocol.content.contains("基础动作: wave"))
-        // 顺序：人设在协议前
-        assertTrue(req.indexOf(persona) < req.indexOf(protocol))
+        // 单条 system，且是请求的第一条消息（硅基流动对多条 system 400）
+        val system = singleSystemOf(req)
+        assertEquals(0, req.indexOf(system))
+        // 人设在前、协议在后，同一条里
+        assertTrue(system.content.startsWith("你是测试人设。"))
+        assertTrue(system.content.contains("<act:"))
+        assertTrue(system.content.contains("基础动作: wave"))
     }
 
     @Test
@@ -126,10 +131,8 @@ class AvatarSessionProtocolPinTest {
         session.sendAndAwait("二")
 
         assertEquals(2, llm.requests.size)
-        val p1 = protocolOf(llm.requests[0])
-        val p2 = protocolOf(llm.requests[1])
-        // 逐字节同一份（同一文本才吃得满服务商前缀缓存）
-        assertEquals(p1, p2)
+        // 人设为空时 system 即纯协议文本：逐字节同一份（前缀缓存的前提）
+        assertEquals(singleSystemOf(llm.requests[0]), singleSystemOf(llm.requests[1]))
     }
 
     @Test
@@ -141,20 +144,32 @@ class AvatarSessionProtocolPinTest {
         session.actionCatalog = listOf(ActionEntry("dance", "跳舞", assetPath = "animations/dance.vrma"))
         session.sendAndAwait("二")
 
-        val req2 = llm.requests.last()
-        val protocol = protocolOf(req2)
-        assertTrue(protocol.content.contains("dance"))
-        assertFalse("stale catalog must be replaced", protocol.content.contains("wave"))
+        val system = singleSystemOf(llm.requests.last())
+        assertTrue(system.content.contains("dance"))
+        assertFalse("stale catalog must be replaced", system.content.contains("wave"))
         // 历史不受重钉影响：turn1 的 user/assistant 原样在；末尾 user 带视角行
         // 前缀（挂 controller 时每轮注入），原文"二"在其后
-        val nonSystem = req2.filter { it.role != ChatRole.SYSTEM }.map { it.content }
+        val nonSystem = llm.requests.last().filter { it.role != ChatRole.SYSTEM }.map { it.content }
         assertEquals(3, nonSystem.size)
         assertEquals(listOf("一", "好的。"), nonSystem.take(2))
         assertTrue(nonSystem.last().endsWith("二"))
     }
 
     @Test
-    fun `protocolInstructions=false sends no protocol message`() = runTest {
+    fun `persona change rewrites the merged system without stale text`() = runTest {
+        val session = newSession()
+        session.systemPrompt = "人设A。"
+        session.sendAndAwait("一")
+        session.systemPrompt = "人设B。"
+        session.sendAndAwait("二")
+
+        val system = singleSystemOf(llm.requests.last())
+        assertTrue(system.content.startsWith("人设B。"))
+        assertFalse("stale persona must be replaced", system.content.contains("人设A。"))
+    }
+
+    @Test
+    fun `protocolInstructions=false sends no protocol content`() = runTest {
         llm = RecordingLlm()
         val session = AvatarSession(
             scope = CoroutineScope(UnconfinedTestDispatcher()),

@@ -92,10 +92,11 @@ class AvatarSession(
         val enableFaceDriving: Boolean = true,
         val assembler: SystemPromptAssembler = SystemPromptAssembler(),
         /**
-         * 把多模态协议块（全量表情/动作/镜头目录）作为一条独立 system 消息
-         * 注入请求。目录只与当前加载的模型/目录有关、与轮次无关，因此每个
-         * 上下文只组装一次并逐轮复用同一文本（[pinnedProtocol]），不逐轮重拼
-         * 进人设 system——请求前缀 [人设][协议][历史] 逐字节稳定，服务商的
+         * 把多模态协议块（全量表情/动作/镜头目录）注入请求。目录只与当前加载
+         * 的模型/目录有关、与轮次无关，因此每个上下文只组装一次并逐轮复用
+         * 同一文本（[pinnedProtocol]），不逐轮重拼；发送时与人设 system 合并为
+         * **一条** system 消息（部分服务商拒绝多条 system，A.1 第 34 条），
+         * 请求前缀 [人设+协议一条 system][历史] 逐字节稳定，服务商的
          * 前缀缓存可以全程命中。
          */
         val protocolInstructions: Boolean = true,
@@ -555,11 +556,15 @@ class AvatarSession(
 
     private fun buildRequestMessages(turnImages: List<String>): List<ChatMessage> {
         val list = mutableListOf<ChatMessage>()
-        // 人设 system：小而稳定，与协议块分开两条——协议只在上下文开始时
-        // 钉一次（见 [pinnedProtocolMessage]），人设变更换卡时也只动自己这条。
+        // 人设+协议合并为**一条** system：部分服务商对多条 system 直接 400
+        // （实测硅基流动 Qwen3.8 "System message must be at the beginning"，
+        // 即使两条都在开头——A.1 第 34 条），单条 system 所有 OpenAI 兼容端点
+        // 都收。两段文本仍各自钉住缓存（见 [pinnedProtocolText]），只在发送前
+        // 拼接；换卡改人设时历史已清，前缀缓存自然失效，可接受。
         val persona = systemPrompt.trim()
-        if (persona.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, persona)
-        pinnedProtocolMessage()?.let { list += it }
+        val protocol = pinnedProtocolText().orEmpty()
+        val systemText = listOf(persona, protocol).filter { it.isNotEmpty() }.joinToString("\n\n")
+        if (systemText.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, systemText)
         // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两条
         // system 都不进 store，天然不受 recentTurnLimit 影响。
         val history = store.messages()
@@ -609,8 +614,10 @@ class AvatarSession(
      * 命中）；目录变了（重载模型/镜头开关切换）就原地重钉并打日志——历史
      * 保留，旧回复里的旧标签由门控静默丢弃，无需清上下文。LLM 模型切换的
      * "新开上下文"由集成方轮换上下文 id 实现（demo 见 MainActivity）。
+     *
+     * 返回协议文本（拼进人设那条 system 用）；null = 协议关闭或目录为空。
      */
-    private fun pinnedProtocolMessage(): ChatMessage? {
+    private fun pinnedProtocolText(): String? {
         if (!options.protocolInstructions) return null
         val block = options.assembler.multimodalProtocolBlock(
             cameras = currentCameraTags(),
@@ -628,7 +635,7 @@ class AvatarSession(
                     "directExpr=${currentDirectExpressions().size}",
             )
         }
-        return ChatMessage(ChatRole.SYSTEM, block)
+        return block
     }
 
     /** 实际发送的历史条数（观测点用）：null 上限 = 全量。 */
@@ -642,9 +649,9 @@ class AvatarSession(
     }
 
     /**
-     * 多模态协议块全文——即请求里那条独立 system 消息的内容（每上下文钉一次，
-     * 见 [pinnedProtocolMessage]）。设置页的「协议提示词」只读展示走这里，
-     * 保证 UI 看到的就是模型收到的。
+     * 多模态协议块全文——即请求里那条 system 消息的协议段（每上下文钉一次，
+     * 见 [pinnedProtocolText]；发送时与人设拼接为一条 system）。设置页的
+     * 「协议提示词」只读展示走这里，保证 UI 看到的就是模型收到的。
      */
     fun protocolBlock(): String {
         // Sections of the protocol block that cannot run are omitted so the

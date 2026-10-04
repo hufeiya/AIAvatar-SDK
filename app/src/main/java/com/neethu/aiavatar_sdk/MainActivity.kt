@@ -782,10 +782,16 @@ private fun DemoScreen(
         val s = session ?: return@LaunchedEffect
         // 会话（重）建后让激活的人物卡重新生效（含提示词人工编辑覆盖）；
         // 激活时若 AI 尚未配置，pendingGreetingFile 记着开场白意图，这里补播一次。
+        // 补播 = 延迟激活的真正生效时刻，此刻要补上 activateEntry 里跳过的
+        // clearHistory（否则旧上下文的历史泄漏进新角色——真机踩过：AI 未就绪
+        // 时切卡，Room 里上一个角色的对话被带进新卡的请求）。常规 session
+        // 重建（配置微调/换音色）不清历史，只有 pendingGreeting 被消费才算切卡。
         uiState.activeCardFile?.let { file ->
             uiState.cardByFile(file)?.let { entry ->
+                val deferredActivation = uiState.pendingGreetingFile == file
+                if (deferredActivation) s.clearHistory()
                 applyCardToSession(s, entry) { fileName -> uiState.cardPromptOverride(fileName) }
-                if (uiState.pendingGreetingFile == file) {
+                if (deferredActivation) {
                     uiState.pendingGreetingFile = null
                     val greeting = entry.card.spokenGreeting()
                     if (greeting.isNotEmpty()) launch { runCatching { s.speak(greeting) } }
