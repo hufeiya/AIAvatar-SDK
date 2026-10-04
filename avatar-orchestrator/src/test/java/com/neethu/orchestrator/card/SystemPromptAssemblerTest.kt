@@ -75,5 +75,22 @@ class SystemPromptAssemblerTest {
         assertFalse(bare.contains("<act:"))
         assertFalse(bare.contains("原生名"))
         assertTrue(bare.contains("<emo:happy:0.8>"))
+        // 每句换情绪的指导 + 示例里的情绪切换
+        assertTrue(bare.contains("句首"))
+        assertTrue(bare.contains("<emo:surprised:0.7>"))
+    }
+
+    @Test
+    fun `advertised canonical emotions match EmotionBlender defs exactly`() {
+        // 词表与 EmotionBlender.defs 键集必须一一对应（不多不少）：词表告知
+        // LLM 的名字若 defs 没有 → 被门控静默丢弃（think 曾这样整体失效）；
+        // defs 有而词表没有 → 模型永远不知道可以用。
+        val advertised = SystemPromptAssembler().emotionNames
+            .map { it.substringBefore('(') }
+            .toSet()
+        val defs = com.neethu.orchestrator.face.EmotionBlender(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+        ).defs.keys
+        assertEquals(defs, advertised)
     }
 }

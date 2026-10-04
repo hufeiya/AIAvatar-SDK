@@ -24,16 +24,22 @@ import kotlin.math.abs
  *     into corelib — the head/neck/eye bone overlay and its smoothing live
  *     there
  *  5. merge with AIRI's ownership rules and push into [AvatarController]:
- *     lip-sync owns the mouth (`aa/ih/ou/ee/oh`) while speaking; after speech
- *     ends the emotion re-asserts its mouth targets with a blend-back pass.
- *     Once everything the driver owns is at rest (no playback, no blend-back,
- *     emotion decayed to neutral) it goes quiet after one final zero write —
- *     manual expressions set from the app UI then own the face again, because
- *     the controller treats `setExpression(name, 0)` as a removal, so
- *     re-asserting zeros every frame would erase them.
+ *     the mouth channel blends lip-sync and emotion *per morph by max* —
+ *     visemes keep articulation (their targets are the stronger ones) while
+ *     the emotion's mouth garnish (happy→aa, surprised→oh, sad→mouth frown
+ *     garnish…) stays visible underneath instead of being erased while
+ *     speaking; the emotion re-claims the mouth on its own as the viseme
+ *     smoothing decays after speech ends. Once everything the driver owns is
+ *     at rest (no playback, emotion decayed to neutral) it goes quiet after
+ *     one final zero write — manual expressions set from the app UI then own
+ *     the face again, because the controller treats `setExpression(name, 0)`
+ *     as a removal, so re-asserting zeros every frame would erase them.
  *
  * The controller is switched to instant mode (`transitionDuration = 0`) — all
  * easing lives here, mirroring three-vrm's per-frame `setValue` semantics.
+ * Manual expressions from the app UI route through [applyManualExpression]
+ * (the blender's easing, no auto-reset) so they blend in instead of snapping
+ * in one frame.
  */
 class FaceDriver(
     private val controller: AvatarController,
@@ -56,11 +62,6 @@ class FaceDriver(
     @Volatile private var gazePoint = FloatArray(3)
     private var lastGazeWrite: FloatArray? = null
     private var lastGazeBase: FloatArray? = null
-
-    /** Viseme blend-back state: after speech, emotion mouth targets fade in from 0. */
-    private var visemeReturnTargets: Map<String, Float>? = null
-    private var visemeReturnProgress = 0f
-    private var visemeReturnDuration = 0.4f
 
     private var supportedExpressions: Set<String> = emptySet()
     private val sent = HashMap<String, Float>()
@@ -145,8 +146,32 @@ class FaceDriver(
         gazePoint[0] = x; gazePoint[1] = y; gazePoint[2] = z
     }
 
-    fun applyEmotion(cue: EmotionCue) {
-        blender.apply(cue)
+    /**
+     * Apply an emotion cue. [holdMs] = time at full expression before the
+     * auto-neutral blend; the session passes the playing clip's duration so a
+     * long sentence isn't cut to neutral mid-speech (default 3 s, AIRI's
+     * `setEmotionWithResetAfter`).
+     */
+    fun applyEmotion(cue: EmotionCue, holdMs: Long = DEFAULT_EMOTION_HOLD_MS) {
+        blender.apply(cue, holdMs)
+    }
+
+    /**
+     * Manual expression from the app UI (expression panel, `ai_cmd
+     * set_expression`): eases in like any emotion (the controller itself is
+     * in instant mode) but never auto-resets — it holds until replaced or
+     * [clearManualExpression] is called. Names resolve to the model's actual
+     * morph casing; unknown names are still applied (per-morph gate drops
+     * them at [send]).
+     */
+    fun applyManualExpression(name: String, weight: Float) {
+        val resolved = resolveExpression(name) ?: name
+        blender.apply(EmotionCue(resolved, weight.coerceIn(0f, 1f)), EmotionBlender.HOLD_NO_RESET)
+    }
+
+    /** Release the manual expression, easing back to neutral. */
+    fun clearManualExpression() {
+        blender.apply(EmotionCue("neutral", 1f))
     }
 
     fun clearEmotion() {
@@ -155,11 +180,12 @@ class FaceDriver(
 
     // ── Per-frame mix ─────────────────────────────────────────────────────
 
+    private var debugAccum = 0f
+
     fun tick(deltaSeconds: Float) {
         driverTime += deltaSeconds
 
         // 1. visemes from the active clip
-        val wasLipSyncActive = lipSyncActive
         var viseme = FloatArray(VowelDriver.VOWEL_COUNT)
         val playback = activePlayback
         val timeline = playback?.item?.timeline
@@ -180,15 +206,6 @@ class FaceDriver(
         // 2. emotion morph values
         val emotionValues = blender.tick(deltaSeconds)
 
-        // viseme blend-back: emotion mouth targets ease in from zero once speech stops
-        if (wasLipSyncActive && !lipSyncActive && visemeReturnTargets == null) {
-            visemeReturnTargets = blender.visemeTargets()
-            visemeReturnProgress = 0f
-            visemeReturnDuration = blender.currentBlendDuration
-        } else if (lipSyncActive) {
-            visemeReturnTargets = null
-        }
-
         // 3. blink (suppressed by eye-area emotions)
         var blink = microMotion.tickBlink(deltaSeconds)
         if (blender.eyeAreaActive) blink = 0f
@@ -198,31 +215,25 @@ class FaceDriver(
         // bone solving and its smoothing all live there.
         updateGaze(deltaSeconds)
 
-        // 4. merge + send
-        val visemeReturn = visemeReturnTargets
-        if (visemeReturn != null) {
-            visemeReturnProgress += deltaSeconds / visemeReturnDuration.coerceAtLeast(0.01f)
-        }
-        val returnEase = EmotionBlender.easeInOutCubic(visemeReturnProgress.coerceIn(0f, 1f))
+        // 4. merge + send. Mouth channel: per-morph max(viseme, emotion) —
+        // visemes stay dominant for articulation while the emotion's mouth
+        // garnish (happy→aa, surprised→oh…) remains visible under speech, and
+        // as the viseme smoothing decays at clip end the emotion re-claims the
+        // mouth on its own (no separate blend-back pass needed — the emotion
+        // value never got zeroed).
+        val visemeByName = HashMap<String, Float>(VowelDriver.VOWEL_COUNT)
         for (v in 0 until VowelDriver.VOWEL_COUNT) {
-            val name = VowelDriver.VOWEL_NAMES[v]
-            val value = when {
-                lipSyncActive -> viseme[v]
-                visemeReturn != null -> (visemeReturn[name] ?: 0f) * returnEase
-                else -> emotionValues[name] ?: 0f
-            }
+            visemeByName[VowelDriver.VOWEL_NAMES[v]] = viseme[v]
+        }
+        for ((name, value) in blendMouth(visemeByName, emotionValues)) {
             send(name, value)
         }
         for ((name, value) in emotionValues) {
-            if (name in EmotionBlender.VISEME_SET) continue // owned by the viseme channel above
+            if (name in EmotionBlender.VISEME_SET) continue // owned by the mouth channel above
             send(name, value)
         }
         send(BLINK, blink)
-
-        if (visemeReturn != null && visemeReturnProgress >= 1f) visemeReturnTargets = null
     }
-
-    private var debugAccum = 0f
 
     /**
      * Gaze channel: pick the base target from [gazeMode], let [SaccadeEngine]
@@ -287,8 +298,8 @@ class FaceDriver(
     private fun send(name: String, value: Float) {
         if (supportedExpressions.isNotEmpty() && name !in supportedExpressions) return
         val previous = sent[name]
-        // Dedup guard including zeros: at rest (no playback, no blend-back, emotion
-        // decayed to 0) the driver must go QUIET after its one final zero write.
+        // Dedup guard including zeros: at rest (no playback, emotion decayed
+        // to 0) the driver must go QUIET after its one final zero write.
         // Re-asserting zeros every frame is destructive — corelib treats
         // setExpression(name, 0) as targetWeights.remove(name), so a resting
         // zero-storm silently erases any manually applied mouth expression
@@ -304,6 +315,23 @@ class FaceDriver(
         private const val BLINK = "blink"
         private const val SEND_EPSILON = 0.004f
         private val EMPTY_SCORES = FloatArray(0)
+
+        /** Default hold for session-applied emotions when no clip duration is known. */
+        const val DEFAULT_EMOTION_HOLD_MS = 3_000L
+
+        /**
+         * Pure mouth-channel merge (unit-testable without a renderer): every
+         * viseme morph gets `max(viseme, emotion)` so neither source can erase
+         * the other; emotion entries on non-viseme morphs pass through the
+         * emotion loop untouched.
+         */
+        fun blendMouth(viseme: Map<String, Float>, emotion: Map<String, Float>): Map<String, Float> {
+            val out = LinkedHashMap<String, Float>(viseme.size)
+            for ((name, v) in viseme) {
+                out[name] = maxOf(v, emotion[name] ?: 0f)
+            }
+            return out
+        }
 
         /** Base-target movement beyond this (world units²) re-fixates exactly. */
         private const val BASE_RETRACK_EPS_SQ = 0.01f * 0.01f

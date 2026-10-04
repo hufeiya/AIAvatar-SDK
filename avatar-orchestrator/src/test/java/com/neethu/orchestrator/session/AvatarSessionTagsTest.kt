@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -69,6 +70,28 @@ class AvatarSessionTagsTest {
         override fun release() = Unit
     }
 
+    /** 入队后不自动播放的队列——验证"表情等句子开播才应用"用。 */
+    private class ManualQueue : PlaybackQueue {
+        override var listener: PlaybackQueue.Listener? = null
+        val queued = mutableListOf<PlaybackItem>()
+
+        override fun active(): ActivePlayback? = null
+
+        override fun enqueue(item: PlaybackItem) {
+            queued += item
+        }
+
+        fun playFirst() {
+            val item = queued.removeAt(0)
+            listener?.onPlaybackStarted(item)
+            listener?.onPlaybackEnded(item)
+        }
+
+        override fun stopAll(reason: String) = Unit
+
+        override fun release() = Unit
+    }
+
     /** LLM whose stream is a SharedFlow the test drives with tryEmit. */
     private class SharedFlowLlm : LlmAdapter {
         val stream = MutableSharedFlow<LlmStreamEvent>(extraBufferCapacity = 64)
@@ -76,7 +99,13 @@ class AvatarSessionTagsTest {
 
         override fun streamChat(messages: List<ChatMessage>, config: LlmConfig): Flow<LlmStreamEvent> {
             requests += messages
-            return stream
+            // 真实 adapter 在 Finish 后完成 flow；fake 也必须如此——send() 的
+            // 收尾段（flushTrailingEmotion 等）全在 collect 之后，流不完成就
+            // 永远走不到（trailing 表情测试踩过）。
+            return stream.transformWhile { event ->
+                emit(event)
+                event !is LlmStreamEvent.Finish
+            }
         }
     }
 
@@ -117,7 +146,7 @@ class AvatarSessionTagsTest {
     private fun newSession(
         llm: SharedFlowLlm,
         tts: FakeTts,
-        queue: RecordingQueue,
+        queue: PlaybackQueue,
         gestures: FakeGestureDriver,
         options: AvatarSession.Options = AvatarSession.Options(),
     ): AvatarSession =
@@ -161,15 +190,17 @@ class AvatarSessionTagsTest {
         testScheduler.runCurrent()
 
         assertEquals(listOf("wave"), gestures.played)
-        // 按发射顺序断言：cue 在流里出现即触发（§7.5 即发即执行语义）
+        // camera/action cue 即发即执行；emotion cue 挂到句子、开播瞬间才应用
+        // （§7.4：TTS 排队延迟下即发即执行会让表情在出声前被自动归零吃掉）。
+        // RecordingQueue 同步入队即播，所以 EmotionChanged 出现在其句子提交时。
         val tagEvents = events.filter {
             it is AvatarEvent.CameraChanged || it is AvatarEvent.EmotionChanged || it is AvatarEvent.ActionStarted
         }
         assertEquals(
             listOf(
                 AvatarEvent.CameraChanged(CameraShot.MEDIUM_SHOT),
-                AvatarEvent.EmotionChanged(EmotionCue("happy", 0.8f)),
                 AvatarEvent.ActionStarted("wave", "挥手问候"),
+                AvatarEvent.EmotionChanged(EmotionCue("happy", 0.8f)),
             ),
             tagEvents,
         )
@@ -279,6 +310,93 @@ class AvatarSessionTagsTest {
         val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
         assertEquals(listOf("happy"), emotions.map { it.cue.name })
         assertEquals(listOf("好。"), tts.synthesized)
+    }
+
+    @Test
+    fun `emotion tags apply when their sentence starts playing, not when streamed`() = runTest {
+        val llm = SharedFlowLlm()
+        val queue = ManualQueue()
+        val session = newSession(llm, FakeTts(), queue, FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:happy:0.8>今天真开心。"))
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:sad:0.9>可是明天要上班。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        // TTS 还没播：表情一个都不发（旧语义在标签吐出瞬间就驱动面部，
+        // 等句子开播时早已被 3 秒自动归零吃掉——真机"表情无变化"根因）
+        assertEquals(0, events.filterIsInstance<AvatarEvent.EmotionChanged>().size)
+        assertEquals(2, queue.queued.size)
+
+        queue.playFirst()
+        testScheduler.runCurrent()
+        assertEquals(listOf("happy"), events.filterIsInstance<AvatarEvent.EmotionChanged>().map { it.cue.name })
+        queue.playFirst()
+        testScheduler.runCurrent()
+        assertEquals(listOf("happy", "sad"), events.filterIsInstance<AvatarEvent.EmotionChanged>().map { it.cue.name })
+    }
+
+    @Test
+    fun `trailing emotion with no following sentence applies at turn end`() = runTest {
+        val llm = SharedFlowLlm()
+        val queue = ManualQueue()
+        val session = newSession(llm, FakeTts(), queue, FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // delta1：happy 挂到"好。"（未播放，不发事件）
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:happy:0.8>好。"))
+        // delta2：sad 之后没有句子了（句尾残余）→ 回合收尾时立即应用
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:sad:0.5>"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("sad"), events.filterIsInstance<AvatarEvent.EmotionChanged>().map { it.cue.name })
+    }
+
+    @Test
+    fun `interrupt drops pending emotion attachments`() = runTest {
+        val llm = SharedFlowLlm()
+        val queue = ManualQueue()
+        val session = newSession(llm, FakeTts(), queue, FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // 无句末标点 → 没有句子提交，cue 还在 pending
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:happy:0.8>嗯"))
+        session.interrupt()
+        // 打断后流即使继续吐，被取消的回合也不会再应用/发射表情
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        assertEquals(0, events.filterIsInstance<AvatarEvent.EmotionChanged>().size)
+    }
+
+    @Test
+    fun `same-name cue runs split into onsets and deferred steps`() {
+        // 协议教的眨眼模式 <emo:x:1><emo:x:0>：首条 t=0 应用，其余按步进补发
+        val blink = listOf(EmotionCue("blinkleft", 1f), EmotionCue("blinkleft", 0f))
+        assertEquals(
+            EmotionCue("blinkleft", 1f) to listOf(EmotionCue("blinkleft", 0f)),
+            AvatarSession.splitEmotionRun(blink),
+        )
+        // 混有不同名：句尾情绪生效，无补发
+        val mixed = listOf(EmotionCue("happy", 0.8f), EmotionCue("sad", 0.5f))
+        assertEquals(EmotionCue("sad", 0.5f) to emptyList<EmotionCue>(), AvatarSession.splitEmotionRun(mixed))
+        // 单条：原样 t=0
+        val single = listOf(EmotionCue("think", 0.6f))
+        assertEquals(EmotionCue("think", 0.6f) to emptyList<EmotionCue>(), AvatarSession.splitEmotionRun(single))
     }
 
     @Test

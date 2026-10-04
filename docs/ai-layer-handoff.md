@@ -44,7 +44,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `session/AvatarSession.kt` | **门面**：`send/sendAndAwait/interrupt/close/setCharacterCard`；`llmConfig`/`ttsConfig` 属性；`phase: StateFlow` + `events: SharedFlow`。内部组装 extractor→chunker→pipeline，collect LLM 流；任务 8 起三路分派 TagCue（emo→faceDriver / act→gestureDriver / cam→setCameraShot），`actionCatalog` 可注入属性，`speak()` 也走 extractor（开场白支持标签），Options 加 `protocolInstructions/enableLlmGestures/enableLlmCamera` |
+| `session/AvatarSession.kt` | **门面**：`send/sendAndAwait/interrupt/close/setCharacterCard`；`llmConfig`/`ttsConfig` 属性；`phase: StateFlow` + `events: SharedFlow`。内部组装 extractor→chunker→pipeline，collect LLM 流；任务 8 起三路分派 TagCue（act→gestureDriver / cam→setCameraShot 即发即执行；**emo 挂到其后第一个句子、开播瞬间才应用**（2026-10-04 第三轮，hold=clip 时长+1.2s 余量，防 TTS 排队期间被 3s 归零吃掉；同名序列=眨眼模式按 200ms 步进补发），`actionCatalog` 可注入属性，`speak()` 也走 extractor（开场白支持标签），Options 加 `protocolInstructions/enableLlmGestures/enableLlmCamera` |
 | `session/ConversationPhase.kt` | IDLE/THINKING/SPEAKING（注意与 corelib 的 `AvatarState` 渲染状态是两回事） |
 | `session/AvatarEvent.kt` | 会话事件流；任务 8 加 `ActionStarted(tag,label)` / `CameraChanged(shot)` |
 | `gesture/ActCatalog.kt` | `ActionEntry(tag,label,assetPath?,filePath?)`——LLM 动作目录条目（任务 8） |
@@ -54,7 +54,7 @@
 | `audio/PlaybackQueue.kt` / `AudioTrackPlaybackQueue.kt` | maxVoices=1 FIFO；写线程 4096 帧块写；stopAll 从调用线程 pause+flush 即时静音；`ActivePlayback.positionSeconds()` 用 AudioTimestamp 音频时钟（FaceDriver 靠它对口型） |
 | `audio/PcmDecoder.kt` | WAV 纯 Kotlin 解析（16bit PCM/8bit/32f、立体声下混）+ MP3/OGG 走 MediaExtractor+MediaCodec(MediaDataSource) |
 | `face/FaceDriver.kt` | Choreographer 每帧混合：口型(时间线采样+VowelDriver 状态机)→情绪→眨眼；**所有权规则**：说话中口型独占嘴部、结束后 viseme 从 0 淡入情绪目标(blend-back)、眼区情绪压制眨眼；`controller.setExpressionTransitionDuration(0)` 后全部缓动自绘 |
-| `face/EmotionBlender.kt` | AIRI expression.ts 组合表(happy=happy0.7+aa0.2 等7种)、easeInOutCubic、起点捕获当前显示值、3s 自动回 neutral、eyeAreaActive 判定 |
+| `face/EmotionBlender.kt` | 组合表 13 种标准情绪（2026-10-04 第三轮重做：VRM 预设打底 + ARKit 微表情叠层——eyeSquint/browDown/mouthPress 等，模型没有的 morph 按条门控优雅降级；`think` 曾因模型无此预设整条失效）；`apply(cue, holdMs)`（<0=不自动归零）、easeInOutCubic、起点捕获当前显示值、默认 3s 自动回 neutral、eyeAreaActive 判定 |
 | `face/MicroMotionEngine.kt` | 眨眼：sin(πt)/0.2s/间隔U(1,6)s |
 | `face/SaccadeEngine.kt` | 视线 saccade（任务 5）：AIRI eye-motions.ts 精确移植——注视点 0.8-4.8s 分段均匀换点 + ±0.25 抖动 + snap 重注视；`GazeMode`(CAMERA 默认/POINT/NONE)，FaceDriver.tick 写 corelib，头颈眼骨骼解算与平滑在 corelib `VrmLookAtEngine` |
 | `card/CharacterCard(+Parser)` | Tavern V1 平铺/V2/V3(`data.*`)；**PNG tEXt/zTXt 解析，`ccv3` 与酒馆 `chara` 双键兼容**（AIRI 只有导出没有导入，这是我们补的能力）；未知字段 extensions 保留 |
@@ -419,10 +419,12 @@ LLM SSE delta
        ├→ TagCue.Emotion / .Action / .Camera    ← 标签即抽即发(带缓冲语义)
        └→ cleanText ─→ SentenceChunker ─→ SpeechPipeline   ←【整条不动】
   └→ AvatarSession 分派（adapter 严禁依赖 corelib，cue 只带字符串，映射在本层做）：
-       Emotion → faceDriver.applyEmotion()      (现有)
-       Action  → gestureDriver.play(tag)        (新)
-       Camera  → controller.setCameraShot(map)  (Options.enableLlmCamera 门控)
-       同步 emit AvatarEvent(字幕/调试/UI 徽标)
+       Emotion → pendingEmotions →(挂到其后第一个句子的序号)→ 开播瞬间
+                 faceDriver.applyEmotion(cue, holdMs=clip时长+1.2s)  (2026-10-04 起)
+                 同名序列 <emo:x:1><emo:x:0> 开播后 200ms 步进补发（眨眼模式）
+       Action  → gestureDriver.play(tag)        (即发即执行)
+       Camera  → controller.setCameraShot(map)  (即发即执行；Options.enableLlmCamera 门控)
+       同步 emit AvatarEvent(字幕/调试/UI 徽标；EmotionChanged 在开播时发)
 ```
 
 各层改动：
@@ -431,9 +433,12 @@ LLM SSE delta
 - **orchestrator**：`gesture/ActCatalog.kt` + `gesture/GestureDriver.kt`（`play(tag)` = load + `playVrmaAnimation(loop=false)`；`interrupt()` 联动 `stop()`；session 构造参数可注入 fake 供单测）；`AvatarSession.Options` 加 `enableLlmGestures/enableLlmCamera`；`AvatarEvent` 加 `ActionStarted(tag,label)/CameraChanged(shot)`；**顺带修既有 bug**：卡片激活时 `assemble()` 追加一次协议块、`buildRequestMessages` 又追加一次 = 双重注入——改为 `assemble()` 只拼人设、协议块只在 `buildRequestMessages` 追加一次；`speak()` 路径也走 extractor（开场白支持标签）。
 - **app**：内置策展目录 + 外置关键词匹配；设置加「AI 可控镜头」开关（`ai_llm_camera`，默认开——给用户保住取景主权的后门）；produceState 装配 `actionCatalog`（useExternalAnimations 变化触发重装）；事件收集补新分支（CameraChanged 同步视角徽标）。
 
-### 7.5 时序语义（刻意的取舍）
+### 7.5 时序语义（刻意的取舍，2026-10-04 第三轮改版）
 
-标签在 **LLM 生成时刻**立即执行，**不对齐**到伴随句子的实际播出时刻。TTS 流水领先行 1~3 句，`<act:wave>` 会比它的语音早 2~5 秒——这是 AIRI 同款语义（现有情绪标记就是这么跑的，任务 1 真机观感"反应快"）。V2 备选：cue 挂到下一个 `SentenceStarted` 再执行（需重建标签→句子归属，复杂度上升，看真机观感再定）。
+**Emotion 与 Action/Camera 分家**（7.11 详述）：
+- **Emotion 挂到其后第一个句子上，开播瞬间才应用**——旧"生成时刻即执行"在 TTS 排队延迟下，表情在句子出声前就被 3 秒自动归零吃掉（真机整段回复表情零变化）。hold=clip 时长+1.2s 余量，长句中途不再归零；同一句内混多情绪取句尾情绪。
+- **Action/Camera 保持即发即执行**——动作是长持续态、镜头是模式切换，早几秒无妨（AIRI 同款"反应快"语义）。
+- 已知近似：**同一个 LLM delta 内**，句号后的标签会挂到**前一句**（cue 分派先于切句）；真实流式 delta 很小，标签几乎总落在句子开始前的独立 delta 里，实测无损。
 
 ### 7.6 动作生命周期与已知取舍
 
@@ -445,7 +450,7 @@ LLM SSE delta
 
 | 设计里的点 | 项目现状 |
 |---|---|
-| 口型 vs 情绪下半脸冲突防护 | **已存在且更精确**：FaceDriver 所有权——说话时口型独占 aa/ih/ou/ee/oh，结束 blend-back 淡入情绪嘴部目标，眼区情绪压制眨眼（决策 2 + A.1 第 15 条） |
+| 口型 vs 情绪下半脸冲突防护 | **max 混合**（2026-10-04 第三轮，替代旧"口型独占+blend-back"）：每 morph 取 max(口型, 表情)——口型目标(上限 0.49)通常强于表情 garnish 保住清晰度，表情嘴部动作说话中全程可见，句尾口型衰减后表情无级接管（无 pop，blend-back 机制已删）；眼区情绪压制眨眼（决策 2 + A.1 第 15 条） |
 | 流式标签解析器 | MarkerEmotionExtractor 已验证全部边界（跨 delta/holdback/防泄漏/flush 丢悬尾） |
 | `*动作*` 星号动作剥离 | SentenceChunker 已有（卡片常用语法），与新标签并行不悖 |
 | 未知表情名门控 | FaceDriver.send 的 availableExpressions 门控 |
@@ -491,6 +496,18 @@ LLM SSE delta
 
 **观测点**：`AvatarSession` 的 `system prompt: N chars, cameras=…, actions=…, directExpr=…`（注入核对）与 `raw reply: …`（模型原始输出——"没发标签"与"发了被丢弃"靠它区分）；`GestureDriver` 的 `idle set to …`；`SoulLinkRenderer` 的 `Loaded idle VRMA: …`。
 
+### 7.11 第三轮迭代：表情时序 + 微表情组合 + 口型/表情混合（2026-10-04，真机待验）
+
+用户反馈三个症状（同一份带 6+ 个 `<emo:>` 标签的回复）：①表情基本无变化；②手动试 angry/happy"一帧"没有过渡；③说话时嘴部动作掩盖表情嘴部。三个独立根因三个修法：
+
+**① 表情标签挂句开播（AvatarSession）**：旧语义 cue 在 LLM 吐标签瞬间就 `applyEmotion`，而 TTS 合成+排队把开播推迟数秒，3 秒自动归零在出声前就把表情吃掉——整段回复的表情全部提前衰减完。现在 `dispatchCues` 只把 cue 存进 `pendingEmotions`，`submitSentence` 挂到句序号（`emotionsBySequence`，ConcurrentHashMap——开播回调在音频线程），`onPlaybackStarted` 时 `applyEmotion(cue, holdMs=clip时长+1.2s余量)` 并在此时才 emit `EmotionChanged`；句尾残余标签在回合收尾 `flushTrailingEmotion` 立即应用；interrupt/新回合清空挂接表。**协议教的眨眼模式 `<emo:x:1><emo:x:0>` 依赖即发语义——挂接后用"同名序列"保留**：`splitEmotionRun`（纯函数+单测）判全部同名 → 首条 t=0 应用、其余按 200ms 步进补发（hold=-1 不重置归零计时）；混不同名 → 句尾情绪生效。已知近似：同一 delta 内句号后的标签挂到前一句（真实流式 delta 很小，无损）。**测试基建坑**：fake LLM 流必须在 Finish 后完成 flow（`transformWhile`），否则 `send()` 在 collect 之后的收尾段（含 flushTrailingEmotion）永远走不到。
+
+**② 微表情组合（EmotionBlender.defs 重做）**：真机默认模型 SK_Sun 是完整 ARKit 52 morph 集，但 7 个旧 def 只引用 VRM 预设名——其中 `think` 预设**根本不存在**，整条 def 被 FaceDriver 门控静默丢弃（`<emo:think>` 完全无效）。现在 13 种标准情绪全部重做：VRM 预设打底 + ARKit 微表情叠层（happy=笑+eyeSquint+cheekSquint 的 Duchenne 笑；sad=AU1+AU4 悲伤眉+mouthFrown；angry=browDown+noseSneer+mouthPress；surprised=三段眉抬+jawOpen+eyeWide+oh；think/asymmetric brow 微表情拼装；smug/shy/worried/confused/sleepy/determined 六种新增），模型缺的 morph 按条降级不炸。`SystemPromptAssembler.emotionNames` 词表同步（带中文释义）+ 协议块教"标签放句首、每 1~2 句换一个"；**`SystemPromptAssemblerTest` 锁死"词表=defs 键集"不变量**（分叉是 think 式静默失效的根源）。
+
+**③ 口型/表情 max 混合（FaceDriver）**：旧所有权规则"说话中口型独占 aa/ih/ou/ee/oh"把情绪 def 的嘴部 garnish（happy→aa、surprised→oh、sad→mouthFrown 叠加…）说话期间全部抹掉。改为每 morph 取 `max(口型, 表情)`（`blendMouth` 纯函数+单测）：口型目标（WINNER_CAP 0.7×GAIN 0.7≈0.49）通常强于 garnish 保住清晰度，表情嘴部动作说话中全程可见，句尾口型平滑衰减后表情无级接管——旧的 viseme blend-back 机制整个删除（表情嘴部值从未被清零，无 pop 可back）。
+
+**手动表情通道（②的伴生修复）**："一帧闪过"的根因：FaceDriver.start() 把控制器切 instant 模式（缓动全在 blender 自绘），而面板/`ai_cmd set_expression` 直写 `controller.setExpression` → 无缓动。新增 `FaceDriver.applyManualExpression/clearManualExpression`（blender apply + `HOLD_NO_RESET`——缓动进场、保持到替换/清除），面板点击与 ai_cmd 有会话时走此通道（`AiChatDebugHooks.manualExpression/clearManualExpression` 两个 hook），无会话回退直写（此时控制器不在 instant 模式，仍有默认 300ms 过渡）。
+
 ## 附录 A：观感调参速查（成功路径验证后更新此表）
 
 ### A.1 任务 1 实测新坑（每条都真踩过，2026-10-03）
@@ -527,6 +544,8 @@ LLM SSE delta
 30. **第三方原生日志应用侧关不掉，只能治本+换 release 包（2026-10-04 用户反馈日志噪音）**：`FaceDetectorV2Jni`（ML Kit，每次检测一对 V 级）与 `SkJpegEncoder`（"skia-debug"，每次 Bitmap.compress JPEG 一串 I 级）都**不走 android.util.Log，发送端无法在应用代码里关**。实测结论（release 用 debug 签名对照）：①`SkJpegEncoder` 只在 **debuggable 应用**上出现——release 包完全消失（app 的 release 已挂 debug 签名可直接装）；②`FaceDetectorV2Jni` release 照在，唯一手段是**降低调用频次**：`UserCameraTracker` 加帧级门（`DETECT_INTERVAL_MS=80`，检测 30fps→≈12.5fps，snapshot-only 帧不进 ML Kit），实测 V 级日志 ~60 行/s→~20 行/s（-66%）且 CPU 同降，注视追踪靠 One-Euro 平滑无感（face age ≤80ms）。自己代码的教训：分析帧路径上的"每帧一条"日志(任何层级)在 30fps 下都是灾难，日志量按帧率乘出来。读日志侧的治标：`adb logcat -s <我们的tag>`（VideoTracker/FreeSpeech/LlmPrompt/AIDebug）。
 31. **首句等待长的排查顺序（2026-10-04 用户"发送→说话间隔太久"实测归因）**：先按三分法分段（见下方观测点段），**大头几乎总在 LLM ttfb**。本轮实测拆解：REQUEST 27.96s → 首条 SentenceQueued 32.44s（**LLM 首句 4.48s**）→ SentenceStarted 33.69s（TTS 合成 1.24s），感知等待 5.72s。LLM 侧两个叠加因素：①**各家混合推理模型默认开思考**——思考 token 走 `reasoning_content` 流式返回而适配器只读 `delta.content`，思考时间全部变成首句前的纯等待；修法=`llmExtraBody()`（AiProviders.kt）按服务商方言分发：火山 doubao-seed 系 `thinking: {"type":"disabled"}`、**硅基流动 Qwen3 系 `enable_thinking: false`（2026-10-04 用户实测千问慢的根因，Qwen3 混合推理默认开思考；Qwen3-VL-Instruct 非思考模型带上是 no-op）**；deepseek 系两边都不认识对方参数，返回 null 不发防 400。REQUEST 头行 `thinking=off` 确认生效（两种参数名都认）；②前缀缓存是否命中此前无观测——LLM 适配器已带 `stream_options.include_usage`，usage（prompt/cached/completion tokens）解析进 `LlmStreamEvent.Finish.usage`，RESPONSE 头行 `tok: prompt=A cached=B completion=C`，**cached>0 = 钉住协议的前缀缓存命中**（首请求冷缓存数值小属正常，看同上下文第二请求起）。TTS 侧 1.24s 是结构性的：火山适配器每句新建 WS 连接（TLS 握手+StartConnection+StartSession 2-3 个 RTT）且收齐整段音频才返回（`TtsAdapter` 句级整段语义）——要再降需做"连接复用/首包即播"，是改 `PlaybackItem` 语义的中型工程，等 thinking-off 真机复测后再决定。
 
+32. **表情三连坑（2026-10-04 用户"表情没变化/一帧/口型掩盖"实测归因，第三轮已修，见 7.11）**：①**标签即发即执行 × TTS 排队延迟 = 表情必然提前衰减**——`<emo:>` 吐出瞬间应用，句子开播晚数秒，3 秒归零在出声前把表情吃掉；凡"cue→视觉通道"的链路都要问一句"这个通道的持续态会不会被时间吃掉"，会就必须挂到播放时刻（act/cam 是长持续态/模式所以幸免）。②**def 引用模型不存在的预设 = 整条静默失效**——SK_Sun 无 `think` 预设，`<emo:think>` 一个 morph 都不落；组合表必须用模型实有 morph 叠层，且词表与 defs 键集要有单测锁死（`SystemPromptAssemblerTest`）。③**全局 instant 模式下任何直写控制器的路径都是一帧**——FaceDriver 为自绘缓动把控制器切 0ms，手动表情必须走 blender 通道（`HOLD_NO_RESET`）而不是 `controller.setExpression`。另：VRM 预设在 ARKit 模型上的 bind 极粗（angry=嘴角下压、sad=browDown、relaxed=browInnerUp），单预设当"全脸表情"用观感必然单薄；`normalizeBindWeights` 把每条预设的最强 bind 归一到 1.0，预设权重 0.5 → 实际幅度比老模型大，def 里的权重按 0.12~0.6 起。
+
 ### A.2 调参速查表
 
 | 现象 | 调哪里 |
@@ -538,8 +557,11 @@ LLM SSE delta
 | 嘴张不开/太夸张 | 优先查 A.1 第 5 条（电平归一化是否生效，看 `FaceDriver` 日志 volume）；仍需要时再动 `VowelDriver.OUTPUT_GAIN / WINNER_CAP` |
 | 口型拖泥带水 | `RELEASE_RATE↑`（30→更高） |
 | 口型抖动 | `ATTACK_RATE↓` |
-| 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑） |
-| 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）与 3s 自动回落 |
+| 表情太僵 | `EmotionBlender.defs` 主权重（AIRI 用 0.7~0.8 修过僵笑；ARKit 微表情叠层权重 0.12~0.6） |
+| 情绪切太快/太慢 | `blendDuration`（0.15~0.6s）；自动回落时长=开播时 hold（clip 时长+1.2s，2026-10-04 起），无句子挂接的残余默认 3s |
+| 表情全程无变化 | 先 `grep InfoStreamDectect` 看模型有没有发 `<emo:>`（RESPONSE raw）；发了→看 `EmotionChanged` 事件时间戳是否紧贴 `SentenceStarted`（挂接生效），再确认情绪名在协议词表里（A.1 第 32 条②） |
+| 手动表情一帧闪过/没有过渡 | 面板/`ai_cmd set_expression` 应走 FaceDriver 手动通道（缓动+不归零）；看 `AIDebug` 返回行有无 "(eased, holds until cleared)"（无会话回退直写） |
+| 说话时表情嘴部被口型盖住 | 2026-10-04 起是 max 混合不该再发生；仍盖=表情 garnish 权重低于口型，调 `EmotionBlender.defs` 里对应 viseme 名目条（aa/oh/ee）或查 `FaceDriver.blendMouth` 单测 |
 | 口型完全不动 | 先看 logcat `FaceDriver`（2Hz 采样：t/volume/top）与 `AvatarSession`（句失败堆栈），再对照 A.1 第 1/2/3/4 条 |
 | 模型不发标签/用（括号）演戏 | 先看 **`LlmPrompt` 的 RESPONSE raw 段**（`adb logcat -s LlmPrompt`）区分"没发"vs"发了被丢弃"（A.1 第 18 条）；REQUEST 段核对 protocol（协议三段清单）与 REQUEST user 行里的【当前镜头视角】前缀是否注入（视角行挂在末尾 user 消息上，2026-10-04 起）；协议只在每上下文首请求钉一次（`protocol pinned:` 行=重钉时机）；温度是否 ≤0.6 |
 | 动作播完僵住/回到张开双臂 | 待机没挂上：看 `SoulLinkRenderer` 有无 `Loaded idle VRMA`、`GestureDriver` 有无 `idle set to`；`ai_cmd set_idle <文件名>` 手动挂 |
@@ -560,7 +582,7 @@ LLM SSE delta
 | 头反着看/斜视 | 先看 `VrmLookAt: bound` 日志 `faceLocal=` 是否离谱（绑定过早/翻转顺序错，见 A.1 第 24 条①）；再查单测 GazeMathTest 的 yaw 符号约定是否被改 |
 | 注视点太飘/太木 | saccade 抖动幅度= SaccadeEngine `jitterAmplitude`（默认 0.25 世界单位，AIRI 值）；头颈跟随速度= VrmLookAtEngine `HEAD_SMOOTH_RATE`（7≈300ms 收敛，调大更跟手） |
 
-验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。**问答链路日志统一前缀 `[InfoStreamDectect] `（2026-10-04，用户排查等待时长用，拼写保留用户原样）**：覆盖 LlmPrompt 的 REQUEST/RESPONSE 全部行、AvatarSession 的 multimodal turn/prompt(persona+protocol 规模)/raw reply/clip/sentence failed 行、AIDebug 的 `chat:` 事件流、FreeSpeech 的 utterance/barge-in——`adb logcat | grep InfoStreamDectect` 即得完整时序（REQUEST 时间戳→首条 SentenceQueued=LLM 出句耗时，SentenceQueued→SentenceStarted=TTS 合成耗时，首句 Started−REQUEST=用户感知的等待下限）。**首响三分法之上 LLM 段已细化**（2026-10-04）：RESPONSE 头行 `ttfb=Xms`=请求到首个文本 delta（首句等待的大头，与 REQUEST 头行时间戳相减一致）、`stream=Yms`=整个流的时长、`tok: prompt/cached/completion`=服务商上报的 token 用量（`cached>0`=钉住协议的前缀缓存命中；`cached=-1`=服务商没报明细）；REQUEST 头行 `thinking=`=是否显式关思考。
+验证期临时加的观测点（保留）：`FaceDriver` debugTick（播放中 2Hz 采样日志）、`AvatarSession` 句失败堆栈与 `clip #N pcm=X.XXs` 时长日志（核对句尾是否被截断，见 A.1 第 13 条）、`AIDebug` 的 `chat:` 事件时序（SentenceQueued/Started/Ended/EmotionChanged/Turn*；**EmotionChanged 2026-10-04 起在句子开播时刻发射**（紧贴 SentenceStarted=挂接生效），不再是标签吐出时刻）与 `send_chat`/`interrupt_chat`/`chat_state` 调试命令（用法见 docs/ai-debug-intents.md）。**问答链路日志统一前缀 `[InfoStreamDectect] `（2026-10-04，用户排查等待时长用，拼写保留用户原样）**：覆盖 LlmPrompt 的 REQUEST/RESPONSE 全部行、AvatarSession 的 multimodal turn/prompt(persona+protocol 规模)/raw reply/clip/sentence failed 行、AIDebug 的 `chat:` 事件流、FreeSpeech 的 utterance/barge-in——`adb logcat | grep InfoStreamDectect` 即得完整时序（REQUEST 时间戳→首条 SentenceQueued=LLM 出句耗时，SentenceQueued→SentenceStarted=TTS 合成耗时，首句 Started−REQUEST=用户感知的等待下限）。**首响三分法之上 LLM 段已细化**（2026-10-04）：RESPONSE 头行 `ttfb=Xms`=请求到首个文本 delta（首句等待的大头，与 REQUEST 头行时间戳相减一致）、`stream=Yms`=整个流的时长、`tok: prompt/cached/completion`=服务商上报的 token 用量（`cached>0`=钉住协议的前缀缓存命中；`cached=-1`=服务商没报明细）；REQUEST 头行 `thinking=`=是否显式关思考。
 
 ## 附录 B：记忆索引（新会话自动加载）
 

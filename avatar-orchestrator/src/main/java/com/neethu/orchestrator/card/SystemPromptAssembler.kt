@@ -17,8 +17,20 @@ package com.neethu.orchestrator.card
  * so the protocol always reflects the live session configuration.
  */
 class SystemPromptAssembler(
-    private val emotionNames: List<String> =
-        listOf("happy", "sad", "angry", "surprised", "think", "relaxed", "neutral"),
+    /**
+     * 标准情绪词表（随协议块告知 LLM）。必须与
+     * [com.neethu.orchestrator.face.EmotionBlender.defs] 的键一一对应——
+     * SystemPromptAssemblerTest 锁这个不变量（`think` 曾不在模型预设里、
+     * 整条 def 被门控丢弃，词表与 defs 分叉是这类静默失效的根源）。
+     * 括号内中文释义帮中文语境的模型选对情绪。
+     */
+    val emotionNames: List<String> =
+        listOf(
+            "happy(开心)", "sad(难过)", "angry(生气)", "surprised(惊讶)",
+            "think(思考)", "relaxed(放松)", "smug(得意)", "shy(害羞)",
+            "worried(担忧)", "confused(困惑)", "sleepy(困倦)", "determined(坚定)",
+            "neutral(平静)",
+        ),
 ) {
 
     /** Persona only — protocol blocks live in [multimodalProtocolBlock]. */
@@ -66,7 +78,9 @@ class SystemPromptAssembler(
                 append("。例如眨一下左眼 = <emo:$winkName:1> 紧接着 <emo:$winkName:0>，闭着眼保持 = 只发 <emo:$winkName:1>")
             }
         }
-        append("。情绪变化处发一个。\n")
+        append(
+            "。情绪标签放在它修饰的那句话的句首，说话时大约每 1~2 句换一个情绪（表情跟着内容走），同一句话不要堆多个情绪标签。\n",
+        )
         if (cameras.isNotEmpty()) {
             append("- 镜头 <cam:机位>：${cameras.joinToString(" ") { "${it.first}(${it.second})" }}。回复开头或场景转换时给一个，一个回复通常 0~2 个。\n")
         }
@@ -84,6 +98,7 @@ class SystemPromptAssembler(
         if (cameras.isNotEmpty()) append("<cam:medium_shot>")
         append("<emo:happy:0.8>当然可以！")
         if (winkName != null) append("<emo:$winkName:1><emo:$winkName:0>看到我眨眼了吗？")
+        append("<emo:surprised:0.7>哇，你居然真的看到了！")
         if (gesture != null) append("<act:$gesture>很高兴见到你！")
         append("\n")
         append("记住：动作和表情一律用上面的行内标签实现，绝不用（括号）或*星号*描写。")

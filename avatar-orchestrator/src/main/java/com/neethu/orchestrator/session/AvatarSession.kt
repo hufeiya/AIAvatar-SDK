@@ -34,6 +34,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -179,6 +180,17 @@ class AvatarSession(
      */
     private var pinnedProtocol: String? = null
     private var turnJob: Job? = null
+    /**
+     * 等待挂接的表情 cue 列表（§7.4）：标签语义上修饰"它后面的那句话"，而
+     * TTS 合成+排队常把开播推迟数秒——若在 LLM 吐标签瞬间就驱动面部，3 秒
+     * 自动归零会在句子出声前就把表情吃掉（真机：整段回复的表情全部提前衰减
+     * 完，脸全程无变化）。cue 先存这里，[submitSentence] 挂到句序号上，开播
+     * 瞬间才应用并保持"clip 时长 + 余量"。同名连续序列（协议教的眨眼模式
+     * `<emo:x:1><emo:x:0>`）开播后按步进补发后续 cue；句尾残余在回合收尾时
+     * 立即应用。
+     */
+    private val pendingEmotions = ArrayList<EmotionCue>()
+    private val emotionsBySequence = java.util.concurrent.ConcurrentHashMap<Int, List<EmotionCue>>()
 
     init {
         lipSyncProcessor?.let { lsp ->
@@ -194,6 +206,14 @@ class AvatarSession(
             override fun onPlaybackStarted(item: PlaybackItem) {
                 queue.active()?.let { faceDriver?.onPlaybackStarted(item, it) }
                 scope.launch(Dispatchers.Main.immediate) {
+                    // 表情在开播瞬间应用（§7.4）：hold = clip 时长 + 余量，长句
+                    // 不再中途被默认 3 秒归零切断。
+                    emotionsBySequence.remove(item.sequence)?.let { cues ->
+                        val holdMs = item.pcm.size * 1_000L / item.sampleRateHz.coerceAtLeast(1) +
+                            EMOTION_HOLD_MARGIN_MS
+                        applyEmotionCues(faceDriver, cues, holdMs)
+                            ?.let { emit(AvatarEvent.EmotionChanged(it)) }
+                    }
                     // Normal turns arrive here via THINKING; speak()'s greeting
                     // turns start from IDLE — either way playback means speaking.
                     if (_phase.value != ConversationPhase.SPEAKING) {
@@ -285,6 +305,8 @@ class AvatarSession(
             chunker.reset()
             replyBuffer.setLength(0)
             cleanBuffer.setLength(0)
+            pendingEmotions.clear()
+            emotionsBySequence.clear()
             pipeline.beginTurn()
             store.appendUser(text)
             // 首句延迟三段法（grep InfoStreamDectect）：REQUEST→首个 TextDelta 的
@@ -311,6 +333,8 @@ class AvatarSession(
                     chunker.feed(tail.cleanText).forEach { submitSentence(it, ttsCfg) }
                 }
                 chunker.flush().forEach { submitSentence(it, ttsCfg) }
+                // 句尾残余标签（其后没有新句子了）：立即应用
+                flushTrailingEmotion()
                 pipeline.endTurn()
                 pipeline.awaitTurnComplete()
                 // 观测点：原始回复（含标签）——排查"模型没发标签/标签被丢弃"先看这行
@@ -363,6 +387,8 @@ class AvatarSession(
         val job = scope.launch {
             extractor.reset()
             chunker.reset()
+            pendingEmotions.clear()
+            emotionsBySequence.clear()
             pipeline.beginTurn()
             try {
                 val tagged = extractor.feed(text)
@@ -370,6 +396,7 @@ class AvatarSession(
                 dispatchCues(tagged.cues + tail.cues)
                 (chunker.feed(tagged.cleanText + tail.cleanText) + chunker.flush())
                     .forEach { submitSentence(it, ttsCfg) }
+                flushTrailingEmotion()
                 pipeline.endTurn()
                 pipeline.awaitTurnComplete()
                 _phase.value = ConversationPhase.IDLE
@@ -395,6 +422,8 @@ class AvatarSession(
     fun interrupt(reason: String = "user-interrupt") {
         turnJob?.cancel()
         turnJob = null
+        pendingEmotions.clear()
+        emotionsBySequence.clear()
         gestureDriver?.stop()
         pipeline.cancelTurn(reason)
         scope.launch(Dispatchers.Main.immediate) {
@@ -422,9 +451,11 @@ class AvatarSession(
     }
 
     /**
-     * Multimodal dispatch (docs/ai-layer-handoff.md §7.4): cues fire the
-     * moment the LLM emits them (AIRI semantics — reactions read as fast);
-     * unknown names are silently dropped, never surfaced as errors.
+     * Multimodal dispatch (docs/ai-layer-handoff.md §7.4)：camera/action cue
+     * 在 LLM 吐出的瞬间执行（反应快，且动作/镜头是持续态，早几秒无妨）；
+     * emotion cue 改为挂到其后第一个句子上、开播瞬间才驱动面部——TTS 排队
+     * 延迟下"即发即执行"会让表情在出声前就被 3 秒归零吃掉（真机踩过）。
+     * Unknown names are silently dropped, never surfaced as errors.
      */
     private fun dispatchCues(cues: List<TagCue>) {
         for (cue in cues) when (cue) {
@@ -437,15 +468,13 @@ class AvatarSession(
                 val isCanonical = fd != null && canonical in fd.knownEmotionNames
                 val direct = fd?.resolveExpression(cue.name)
                 if (fd == null || isCanonical || direct != null) {
-                    val emotion = EmotionCue(
+                    pendingEmotions += EmotionCue(
                         when {
                             fd == null || isCanonical -> canonical
                             else -> direct!!
                         },
                         cue.intensity,
                     )
-                    fd?.applyEmotion(emotion)
-                    emit(AvatarEvent.EmotionChanged(emotion))
                 }
             }
             is TagCue.Action -> {
@@ -468,7 +497,46 @@ class AvatarSession(
     private fun submitSentence(sentence: String, ttsCfg: TtsConfig) {
         if (sentence.isBlank()) return
         val sequence = pipeline.submit(sentence, ttsCfg)
+        // 标签修饰其后的句子：挂到这句的序号上，开播时应用（见 [pendingEmotions]）。
+        pendingEmotions.takeIf { it.isNotEmpty() }?.let {
+            emotionsBySequence[sequence] = it.toList()
+            it.clear()
+        }
         emit(AvatarEvent.SentenceQueued(sequence, sentence))
+    }
+
+    /** 回合收尾：仍没等到句子的表情 cue（句尾标签）立即应用。 */
+    private fun flushTrailingEmotion() {
+        if (pendingEmotions.isEmpty()) return
+        val cues = ArrayList(pendingEmotions)
+        pendingEmotions.clear()
+        applyEmotionCues(faceDriver, cues, FaceDriver.DEFAULT_EMOTION_HOLD_MS)
+            ?.let { emit(AvatarEvent.EmotionChanged(it)) }
+    }
+
+    /**
+     * 开播时应用一句话的表情 cue 序列。全部同名（协议教的眨眼/开合模式
+     * `<emo:x:1>` 紧跟 `<emo:x:0>`）→ 首个立即应用（hold 覆盖整句），后续
+     * 按 [EMOTION_STEP_MS] 步进补发（不重置归零计时）；混有不同名 → 句尾
+     * 情绪生效（同一句内互相矛盾的情绪只有最后一个能落地）。返回 t=0 应用
+     * 的 cue（供发 EmotionChanged 事件），无 cue/无驱动器返回 null。
+     */
+    private fun applyEmotionCues(
+        faceDriver: FaceDriver?,
+        cues: List<EmotionCue>,
+        holdMs: Long,
+    ): EmotionCue? {
+        val fd = faceDriver ?: return null
+        if (cues.isEmpty()) return null
+        val (first, deferred) = splitEmotionRun(cues)
+        fd.applyEmotion(first, holdMs)
+        deferred.forEachIndexed { index, cue ->
+            scope.launch(Dispatchers.Main.immediate) {
+                delay(EMOTION_STEP_MS * (index + 1))
+                fd.applyEmotion(cue, -1)
+            }
+        }
+        return first
     }
 
     /**
@@ -631,6 +699,26 @@ class AvatarSession(
 
         /** 问答链路日志的统一前缀（用户 grep 用，覆盖提示词/回复/实时播放事件）。 */
         private const val STREAM_PREFIX = "[InfoStreamDectect] "
+
+        /** 句子挂接表情的保持余量（clip 时长之上）：句尾留一段表情余韵再归零。 */
+        private const val EMOTION_HOLD_MARGIN_MS = 1_200L
+
+        /** 同名表情序列（眨眼模式）补发步长：闭→开的间隔≈一次眨眼。 */
+        private const val EMOTION_STEP_MS = 200L
+
+        /**
+         * 纯函数拆分一句话的表情 cue 序列（单测锁定分支）：全部同名（协议教
+         * 的眨眼/开合模式）→（首个, 其余按步进补发）；混有不同名或单条 →
+         * （句尾情绪, 无补发）。
+         */
+        internal fun splitEmotionRun(cues: List<EmotionCue>): Pair<EmotionCue, List<EmotionCue>> {
+            val firstName = cues.first().name
+            return if (cues.size == 1 || cues.any { it.name != firstName }) {
+                cues.last() to emptyList()
+            } else {
+                cues.first() to cues.drop(1)
+            }
+        }
 
         /** `<cam:…>` tag → preset shot (tag values are the enum names lowercased). */
     private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(

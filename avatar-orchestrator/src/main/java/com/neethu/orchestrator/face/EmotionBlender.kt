@@ -17,8 +17,8 @@ import kotlin.math.min
  *  - transitions ease with `easeInOutCubic` starting from the *currently
  *    displayed* values (no zero-then-pop)
  *  - morphs not carried over into the new emotion ease back to 0
- *  - after [autoResetDelayMs] the face returns to `neutral` (AIRI's
- *    `setEmotionWithResetAfter(…, 3000)`)
+ *  - after the hold delay (default [autoResetDelayMs], per-apply overridable)
+ *    the face returns to `neutral` (AIRI's `setEmotionWithResetAfter(…, 3000)`)
  *
  * Main-confined: [apply] hops to the main dispatcher, [tick] is called from
  * the Choreographer loop.
@@ -30,15 +30,124 @@ class EmotionBlender(
 
     data class Def(val targets: List<Pair<String, Float>>, val blendDuration: Float)
 
-    /** AIRI's emotionStates table (weights ≤0.8 fix the "stiff smile" issue #590). */
+    /**
+     * Micro-expression combos (§7.10). Each entry layer ARKit detail morphs on
+     * top of the VRM preset base, so the canonical seven read as full faces
+     * instead of single mouth/brow pops on ARKit-set models (真机默认模型
+     * SK_Sun：`think` 预设不存在 → 旧单 morph def 整条被 FaceDriver 门控丢弃，
+     * `<emo:think>` 完全无效；现在 think 用 brow/eye/mouth 微表情拼出来)。
+     * Names the loaded model doesn't have are dropped per-morph by
+     * [FaceDriver.send]'s gate — combos degrade gracefully on smaller sets.
+     * Blink is deliberately never used (auto-blink owns that morph); droopy
+     * eyes use eyeSquint instead.
+     */
     val defs: Map<String, Def> = mapOf(
-        "happy" to Def(listOf("happy" to 0.7f, "aa" to 0.2f), 0.4f),
-        "sad" to Def(listOf("sad" to 0.7f, "oh" to 0.15f), 0.4f),
-        "angry" to Def(listOf("angry" to 0.7f, "ee" to 0.3f), 0.3f),
-        "surprised" to Def(listOf("surprised" to 0.8f, "oh" to 0.4f), 0.15f),
+        "happy" to Def(
+            listOf(
+                "happy" to 0.7f,
+                "eyeSquintLeft" to 0.35f, "eyeSquintRight" to 0.35f,
+                "cheekSquintLeft" to 0.2f, "cheekSquintRight" to 0.2f,
+                "aa" to 0.12f,
+            ),
+            0.4f,
+        ),
+        "sad" to Def(
+            listOf(
+                "sad" to 0.3f,             // 本模型=眉中下压；与 browInnerUp 叠成 AU1+AU4 悲伤眉
+                "browInnerUp" to 0.55f,
+                "mouthFrownLeft" to 0.35f, "mouthFrownRight" to 0.35f,
+                "eyeSquintLeft" to 0.12f, "eyeSquintRight" to 0.12f,
+            ),
+            0.5f,
+        ),
+        "angry" to Def(
+            listOf(
+                "angry" to 0.55f,          // 本模型=嘴角下压
+                "browDownLeft" to 0.6f, "browDownRight" to 0.6f,
+                "noseSneerLeft" to 0.22f, "noseSneerRight" to 0.22f,
+                "mouthPressLeft" to 0.3f, "mouthPressRight" to 0.3f,
+            ),
+            0.3f,
+        ),
+        "surprised" to Def(
+            listOf(
+                "surprised" to 0.8f,       // 本模型=三段眉抬+jawOpen
+                "eyeWideLeft" to 0.55f, "eyeWideRight" to 0.55f,
+                "oh" to 0.25f,             // O 形嘴（mouthPucker+jawOpen），口型通道 max 混合下仍可见
+            ),
+            0.15f,
+        ),
         "neutral" to Def(listOf("neutral" to 1.0f), 0.6f),
-        "think" to Def(listOf("think" to 0.7f), 0.5f),
-        "relaxed" to Def(listOf("relaxed" to 0.7f), 0.4f),
+        "think" to Def(
+            listOf(
+                "browDownLeft" to 0.4f, "browDownRight" to 0.15f,   // 单侧皱眉=审视
+                "browInnerUp" to 0.2f,
+                "eyeSquintLeft" to 0.3f, "eyeSquintRight" to 0.15f, // 跟随同侧眯眼
+                "mouthPressLeft" to 0.3f, "mouthPressRight" to 0.3f,
+            ),
+            0.5f,
+        ),
+        "relaxed" to Def(
+            listOf(
+                "relaxed" to 0.6f,         // 本模型=browInnerUp
+                "eyeSquintLeft" to 0.25f, "eyeSquintRight" to 0.25f,
+                "happy" to 0.2f,           // 淡淡的笑
+            ),
+            0.4f,
+        ),
+        // ── 扩充标准情绪（协议块词表同步，SystemPromptAssemblerTest 锁一致） ──
+        "smug" to Def(
+            listOf(
+                "mouthSmileLeft" to 0.55f, "mouthSmileRight" to 0.2f, // 单侧上翘=坏笑
+                "eyeSquintLeft" to 0.35f, "eyeSquintRight" to 0.1f,
+                "browDownLeft" to 0.2f,
+            ),
+            0.35f,
+        ),
+        "shy" to Def(
+            listOf(
+                "happy" to 0.35f,
+                "browInnerUp" to 0.4f,
+                "eyeSquintLeft" to 0.35f, "eyeSquintRight" to 0.35f, // 羞怯低眼
+                "cheekSquintLeft" to 0.2f, "cheekSquintRight" to 0.2f,
+            ),
+            0.5f,
+        ),
+        "worried" to Def(
+            listOf(
+                "browInnerUp" to 0.6f,
+                "eyeWideLeft" to 0.3f, "eyeWideRight" to 0.3f,
+                "mouthFrownLeft" to 0.3f, "mouthFrownRight" to 0.3f,
+                "sad" to 0.2f,
+            ),
+            0.4f,
+        ),
+        "confused" to Def(
+            listOf(
+                "browInnerUp" to 0.5f, "browDownRight" to 0.25f,     // 一边眉挑一边压
+                "eyeSquintLeft" to 0.3f,
+                "mouthPressLeft" to 0.2f,
+                "mouthShrugLower" to 0.35f, "mouthShrugUpper" to 0.2f, // 嘴唇撇缩"huh?"
+            ),
+            0.4f,
+        ),
+        "sleepy" to Def(
+            listOf(
+                "relaxed" to 0.4f,
+                "eyeSquintLeft" to 0.45f, "eyeSquintRight" to 0.45f, // 眼皮沉重
+                "browDownLeft" to 0.2f, "browDownRight" to 0.2f,
+                "aa" to 0.12f,             // 微张嘴（哈欠感）
+            ),
+            0.6f,
+        ),
+        "determined" to Def(
+            listOf(
+                "browDownLeft" to 0.5f, "browDownRight" to 0.5f,
+                "mouthPressLeft" to 0.4f, "mouthPressRight" to 0.4f,
+                "eyeSquintLeft" to 0.15f, "eyeSquintRight" to 0.15f,
+            ),
+            0.3f,
+        ),
     )
 
     private val mainScope = CoroutineScope(scope.coroutineContext + Job()) // dispatch context preserved
@@ -73,19 +182,22 @@ class EmotionBlender(
             return false
         }
 
-    /** Blend duration of the active emotion (used for the viseme blend-back pass). */
-    val currentBlendDuration: Float get() = duration
-
-    /** Current viseme-name targets of the active emotion (for the blend-back pass). */
-    fun visemeTargets(): Map<String, Float> =
-        targets.filterKeys { it in VISEME_SET }
-
     /** Apply an emotion cue (cancels any pending auto-reset). */
     fun apply(cue: EmotionCue) {
-        mainScope.launch(main) { applyInternal(cue) }
+        apply(cue, autoResetDelayMs)
     }
 
-    private fun applyInternal(cue: EmotionCue) {
+    /**
+     * Apply with an explicit hold: [holdMs] ms at full expression before the
+     * auto-neutral blend (sentence-attached emotions pass the clip duration so
+     * a long sentence isn't cut to neutral mid-speech), `HOLD_NO_RESET` to
+     * stay until the next apply (manual expressions from the app UI).
+     */
+    fun apply(cue: EmotionCue, holdMs: Long) {
+        mainScope.launch(main) { applyInternal(cue, holdMs) }
+    }
+
+    private fun applyInternal(cue: EmotionCue, holdMs: Long = autoResetDelayMs) {
         // Unknown names become direct single-morph expressions (§7.10): the
         // loaded model's own presets/ARKit morphs (blink_l, browInnerUp, aa…)
         // ride the same easing + 3 s auto-reset machinery as the canonical
@@ -105,9 +217,9 @@ class EmotionBlender(
         duration = def.blendDuration
         progress = 0f
 
-        if (cue.name != "neutral") {
+        if (cue.name != "neutral" && holdMs >= 0) {
             resetJob = mainScope.launch(main) {
-                delay(autoResetDelayMs)
+                delay(holdMs)
                 applyInternal(EmotionCue("neutral", 1f))
             }
         }
@@ -135,6 +247,9 @@ class EmotionBlender(
     }
 
     companion object {
+        /** [apply] hold sentinel: never auto-reset (manual expressions hold until replaced). */
+        const val HOLD_NO_RESET = -1L
+
         val VISEME_SET: Set<String> = VowelDriver.VOWEL_NAMES.toSet()
 
         fun easeInOutCubic(t: Float): Float =

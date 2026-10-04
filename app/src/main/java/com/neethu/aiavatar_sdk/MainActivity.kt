@@ -1325,6 +1325,21 @@ private fun DemoScreen(
                 "freeTalk=$new (mode=${uiState.inputMode.name.lowercase()}, " +
                     "listening=${freeSpeech.running})"
             },
+            // ai_cmd set_expression：走 FaceDriver 手动表情通道（缓动进场、保持不归零）
+            manualExpression = { name, weight ->
+                val fd = session?.faceDriver
+                    ?: throw IllegalStateException("no face driver (session not ready)")
+                fd.applyManualExpression(name, weight)
+                uiState.selectedExpression = name
+                "expression '$name' weight=$weight (eased, holds until cleared)"
+            },
+            // ai_cmd clear_expression：缓动回中性
+            clearManualExpression = {
+                val fd = session?.faceDriver
+                    ?: throw IllegalStateException("no face driver (session not ready)")
+                fd.clearManualExpression()
+                "face easing back to neutral"
+            },
         )
     }
 
@@ -1692,14 +1707,21 @@ private fun DemoScreen(
                 items = expressionList,
                 selectedItem = uiState.selectedExpression,
                 onItemClick = { name ->
+                    val fd = session?.faceDriver
                     if (uiState.selectedExpression == name) {
-                        // Toggle off — clear the expression
-                        controller.clearAllExpressions()
+                        // Toggle off — ease back to neutral (face driver) / snap (no session)
+                        if (fd != null) fd.clearManualExpression() else controller.clearAllExpressions()
                         uiState.selectedExpression = null
                     } else {
-                        // Apply the new expression at full weight
-                        controller.clearAllExpressions()
-                        controller.setExpression(name, 1.0f)
+                        // Apply the new expression at full weight. 有 FaceDriver 时走
+                        // 手动表情通道：缓动进场（控制器已被驱动器切成 instant 模式，
+                        // 直写 setExpression 是一帧闪现——真机踩过），且不自动归零。
+                        if (fd != null) {
+                            fd.applyManualExpression(name, 1.0f)
+                        } else {
+                            controller.clearAllExpressions()
+                            controller.setExpression(name, 1.0f)
+                        }
                         uiState.selectedExpression = name
                     }
                 }

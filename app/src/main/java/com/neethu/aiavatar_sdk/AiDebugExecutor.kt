@@ -70,6 +70,13 @@ internal class AiChatDebugHooks(
     val videoStatusLine: () -> String? = { null },
     /** ai_cmd voice_free on|off（无参=翻转）：按住说话 ⇄ 自由说话切换。 */
     val setVoiceFree: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /**
+     * ai_cmd set_expression <名字> [强度]：走 FaceDriver 手动表情通道（缓动
+     * 进场、不自动归零）；null = 无会话，executor 直写控制器（即时，一帧）。
+     */
+    val manualExpression: ((String, Float) -> String)? = null,
+    /** ai_cmd clear_expression：缓动回中性；null = 无会话，executor 直清控制器。 */
+    val clearManualExpression: (() -> String)? = null,
 )
 
 /**
@@ -98,11 +105,17 @@ internal suspend fun executeAiCommand(
             "list" -> listAssets(controller, uiState, command.arg)
             "load_model" -> loadModelCommand(controller, uiState, command.arg)
             "load_scene" -> loadSceneCommand(controller, uiState, command.arg)
-            "set_expression" -> setExpressionCommand(controller, uiState, command)
+            "set_expression" -> setExpressionCommand(controller, uiState, command, chat)
             "clear_expression" -> {
-                controller.clearAllExpressions()
-                uiState.selectedExpression = null
-                "face reset to neutral"
+                val eased = chat?.clearManualExpression?.invoke()
+                if (eased != null) {
+                    uiState.selectedExpression = null
+                    eased
+                } else {
+                    controller.clearAllExpressions()
+                    uiState.selectedExpression = null
+                    "face reset to neutral"
+                }
             }
             "play_animation" -> playAnimationCommand(context, controller, uiState, command)
             "stop_animation" -> {
@@ -344,6 +357,7 @@ private fun setExpressionCommand(
     controller: AvatarController,
     uiState: DemoUiState,
     command: AiDebugCommand,
+    chat: AiChatDebugHooks?,
 ): String {
     val available = DemoUiState.resolveExpressions(controller.state.value)
     val arg = command.arg
@@ -355,6 +369,9 @@ private fun setExpressionCommand(
             "No expression '$arg' on the current model. Available: $available"
         )
     val weight = command.weight ?: 1.0f
+    // 有会话走 FaceDriver 手动表情通道（缓动进场、不自动归零）；无会话直写
+    // 控制器（控制器此时不在 instant 模式，还保留默认 300ms 过渡）。
+    chat?.manualExpression?.let { manual -> return manual(name, weight) }
     controller.clearAllExpressions()
     controller.setExpression(name, weight)
     uiState.selectedExpression = name
