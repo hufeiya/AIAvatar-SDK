@@ -147,6 +147,16 @@ internal suspend fun executeAiCommand(
                 if (enabled) "spring bone debug log enabled (logcat tag SpringBone, 1 Hz)"
                 else "spring bone debug log disabled"
             }
+            "culling" -> {
+                val enabled = when (command.arg?.lowercase()) {
+                    "on", "true", "1" -> true
+                    "off", "false", "0" -> false
+                    else -> throw IllegalArgumentException("culling expects 'on' or 'off'")
+                }
+                controller.setAvatarCulling(enabled)
+                if (enabled) "avatar frustum culling ON (bug-compatible: eyeballs can vanish at close range when the head turns)"
+                else "avatar frustum culling OFF (fix: skinned meshes always draw)"
+            }
             "screenshot" -> screenshotCommand(context, controller)
             "send_chat" -> {
                 val text = command.arg

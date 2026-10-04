@@ -338,6 +338,16 @@ class AvatarController {
         renderer?.springBoneManager?.setDebugLogEnabled(enabled)
     }
 
+    /**
+     * Toggle frustum culling for the avatar's own renderables. Default is OFF
+     * (see SoulLinkRenderer — gltfio's static bind-pose culling boxes make
+     * skinned meshes like the eyeballs vanish at close range once the head
+     * turns); turn ON only for debugging.
+     */
+    fun setAvatarCulling(enabled: Boolean) {
+        renderer?.setAvatarCulling(enabled)
+    }
+
     // ── Public API: Scene (Environment/Background) ───────────────────────
 
     /**

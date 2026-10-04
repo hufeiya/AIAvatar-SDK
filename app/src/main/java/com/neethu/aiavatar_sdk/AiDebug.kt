@@ -130,6 +130,10 @@ fun aiDebugHelp(): String = """
 |  open_panel <arg>         Open a bottom panel: none | models | animations |
 |                           expressions | scenes | cards | settings
     |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
+    |  culling <arg>           on/off: avatar frustum culling. Default OFF (fix for the
+    |                           disappearing-eyeballs bug: gltfio uses static bind-pose
+    |                           culling boxes, so skinned meshes can be wrongly culled
+    |                           at close range once the head turns). ON = old behavior.
     |Chat (requires the AI service configured in ⚙️ settings):
     |  send_chat <arg>          Send ai_arg as the user's chat message; the reply
     |                           streams into the subtitle + AIDebug event logs

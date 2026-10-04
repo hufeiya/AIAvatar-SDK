@@ -874,6 +874,9 @@ internal class SoulLinkRenderer(
         }
 
         applyMaterialEnhancements()
+        // 蒙皮/morph 顶点会离开 gltfio 的绑定姿态静态 culling 盒（眼球丢失
+        // 根因，见 [avatarCullingEnabled] 注释）——按当前开关重新应用
+        applyAvatarCulling()
     }
 
     /** Detects the VRM meta version ("0" or "1") from GLB bytes. */
@@ -1314,6 +1317,53 @@ internal class SoulLinkRenderer(
 
     fun setSpringBoneEnabled(enabled: Boolean) {
         springBoneManager?.setEnabled(enabled)
+    }
+
+    // ── Frustum Culling (avatar) ─────────────────────────────────────────
+
+    /**
+     * 角色自身 renderable 的视锥剔除开关，默认**关闭**。
+     *
+     * 根因（真机复现「多轮对话后眼球丢失、透过眼窝看到后脑勺内壁」）：
+     * gltfio 给蒙皮 mesh 的 culling 包围盒是绑定姿态的静态盒（POSITION
+     * min/max），而 RenderableManager.Builder 的合同是蒙皮/morph 下该盒
+     * "should encompass all possible vertex positions"。眼球顶点蒙皮到眼骨
+     * （注视旋转/头部动画驱动），与静态盒最多差几厘米；特写/宏距机位视锥
+     * 很窄，运镜 steering 追头部枢轴+注视转头让相机在目标位姿附近摆动，
+     * 某些位姿下眼球 renderable 的静态盒整体落到锥外→整个 mesh 被剔除
+     * ——脸其余部分（包围盒大）仍在，于是眼窝变空。眼球是最小的蒙皮
+     * mesh（SK_Sun 独立眼球 mesh，盒仅 ~2.5cm），所以最先消失。
+     *
+     * 角色常驻画面中央、体量小（数万三角面），关掉剔除没有可观测代价；
+     * 静态环境 scene 资产走独立 loader，保留自身剔除不受影响。
+     * `ai_cmd culling on/off` 可在真机上 A/B 复现/验证。
+     */
+    private var avatarCullingEnabled = false
+
+    /**
+     * Toggle frustum culling for every renderable of the loaded avatar
+     * (default off — see [avatarCullingEnabled]). Applies immediately and to
+     * subsequently loaded models.
+     */
+    fun setAvatarCulling(enabled: Boolean) {
+        avatarCullingEnabled = enabled
+        applyAvatarCulling()
+    }
+
+    private fun applyAvatarCulling() {
+        val asset = modelViewer.asset ?: return
+        val rm = modelViewer.engine.renderableManager
+        var toggled = 0
+        for (entity in asset.entities) {
+            val instance = rm.getInstance(entity)
+            if (instance == 0) continue
+            rm.setCulling(instance, avatarCullingEnabled)
+            toggled++
+        }
+        android.util.Log.i(
+            "SoulLinkRenderer",
+            "Avatar frustum culling ${if (avatarCullingEnabled) "enabled" else "disabled"} ($toggled renderables)",
+        )
     }
 
     /**
