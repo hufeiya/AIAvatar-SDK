@@ -64,7 +64,7 @@
 ### 2.3 `:app` 集成
 
 - `AiChat.kt`：AiChatPrefs(5项配置+持久化键 `ai_baseUrl/ai_apiKey/ai_llmModel/ai_ttsModel/ai_voice`，prefs=`demo_settings`)、AiChatController(配置变化即重建 session，AIRI getProviderInstance 语义)
-- `MainActivity.kt`：底部 `AiChatBar`(输入/发送/打断/状态徽标/回复字幕/错误条)、produceState 装配 session、事件收集；视角 badge 移到 bottom=180dp
+- `MainActivity.kt`：底部 `AiChatBar`(输入/发送/打断/状态徽标/对话记录面板[用户行在上+虚拟人行在下，可滚动自动贴底]/错误条)、produceState 装配 session、事件收集；视角 badge 移到 bottom=180dp
 - `SettingsScreen.kt`：新增「AI 对话 (AI Chat · OpenAI 兼容)」区块（5 个 SettingsTextFieldRow）
 - `AndroidManifest.xml`：补了 INTERNET 权限
 
@@ -206,6 +206,11 @@
   - **org.json 坑**：映射/覆盖逻辑最初用 org.json 写，JVM 单测全挂（`Method put in org.json.JSONObject not mocked`——android.jar 是抛异常的桩，见 A.1 第 33 条）；改用 kotlinx.serialization 的 `Json.parseToJsonElement` 纯 API（不需要序列化插件），app 模块加 `libs.kotlinx.serialization.json` 依赖
   - 真机验证（62fabe84）：预置 grid 渲染（图+名+空卡片默认高亮）✓；`import_card` 走同一条落盘/激活路径 → 阿枣开场白 TTS 播报 ✓、`active_card` 显示 sysPromptChars=372（description+personality+scenario 拼装正确）✓、我的卡片「使用中」徽标 ✓、激活后空卡片取消高亮 ✓；设置页人物卡区（卡名+只读人设+编辑钮）✓；HyperOS 禁 shell input 依旧，grid 点选与编辑保存的手势流未真机点按（与已验证的 import_card/activateEntry 同路径，纯逻辑部分 10 条单测覆盖）
 - **当晚两连修（用户实测选卡后对话 400 + 面板默认弹开反馈）**：①**硅基流动对两条 system 直接 400**（协议钉住改造把人设/协议拆两条 system，标注真机待验；用户第一次带卡对话即触发）——buildRequestMessages 改为人设+协议合并单条 system（curl 复现→合并通过；A.1 第 34 条，ProtocolPinTest 重写锁单条不变量 +2）；②**AI 未就绪时切卡 clearHistory 被跳过**（延迟激活补挂路径不清历史，Room 旧对话泄漏进新卡请求）——pendingGreetingFile 消费时补 clearHistory（A.1 第 35 条）+ LLM 适配器读超时 10s→60s（14K 协议首 token 超默认超时）；真机复验：冷启动 3s 即 import_card（复刻延迟激活）→ 补挂时 history=1（无泄漏）→ 你叫什么名字 TurnCompleted 50 字 ✓。另：用户反馈的「卡面板默认弹出」是调试 ai_cmd 遗留状态（冷启动实测默认关闭），非代码问题
+- **对话字幕聊天记录 + 拖拽 FAB 重排 + 挪动人物 T-pose bug 修复（2026-10-04，用户需求「显示用户说的文字在虚拟人上面/字幕超四行要能下拉并实时贴底/左下角挪人按钮挪到视角上面换图标/挪动只有 T-pose 能用的 bug」；真机 62fabe84，单测 +14 全绿：app 74/corelib 19/adapter 54/orchestrator 108 debug 变体）**：
+  - **聊天记录面板**（需求 1/2）：旧字幕=当前轮 replyText 单条 Text（maxLines=4 省略号截断）；新=`ChatTranscript` 纯逻辑（app/ChatTranscript.kt）+ `mutableStateListOf<ChatLine>`——用户行（青色「我：」前缀）在虚拟人行（白色）上方，面板 `heightIn(max=168dp)+verticalScroll`，`snapshotFlow{scrollState.maxValue}` 内容长高即 `animateScrollTo(maxValue)` 贴底（替代省略号截断）；AVATAR 句开播（SentenceStarted）并入最后一条 AVATAR 行（同回合逐句拼整段），USER 恒新起一行（自由说话连发=两次独立发言）；四条发送路径（打字 onSend/按住 autoSend/自由说话 utterance/ai_cmd send_chat）统一 `pushUserLine`；上下文切换清空；上限 60 行裁旧
+  - **拖拽 FAB 重排**（需求 3a）：从左下角独立 FAB 挪进右下 FAB 列、置于「视」上方第一位；样式与「视/卡」一致改文字 FAB「移」（原 Build 扳手语义不对；material-icons-core 无 OpenWith、不为一个图标引 extended——debug 不削减包体积）；激活态仍 Close 图标
+  - **挪动人物 T-pose bug**（需求 3b，A.1 第 36 条）：拖拽语义=平移 humanoid hips 骨骼（three-vrm mouse.html，弹簧骨骼感知真实身体运动），但 VRMA 待机/动作的 hips 平移轨道每帧 `applyTranslation` 整体重写 hips 局部变换、`restoreRestPose` 停播时也重写——触摸时一次性 setTransform 下一帧就被冲掉，只有 T-pose（无动画）能拖（默认待机常开=实际永远拖不动）。修法：触摸只累加 `hipsDragOffset`（VRM0 X 翻转在累加时处理），每帧动画分支后 `applyHipsDragOffset` 以「动画刚写出的平移」为基线重钉；判定抽纯函数 `HipsDragOffsetSolver`（corelib/internal/HipsDragOffsetSolver.kt）单测锁死四不变量：动画重写→新基线+重钉不累加/基线位移不变不重复落盘（不漂移）/帧间隙 restoreRestPose 后位移仍在/旋转轨道保留平移的帧不改写；覆写检测双信号=帧内 before/after 对比（覆盖内置 glTF 动画路径）+ 引擎 `consumeHipsRewritten` 标志（VrmaAnimationEngine，覆盖帧间隙 restoreRestPose）；换模型/`setDragMovesHips` 切换重置状态
+  - **真机验证**：send_chat 一轮 → uiautomator bounds 确认用户行 y[1710-1758] 在虚拟人行 y[1764-1908] 上方、TurnCompleted subtitleLen=59；FAB 列「移」y[1119-1176] 在「视」y[1277-1334] 正上方（uiautomator+截图双确认）；拖拽模式开 30s 待机人物无漂移（求解器无误写）；拖拽手势本身 HyperOS 禁 shell 注入（老约束），待用户真手复验
 - 工程底座：libs.versions.toml 加了 coroutines 1.9.0 / okhttp 4.12.0 / serialization-json 1.7.3 / kotlin-jvm / kotlin-serialization 插件；两新模块已入 settings.gradle.kts；视频模式再加 CameraX 1.4.2（core/camera2/lifecycle/view）与 `com.google.mlkit:face-detection:16.1.7`（**bundled 版**自带 BlazeFace 模型，不依赖 GMS，国产机可跑）
 
 ## 三、关键设计决策（改代码前必读）
@@ -236,7 +241,7 @@
   - **火山引擎**：LLM=方舟 Ark `https://ark.cn-beijing.volces.com/api/v3`（OpenAI 兼容 chat/completions；6 个模型 chat 实测 5 通——doubao-seed-2-0-mini(默认)/2-1-turbo/2-1-pro/deepseek-v4-flash-ga/seed-character 均回包，**seedream-5-0-pro 是图像模型 chat 报 RPM 限额**）；TTS=豆包语音 seed-tts-2.0（V3 WebSocket，`X-Api-Key` + `X-Api-Resource-Id: seed-tts-2.0`，音色 zh_female_vv_uranus_bigtts 默认等 6 个）；两把 key 分字段存储见 2.4 双服务商条目
   - 密钥明文：仓库根 `secrets.properties`（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY(待补)；设备侧经 run-as 写入 demo_settings（`ai_api_key_siliconflow`/`ai_api_key_volcano`）
 - 填写入口：App ⚙️ 设置 →「AI 配置」→ 选服务商 + 填 Key 即可对话（模型/音色留空=默认）。
-- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（192 全绿，视频模式起 app 也有纯 JVM 单测）
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（2026-10-04 起 app 74 / corelib 19 / adapter 54 / orchestrator 108，debug 变体全绿，视频模式起 app 也有纯 JVM 单测）
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - 设备：`2c3769db`（本次双厂商验证机，adb input 可用）与 `62fabe84`（小米14/HyperOS，禁 shell input）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
@@ -573,6 +578,7 @@ LLM SSE delta
 
 34. **硅基流动拒绝多条 system 消息（2026-10-04 用户选卡后对话 400 的根因）**：请求带两条 system（人设+钉住协议）直接 400 `{"code":20015,"message":"\"messages\" in request are illegal: System message must be at the beginning..."}`——**即使两条都在最开头**（curl 实测复现，合并成一条立即通过）；火山 Ark/OpenAI 官方都收多条。教训：OpenAI 兼容 ≠ 消息结构完全兼容，**system 消息永远只发一条**（多段指令在发送时拼接即可，各段文本仍可各自钉住缓存）；"真机待验"的请求结构改动必须覆盖每个已配服务商各跑一轮。修法：AvatarSession.buildRequestMessages 把 persona 与 pinnedProtocol 文本 join("\n\n") 进同一条 system（协议钉住/重钉语义不变，AvatarSessionProtocolPinTest 锁死单条不变量）。
 35. **AI 未就绪时激活人物卡 = clearHistory 被跳过，旧对话泄漏进新角色（2026-10-04 真机踩）**：activateEntry 只有 session != null 才清历史；模型还在加载时切卡走 pendingGreetingFile 延迟分支，而 LaunchedEffect(session) 的补挂路径只重放人设+开场白不清历史——新会话的 RoomConversationStore 懒加载把上一个角色的对话整段带进新卡的请求（用户侧表现：换卡后第一轮就带着旧角色上下文）。修法：pendingGreetingFile 被消费（=延迟激活的真正生效时刻）时补 clearHistory；常规 session 重建（换音色等）不动历史。**同类教训：凡"激活动作依赖会话就绪"的副作用，延迟补执行的路径必须逐项核对**。另：LLM 适配器 OkHttpClient 的读超时从默认 10s 提到 60s（14K+ 字符钉住协议的首 token 排队+预填充会超 10s，真机 TurnFailed: timeout）。
+36. **对动画驱动骨骼的"一次性写入"会被动画冲掉（2026-10-04 挪动人物 bug 根因）**：拖拽=平移 humanoid hips（three-vrm mouse.html 语义，弹簧骨骼要感知真实身体运动），但 VRMA 的 hips 平移轨道每帧把 hips 局部变换整个重写（`restoreRestPose` 停播时也重写）——触摸时一次 `setTransform` 的位移下一帧就被冲掉，用户侧表现=「只有 T-pose 能挪动」（默认待机常开，实际永远拖不动）。修法：触摸只累加偏移，每帧在动画分支之后以「动画刚写出的平移」为基线重钉（corelib `HipsDragOffsetSolver` 纯函数；帧内 before/after 对比 + 引擎 `consumeHipsRewritten` 信号双覆盖）。**通用教训：任何对动画驱动骨骼的持久修改要么挪到动画不写的节点，要么做成逐帧重钉的基线+偏移**。注意不能挪 asset root 替代：弹簧骨骼 Verlet 状态存 center 节点空间（本项目 center=Root），挪 root 等于挪 center，弹簧零反应。
 
 ### A.2 调参速查表
 

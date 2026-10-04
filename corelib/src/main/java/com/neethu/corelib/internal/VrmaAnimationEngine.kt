@@ -194,6 +194,19 @@ internal class VrmaAnimationEngine(
         return pending
     }
 
+    /**
+     * hips 局部平移被本引擎重写过（平移轨道写入或 [restoreRestPose]）——
+     * 渲染器据此重新钉上持久化的拖拽位移（拖拽只写一次会被动画下一帧
+     * 覆写，见 SoulLinkRenderer.applyHipsDragOffset）。
+     */
+    fun consumeHipsRewritten(): Boolean {
+        val rewritten = hipsRewritten
+        hipsRewritten = false
+        return rewritten
+    }
+
+    private var hipsRewritten = false
+
     // ── Frame Update ─────────────────────────────────────────────────────
 
     fun update(elapsedSeconds: Float) {
@@ -262,7 +275,7 @@ internal class VrmaAnimationEngine(
                         pos[2] = restTz + (pos[2] - animRest[2]) * scale
                     }
 
-                    applyTranslation(tm, instance, pos)
+                    applyTranslation(tm, entity, pos)
                 }
             }
         }
@@ -297,11 +310,14 @@ internal class VrmaAnimationEngine(
         tm.setTransform(instance, mat)
     }
 
-    private fun applyTranslation(tm: TransformManager, instance: Int, pos: FloatArray) {
+    private fun applyTranslation(tm: TransformManager, entity: Int, pos: FloatArray) {
+        val instance = tm.getInstance(entity)
+        if (instance == 0) return
         val mat = FloatArray(16)
         tm.getTransform(instance, mat)
         mat[12] = pos[0]; mat[13] = pos[1]; mat[14] = pos[2]
         tm.setTransform(instance, mat)
+        if (entity == boneEntityMap["hips"]) hipsRewritten = true
     }
 
     private fun restoreRestPose() {
@@ -310,6 +326,7 @@ internal class VrmaAnimationEngine(
             val entity = boneEntityMap[boneName] ?: continue
             val inst = tm.getInstance(entity)
             if (inst != 0) tm.setTransform(inst, restMat)
+            if (boneName == "hips") hipsRewritten = true
         }
     }
 

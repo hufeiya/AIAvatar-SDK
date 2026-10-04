@@ -125,6 +125,14 @@ internal class SoulLinkRenderer(
     private var hipsEntity: Int = 0
     private var isVrm0: Boolean = false
 
+    // Hips-drag persistent offset（挪动人物 bug 修复）：VRMA/内置动画每帧重写
+    // hips 局部平移，触摸时一次性写入的位移下一帧就被冲掉——只有 T-pose 能拖。
+    // 触摸只把位移累加进 [hipsDragOffset]（VRM0 的 X 翻转在累加时处理），真正
+    // 落盘在每帧动画覆写之后，由 [HipsDragOffsetSolver] 以动画新写出的平移为
+    // 基线再叠加。
+    private val hipsDragOffset = FloatArray(3)
+    private var hipsDragState = HipsDragOffsetSolver.initial()
+
     // Humanoid bones used by the camera-shot driver to frame the model
     // (0 = unresolved → proportional fallback).
     private var headEntity: Int = 0
@@ -260,6 +268,9 @@ internal class SoulLinkRenderer(
 
     private val choreoCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
+            // 拖拽位移的覆写检测基线：本帧动画分支若改写 hips 平移，写入值与
+            // 之不同（基线里还带着上一帧叠加的拖拽位移）
+            val hipsBefore = captureHipsTranslation()
             // VRMA animation takes priority over built-in animations
             val vrma = vrmaEngine
             if (vrma != null && vrma.isActive()) {
@@ -282,6 +293,12 @@ internal class SoulLinkRenderer(
                     }
                 }
             }
+
+            // Hips drag offset re-application: runs after the animation pass
+            // (which rewrites the hips local transform every frame) and before
+            // the gaze overlay / bone matrices read the pose — see
+            // [applyHipsDragOffset].
+            applyHipsDragOffset(hipsBefore)
 
             // Gaze overlay: rides on top of the animated pose — reads the
             // post-animation head world transform and adds clamped head/neck/
@@ -360,25 +377,26 @@ internal class SoulLinkRenderer(
                             val dy = event.y - lastTouchY
                             lastTouchX = event.x
                             lastTouchY = event.y
-                            modelViewer.asset?.let { asset ->
-                                val tm = modelViewer.engine.transformManager
-                                // Drag the humanoid HIPS bone (mouse.html semantics) so the
-                                // spring bones see real body motion and react; fall back to
-                                // the asset root when the model has no humanoid hips.
-                                val instance = if (dragMovesHips && hipsEntity != 0) {
-                                    tm.getInstance(hipsEntity)
-                                } else {
-                                    tm.getInstance(asset.root)
-                                }
-                                if (instance != 0) {
-                                    val mat = FloatArray(16)
-                                    tm.getTransform(instance, mat)
-                                    // VRM 0.x models carry a 180° Y root rotation: the hips
-                                    // local frame is flipped relative to the world.
-                                    val sign = if (dragMovesHips && isVrm0) -1f else 1f
-                                    mat[12] += dx * 0.005f * sign
-                                    mat[13] -= dy * 0.005f
-                                    tm.setTransform(instance, mat)
+                            if (dragMovesHips && hipsEntity != 0) {
+                                // VRM 0.x models carry a 180° Y root rotation: the hips
+                                // local frame is flipped relative to the world.
+                                val sign = if (isVrm0) -1f else 1f
+                                // 只累加；落盘在每帧动画覆写之后（applyHipsDragOffset），
+                                // 否则直接写 hips 下一帧就被动画冲掉（T-pose 才能拖的 bug）
+                                hipsDragOffset[0] += dx * 0.005f * sign
+                                hipsDragOffset[1] -= dy * 0.005f
+                                hipsDragState = HipsDragOffsetSolver.State(hipsDragState.base, true)
+                            } else {
+                                modelViewer.asset?.let { asset ->
+                                    val tm = modelViewer.engine.transformManager
+                                    val instance = tm.getInstance(asset.root)
+                                    if (instance != 0) {
+                                        val mat = FloatArray(16)
+                                        tm.getTransform(instance, mat)
+                                        mat[12] += dx * 0.005f
+                                        mat[13] -= dy * 0.005f
+                                        tm.setTransform(instance, mat)
+                                    }
                                 }
                             }
                         }
@@ -820,6 +838,9 @@ internal class SoulLinkRenderer(
                 // Resolve the humanoid hips bone for hips-drag (mouse.html semantics)
                 isVrm0 = parseVrmMetaVersion(bytes) == "0"
                 hipsEntity = resolveHipsEntity(asset, bytes)
+                // 换模型丢弃上一个角色的拖拽位移，基线重新捕获
+                hipsDragOffset.fill(0f)
+                hipsDragState = HipsDragOffsetSolver.initial()
 
                 // Resolve the bones the camera-shot driver frames against
                 // (chest falls back spine → upperChest is tried first).
@@ -1303,7 +1324,60 @@ internal class SoulLinkRenderer(
      * (models with a `center` node will show little to no reaction, per VRM spec).
      */
     fun setDragMovesHips(enabled: Boolean) {
+        if (dragMovesHips == enabled) return
         dragMovesHips = enabled
+        // 切换拖拽目标（hips/root）丢弃 hips 拖拽状态与已累计位移，
+        // 避免重新启用时把位移重复计进基线
+        hipsDragOffset.fill(0f)
+        hipsDragState = HipsDragOffsetSolver.initial()
+    }
+
+    /**
+     * 本帧动画分支前的 hips 局部平移快照，供 [applyHipsDragOffset] 判定
+     * 「动画是否在本帧改写了 hips 平移」。`dragMovesHips` 关闭或无 hips 时
+     * 返回 null（此时走 asset-root 拖拽，动画从不写 root，无需检测）。
+     */
+    private fun captureHipsTranslation(): FloatArray? {
+        if (!dragMovesHips || hipsEntity == 0) return null
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(hipsEntity)
+        if (instance == 0) return null
+        val mat = FloatArray(16)
+        tm.getTransform(instance, mat)
+        return floatArrayOf(mat[12], mat[13], mat[14])
+    }
+
+    /**
+     * 每帧在动画覆写之后重钉拖拽位移（挪动人物 bug 的修复本体，判定逻辑在
+     * [HipsDragOffsetSolver]）：以本帧动画刚写出的 hips 平移为基线叠加位移
+     * 再落盘，基线与位移都没变时不重复写（不逐帧累加）。必须在动画分支之后、
+     * 注视/骨骼矩阵传播之前调用。
+     */
+    private fun applyHipsDragOffset(hipsBefore: FloatArray?) {
+        if (!dragMovesHips || hipsEntity == 0) {
+            hipsDragState = HipsDragOffsetSolver.initial()
+            return
+        }
+        val engineRewrote = vrmaEngine?.consumeHipsRewritten() == true
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(hipsEntity)
+        if (instance == 0) return
+        val mat = FloatArray(16)
+        tm.getTransform(instance, mat)
+        val (newState, target) = HipsDragOffsetSolver.solve(
+            before = hipsBefore,
+            current = floatArrayOf(mat[12], mat[13], mat[14]),
+            rewritten = engineRewrote,
+            offset = hipsDragOffset,
+            state = hipsDragState,
+        )
+        hipsDragState = newState
+        if (target != null) {
+            mat[12] = target[0]
+            mat[13] = target[1]
+            mat[14] = target[2]
+            tm.setTransform(instance, mat)
+        }
     }
 
     // ── Programmatic Avatar & Camera Control (AI debugging) ──────────────

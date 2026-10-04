@@ -34,10 +34,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
@@ -47,7 +49,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -769,12 +770,19 @@ private fun DemoScreen(
     }
 
     var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
-    var replyText by remember { mutableStateOf("") }
+    // 对话字幕面板：用户消息在上、虚拟人回复在下，可滚动回看、自动贴底。
+    // 所有发送入口（打字/按住/自由说话/ai_cmd）都经 [pushUserLine] 记录。
+    val chatLines = remember { mutableStateListOf<ChatLine>() }
+    fun pushUserLine(text: String) {
+        val next = ChatTranscript.cap(ChatTranscript.append(chatLines.toList(), ChatRole.USER, text))
+        chatLines.clear()
+        chatLines.addAll(next)
+    }
     var chatError by remember { mutableStateOf<String?>(null) }
 
     // 切换/新建上下文：新会话的历史来自另一条 Room 记录，旧字幕一并清掉
     LaunchedEffect(uiState.contextId) {
-        replyText = ""
+        chatLines.clear()
         chatError = null
     }
 
@@ -807,7 +815,10 @@ private fun DemoScreen(
                     is AvatarEvent.SentenceQueued ->
                         chatLog("SentenceQueued #${ev.sequence} \"${ev.text}\"")
                     is AvatarEvent.SentenceStarted -> {
-                        replyText += ev.text
+                        // 开播即上字幕：同一回合逐句开播，并入最后一条 AVATAR 行
+                        val next = ChatTranscript.append(chatLines.toList(), ChatRole.AVATAR, ev.text)
+                        chatLines.clear()
+                        chatLines.addAll(next)
                         chatLog("SentenceStarted #${ev.sequence}")
                     }
                     is AvatarEvent.SentenceEnded ->
@@ -832,7 +843,7 @@ private fun DemoScreen(
                         chatLog("CameraChanged ${ev.shot.name}")
                     }
                     is AvatarEvent.TurnCompleted -> {
-                        chatLog("TurnCompleted subtitleLen=${replyText.length}")
+                        chatLog("TurnCompleted subtitleLen=${chatLines.lastOrNull { it.role == ChatRole.AVATAR }?.text?.length ?: 0}")
                         // 需求 6:视频模式回合结束(语音+手势都到点)自动回面部特写
                         if (uiState.inputMode == InputMode.VIDEO) {
                             launch {
@@ -994,7 +1005,7 @@ private fun DemoScreen(
                         // 环境噪声切片常识别为空:静默忽略,不刷错误条
                         text.isEmpty() -> Unit
                         else -> {
-                            replyText = ""
+                            pushUserLine(text)
                             session?.send(text, videoSnapshotImages())
                         }
                     }
@@ -1069,7 +1080,7 @@ private fun DemoScreen(
                         if (text.isEmpty()) {
                             chatError = "未识别到语音内容，请靠近一点重试"
                         } else if (uiState.voicePrefs.autoSend) {
-                            replyText = ""
+                            pushUserLine(text)
                             session?.send(text, videoSnapshotImages())
                         } else {
                             voicePrefill = text
@@ -1156,7 +1167,7 @@ private fun DemoScreen(
             send = { text ->
                 val s = session
                 if (s != null) {
-                    replyText = ""
+                    pushUserLine(text)
                     s.send(text, videoSnapshotImages())
                 }
                 s != null
@@ -1169,7 +1180,7 @@ private fun DemoScreen(
             snapshot = {
                 val p = uiState.aiPrefs
                 buildString {
-                    append("phase=$chatPhase subtitleLen=${replyText.length} error=${chatError ?: "none"} ")
+                    append("phase=$chatPhase subtitleLen=${chatLines.lastOrNull { it.role == ChatRole.AVATAR }?.text?.length ?: 0} error=${chatError ?: "none"} ")
                     append("llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} ")
                     append("ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) ")
                     append("ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} ")
@@ -1533,10 +1544,10 @@ private fun DemoScreen(
             )
         }
 
-        // AI 对话条（输入区按模式切换：打字 or 按住说话/自由说话）与回复字幕
+        // AI 对话条（输入区按模式切换：打字 or 按住说话/自由说话）与对话字幕面板
         AiChatBar(
             phase = chatPhase,
-            replyText = replyText,
+            chatLines = chatLines,
             error = chatError,
             enabled = session != null,
             inputMode = uiState.inputMode,
@@ -1551,7 +1562,7 @@ private fun DemoScreen(
             onHoldStart = onHoldStart,
             onHoldEnd = onHoldEnd,
             onSend = { text ->
-                replyText = ""
+                pushUserLine(text)
                 session?.send(text, videoSnapshotImages())
             },
             onInterrupt = { session?.interrupt() },
@@ -1559,31 +1570,15 @@ private fun DemoScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(
-                    start = 12.dp, end = 12.dp,
-                    // 按钮显示时底部两端有 FAB 列，抬高让位；隐藏时贴底
-                    bottom = if (uiState.buttonsVisible) 96.dp else 12.dp,
+                    start = 12.dp,
+                    // 挪动人物 FAB 已挪进右列、底部两端不再有按钮——不再整条
+                    // 抬高；但右下 FAB 列仍占着右下角，按钮显示时输入条（含
+                    // 字幕面板）收窄让位，否则打字模式的发送键会压在 ☰ 后面
+                    // （与各 ListPanel 的 end=72dp 同一让位惯例）
+                    end = if (uiState.buttonsVisible) 72.dp else 12.dp,
+                    bottom = 12.dp,
                 )
         )
-
-        // Drag mode FAB at bottom-start（跟随按钮显隐开关；打字/语音模式默认隐藏）
-        if (uiState.buttonsVisible) {
-            SmallFloatingActionButton(
-                onClick = { uiState.isDragMode = !uiState.isDragMode },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp),
-                shape = CircleShape,
-                containerColor = if (uiState.isDragMode)
-                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
-                else
-                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
-            ) {
-                Icon(
-                    imageVector = if (uiState.isDragMode) Icons.Default.Close else Icons.Default.Build,
-                    contentDescription = if (uiState.isDragMode) "Exit drag mode" else "Enter drag mode"
-                )
-            }
-        }
 
         // Row of FABs at bottom-end（跟随按钮显隐开关；打字/语音模式默认隐藏）
         if (uiState.buttonsVisible) {
@@ -1594,6 +1589,26 @@ private fun DemoScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.End
             ) {
+            // Drag mode FAB (挪动人物) — toggles drag mode. 从左下角挪进本列、
+            // 置于视角之上；样式与「视/卡」文字 FAB 一致（原扳手图标语义不对）。
+            SmallFloatingActionButton(
+                onClick = { uiState.isDragMode = !uiState.isDragMode },
+                shape = RoundedCornerShape(50),
+                containerColor = if (uiState.isDragMode)
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+                else
+                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                if (uiState.isDragMode) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Exit drag mode"
+                    )
+                } else {
+                    Text(text = "移", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
             // Camera shot FAB (视角) — cycles the 4 preset framings
             SmallFloatingActionButton(
                 onClick = {
@@ -1965,14 +1980,14 @@ private fun CameraShotLabelBadge(label: String?, modifier: Modifier = Modifier) 
 }
 
 /**
- * AI 对话条：状态徽标 + 当前轮回复字幕 + 输入区（按输入模式切换：
- * 打字输入框 / 按住说话）。`enabled = false`（未配置或未就绪）时输入区
- * 仍可见但不可交互。
+ * AI 对话条：状态徽标 + 对话字幕面板（用户消息在上、虚拟人回复在下，可滚动
+ * 回看、自动贴底）+ 输入区（按输入模式切换：打字输入框 / 按住说话）。
+ * `enabled = false`（未配置或未就绪）时输入区仍可见但不可交互。
  */
 @Composable
 private fun AiChatBar(
     phase: ConversationPhase,
-    replyText: String,
+    chatLines: List<ChatLine>,
     error: String?,
     enabled: Boolean,
     inputMode: InputMode,
@@ -2002,21 +2017,38 @@ private fun AiChatBar(
     }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (replyText.isNotEmpty()) {
+        if (chatLines.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = Color.Black.copy(alpha = 0.55f),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = replyText,
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                )
+                val scrollState = rememberScrollState()
+                // 实时贴底：面板限高、超出可下拉回看（替代旧 maxLines=4 的省略
+                // 号截断）；内容长高（新消息/流式追加）即自动滚到最底。
+                LaunchedEffect(chatLines) {
+                    snapshotFlow { scrollState.maxValue }.collect { max ->
+                        if (max > 0) scrollState.animateScrollTo(max)
+                    }
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 168.dp)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    chatLines.forEach { line ->
+                        val user = line.role == ChatRole.USER
+                        Text(
+                            text = if (user) "我：${line.text}" else line.text,
+                            color = if (user) Color(0xFF9ED8FF) else Color.White,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
+                    }
+                }
             }
         }
 
