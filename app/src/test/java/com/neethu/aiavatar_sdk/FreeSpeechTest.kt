@@ -106,11 +106,11 @@ class FreeSpeechTest {
     @Test
     fun `barge-in needs loud and sustained and past grace`() {
         val f = Feeder()
-        // 虚拟人开始说话:先喂宽限期(600ms)内的中等响度(超过普通起音 0.055,低于 barge 0.14)
-        f.feed(0.07f, frames = 30, avatarSpeaking = true)
+        // 虚拟人开始说话:先喂宽限期(600ms)内的中等响度(超过普通起音 0.025,低于 barge 0.10)
+        f.feed(0.05f, frames = 30, avatarSpeaking = true)
         assertTrue("no event during grace/moderate", f.events.isEmpty())
         // 继续中等响度 600ms:仍不触发(未过 barge 门限)
-        f.feed(0.07f, frames = 30, avatarSpeaking = true)
+        f.feed(0.05f, frames = 30, avatarSpeaking = true)
         assertTrue(f.events.isEmpty())
         // 大声开口持续 350ms(需 ≥18 帧)→ BargeIn 恰好一次
         f.feed(0.25f, frames = 20, avatarSpeaking = true)
@@ -125,8 +125,8 @@ class FreeSpeechTest {
     @Test
     fun `moderate avatar-level sound does not capture or corrupt vad`() {
         val f = Feeder()
-        // 说话期 3s 喂 0.1(超过普通起音门限、低于 barge 门限):不得捕获/起音
-        f.feed(0.1f, frames = 150, avatarSpeaking = true)
+        // 说话期 3s 喂 0.06(超过普通起音门限、低于 barge 门限):不得捕获/起音
+        f.feed(0.06f, frames = 150, avatarSpeaking = true)
         assertTrue(f.events.isEmpty())
         assertFalse(f.vad.capturing)
         // 说话结束后 VAD 仍然健康:正常说话照常起音
@@ -140,6 +140,45 @@ class FreeSpeechTest {
         f.feed(0.2f, frames = 10)
         assertTrue(f.vad.capturing)
         f.vad.reset()
+        assertFalse(f.vad.capturing)
+    }
+
+    // ── 运行中调参（设置页实时生效） ──────────────────────────────────────
+
+    @Test
+    fun `applyTuning raises start threshold live`() {
+        val f = Feeder()
+        // 默认门限(0.025)下 0.05 能起音
+        f.feed(0.05f, frames = 10)
+        assertTrue(f.vad.capturing)
+        f.vad.reset()
+        f.events.clear()
+        // 调高到 0.07 后同样的声音不再起音
+        f.vad.applyTuning(startAbsolute = 0.07f, bargeAbsolute = 0.10f, hangoverMs = 800)
+        assertEquals(0.07f, f.vad.debugStartThreshold, 1e-4f)
+        f.feed(0.05f, frames = 100)
+        assertFalse(f.vad.capturing)
+        assertTrue(f.events.isEmpty())
+    }
+
+    @Test
+    fun `applyTuning shortens hangover for faster segmentation`() {
+        val f = Feeder()
+        f.vad.applyTuning(startAbsolute = 0.025f, bargeAbsolute = 0.10f, hangoverMs = 400)
+        f.feed(0.2f, frames = 18) // 前2帧起音确认不计,16帧=320ms 有声(过最短句 280ms)
+        assertTrue(f.vad.capturing)
+        f.events.clear()
+        f.feed(0.006f, frames = 21) // 420ms 静默 > 调短后的悬停 400ms
+        f.assertSingle(SpeechVad.Event.SpeechEnded)
+    }
+
+    @Test
+    fun `applyTuning raises barge threshold`() {
+        val f = Feeder()
+        f.vad.applyTuning(startAbsolute = 0.025f, bargeAbsolute = 0.25f, hangoverMs = 800)
+        // 虚拟人说话期喂 0.2:默认门限(0.10)会触发打断,调到 0.25 后不触发
+        f.feed(0.2f, frames = 100, avatarSpeaking = true)
+        assertTrue(f.events.isEmpty())
         assertFalse(f.vad.capturing)
     }
 }

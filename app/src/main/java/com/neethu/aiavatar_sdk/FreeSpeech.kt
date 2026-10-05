@@ -66,15 +66,15 @@ object WavEncoder {
  */
 class SpeechVad(
     private val frameMs: Long = 20,
-    /** 起音绝对兜底门限。 */
-    private val startAbsolute: Float = 0.055f,
+    /** 起音绝对兜底门限(≈-32dBFS,一臂距离正常音量;比它更轻的靠噪声地板相对项兜误触)。 */
+    private var startAbsolute: Float = 0.025f,
     /** 起音相对门限 = max(startAbsolute, floor*[floorMultiplier], floor+[floorOffset])。 */
     private val floorMultiplier: Float = 4f,
-    private val floorOffset: Float = 0.02f,
+    private val floorOffset: Float = 0.012f,
     /** 句尾静默门限 = 起音门限 × [endThresholdRatio]。 */
     private val endThresholdRatio: Float = 0.6f,
-    /** barge-in 绝对门限（虚拟人说话期用户开口要比正常起音响一截）。 */
-    private val bargeAbsolute: Float = 0.14f,
+    /** barge-in 绝对门限（虚拟人说话期用户开口要比正常起音响一截；硬 AEC 残留远低于此）。 */
+    private var bargeAbsolute: Float = 0.10f,
     private val bargeMultiplier: Float = 7f,
     /** barge-in 需要持续超过该时长才触发（滤扬声器尾音/一声咳嗽）。 */
     private val bargeSustainMs: Long = 350,
@@ -83,7 +83,7 @@ class SpeechVad(
     /** 起音确认时长（连续超门限才算开口）。 */
     private val startConfirmMs: Long = 60,
     /** 句尾静默悬停。 */
-    private val hangoverMs: Long = 800,
+    private var hangoverMs: Long = 800,
     /** 短于该时长的发声按噪声丢弃。 */
     private val minUtteranceMs: Long = 280,
     /** 超长强制断句（防持续背景声无限占用）。 */
@@ -111,6 +111,21 @@ class SpeechVad(
 
     /** 当前是否在捕获一句话（调用方据此决定 PCM 进段缓冲还是前滚环）。 */
     val capturing: Boolean get() = phase == Phase.CAPTURING
+
+    /**
+     * 运行中调参（设置页「自由说话」区实时生效，采音中调用也只影响下一次
+     * 判定帧）；噪声地板等运行状态不动，仅覆盖用户可调的三项。
+     */
+    fun applyTuning(startAbsolute: Float, bargeAbsolute: Float, hangoverMs: Long) {
+        this.startAbsolute = startAbsolute
+        this.bargeAbsolute = bargeAbsolute
+        this.hangoverMs = hangoverMs
+    }
+
+    /** 当前生效的起音门限与噪声地板（真机调参用：比对 level 日志里的 rms 与门限差距）。 */
+    val debugStartThreshold: Float
+        get() = maxOf(startAbsolute, noiseFloor * floorMultiplier, noiseFloor + floorOffset)
+    val debugNoiseFloor: Float get() = noiseFloor
 
     fun reset() {
         phase = Phase.SILENCE
@@ -231,6 +246,10 @@ class FreeSpeechController(
 
     val isCapturing: Boolean get() = vad.capturing
 
+    /** 设置页实时调参（采音中也可调用，见 [SpeechVad.applyTuning]）。 */
+    fun applyTuning(startAbsolute: Float, bargeAbsolute: Float, hangoverMs: Long) =
+        vad.applyTuning(startAbsolute, bargeAbsolute, hangoverMs)
+
     /** 开始连续聆听；麦克风被占用/不可用时抛 [IllegalStateException]。 */
     @SuppressLint("MissingPermission") // 调用方已确保 RECORD_AUDIO 授权
     fun start(echoCancellation: Boolean) {
@@ -276,6 +295,7 @@ class FreeSpeechController(
         val preRoll = ArrayDeque<ByteArray>(preRollFrames)
         val segment = ByteArrayOutputStream()
         var hearing = false
+        var levelLogAt = 0L
         try {
             record.startRecording()
             while (running) {
@@ -329,6 +349,11 @@ class FreeSpeechController(
                 } else {
                     preRoll.addLast(frameBytes)
                     while (preRoll.size > preRollFrames) preRoll.removeFirst()
+                    // 1Hz 电平日志：不触发时先看 rms 与门限的差距再动参数
+                    if (now - levelLogAt >= 1000) {
+                        levelLogAt = now
+                        Log.d(TAG, "level rms=%.3f startTh=%.3f floor=%.4f".format(rms, vad.debugStartThreshold, vad.debugNoiseFloor))
+                    }
                 }
             }
         } catch (t: Throwable) {

@@ -77,6 +77,7 @@ import com.neethu.aiadapter.openai.TtsVoiceOption
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.AiProvider
 import com.neethu.aiavatar_sdk.ConversationContextSummary
+import com.neethu.aiavatar_sdk.FreeSpeechSettings
 import com.neethu.aiavatar_sdk.VoicePrefs
 import com.neethu.aiavatar_sdk.composeVoiceRef
 import com.neethu.aiavatar_sdk.resolveLlmModel
@@ -99,6 +100,7 @@ internal const val SECTION_CONTEXT = "context"
 internal const val SECTION_ANIMATIONS = "animations"
 internal const val SECTION_QUALITY = "quality"
 internal const val SECTION_LIVENESS = "liveness"
+internal const val SECTION_FREE_SPEECH = "free_speech"
 
 /** 下拉框的一个选项：[value] 为存进 prefs 的值，[label] 为显示名。 */
 internal data class DropdownOption(val value: String, val label: String)
@@ -182,6 +184,8 @@ internal fun SettingsScreen(
     onResetCardPrompt: () -> Unit = {},
     onAnimationSourceChange: (Boolean) -> Unit,
     onMotionSettingsChange: (MotionSettings) -> Unit,
+    freeSpeechSettings: FreeSpeechSettings,
+    onFreeSpeechSettingsChange: (FreeSpeechSettings) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
     onAiPrefsChange: (AiChatPrefs) -> Unit,
     onVoicePrefsChange: (VoicePrefs) -> Unit,
@@ -603,6 +607,56 @@ internal fun SettingsScreen(
                                     }
                                 )
                             }
+                        }
+                    }
+
+                    // ── 自由说话（灵敏度） ────────────────────────────────
+                    item {
+                        CollapsibleSection(
+                            title = "自由说话 (Free Talk · 灵敏度)",
+                            expanded = SECTION_FREE_SPEECH in expandedSections,
+                            onToggle = { toggleSection(SECTION_FREE_SPEECH) }
+                        ) {
+                            SettingsGroupLabel("语音端点检测参数；改动实时生效并持久化，门限越低越灵敏")
+                            SettingsActionRow(
+                                title = "恢复默认",
+                                subtitle = "起音/打断门限与切句停顿回到默认值"
+                            ) {
+                                onFreeSpeechSettingsChange(FreeSpeechSettings())
+                            }
+                            SliderTextFieldRow(
+                                title = "说话门限（越低越灵敏）",
+                                value = freeSpeechSettings.startAbsolute,
+                                valueRange = FreeSpeechSettings.START_ABSOLUTE_RANGE,
+                                format = "%.3f",
+                                unit = "",
+                                decimalCount = 3,
+                                onCommit = { v ->
+                                    onFreeSpeechSettingsChange(freeSpeechSettings.copy(startAbsolute = v))
+                                }
+                            )
+                            SliderTextFieldRow(
+                                title = "打断门限（越低越容易打断）",
+                                value = freeSpeechSettings.bargeAbsolute,
+                                valueRange = FreeSpeechSettings.BARGE_ABSOLUTE_RANGE,
+                                format = "%.2f",
+                                unit = "",
+                                decimalCount = 2,
+                                onCommit = { v ->
+                                    onFreeSpeechSettingsChange(freeSpeechSettings.copy(bargeAbsolute = v))
+                                }
+                            )
+                            SliderTextFieldRow(
+                                title = "切句停顿（说完静默多久算一句话）",
+                                value = freeSpeechSettings.hangoverMs,
+                                valueRange = FreeSpeechSettings.HANGOVER_MS_RANGE,
+                                format = "%.0f",
+                                unit = "ms",
+                                decimalCount = 0,
+                                onCommit = { v ->
+                                    onFreeSpeechSettingsChange(freeSpeechSettings.copy(hangoverMs = v))
+                                }
+                            )
                         }
                     }
                 }

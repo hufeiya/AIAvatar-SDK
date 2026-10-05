@@ -159,9 +159,10 @@
   - **三轮调参（2026-10-04 用户反馈"幅度太大"）**：投影器从**世界单位线性映射改为角度语义**——脸贴画面边缘 = 水平 22°/垂直 15° 转角上限（`maxLateralDegrees`/`maxVerticalDegrees`），乘以当前相机到人物的实际距离换算偏移，特写/全景手感一致（首版固定偏移 1.4/1.0 世界单位，特写机位距离 ~1 时边缘脸=50°+ 直接打到 ±55° 限幅："扭头扭过去了"）；"凑近画面"的前伸深度项钳制在距离的 20% 以内（`maxAlongFraction`，深度项缩短注视基线会放大转角，是"低头低太多"的另一半成因）。单测按"头部处量到的转角"锁死：边缘脸在 d=1 与 d=4 机位下都必须 ≈22°。修后真机采样 yaw ±19°/pitch ±9° 内随位置成比例。
 
 - **任务 9.1 自由说话已完成（2026-10-04，真机 62fabe84）**：语音/视频模式新增**自由说话**（连续聆听，此前只有按住说话），聊天条左侧「按住/说话」药丸一键切换（持久化 `VoicePrefs.freeTalk`=`ai_voice_free_talk`，切模式/重启保持）。
-  - **架构 = 纯逻辑 + 薄壳**（app `FreeSpeech.kt`）：`WavEncoder`（PCM16LE→WAV 44 字节头，纯函数）；`SpeechVad`（软件端点检测，纯 JVM 全量单测）：20ms 帧 RMS，门限 = max(绝对兜底 0.055, 噪声地板×4, 地板+0.02)，**噪声地板静默期慢速跟随**（说话期不更新防 TTS 残留抬地板）；起音确认 60ms → 句长按**有声时长**累计（悬停静默不计入，咳嗽/碰撞凑不够 280ms 判 TooShort 丢弃）→ 静默悬停 800ms 判句尾；超长 15s 强制断句。
+  - **架构 = 纯逻辑 + 薄壳**（app `FreeSpeech.kt`）：`WavEncoder`（PCM16LE→WAV 44 字节头，纯函数）；`SpeechVad`（软件端点检测，纯 JVM 全量单测）：20ms 帧 RMS，门限 = max(绝对兜底 0.025, 噪声地板×4, 地板+0.012)，**噪声地板静默期慢速跟随**（说话期不更新防 TTS 残留抬地板）；起音确认 60ms → 句长按**有声时长**累计（悬停静默不计入，咳嗽/碰撞凑不够 280ms 判 TooShort 丢弃）→ 静默悬停 800ms 判句尾；超长 15s 强制断句。
   - **FreeSpeechController**：AudioRecord 16k 单声道采音线程（视频模式 VOICE_COMMUNICATION 走硬件 AEC）；起音前 ~280ms 前滚环入段（首音节不削头）；句尾切片→WAV→复用按住说话同一条 ASR 链路→**自动发送**（freeTalk 下 autoSend 设置不生效；空识别=噪声切片静默忽略；Mutex 串行防乱序；视频模式自动附抓拍帧）。
-  - **Barge-in（打断）**：虚拟人 SPEAKING 期间高门限（0.14 或地板×7）+ 持续 350ms + 开始说话后 600ms 宽限（回声建立期），三重门触发 `session.interrupt()`，且该次开口继续录成下一句；普通响度在对方说话期不捕获（半双工兜底，防扬声器残留触发"自己打断自己"——真机观感待用户实测，误触发/不触发都调 `SpeechVad` 构造参数）。
+  - **Barge-in（打断）**：虚拟人 SPEAKING 期间高门限（0.10 或地板×7）+ 持续 350ms + 开始说话后 600ms 宽限（回声建立期），三重门触发 `session.interrupt()`，且该次开口继续录成下一句；普通响度在对方说话期不捕获（半双工兜底，防扬声器残留触发"自己打断自己"）。
+  - **灵敏度设置（设置页「自由说话」区，2026-10）**：`FreeSpeechSettings`（起音门限 0.010~0.080 默认 0.025 / 打断门限 0.05~0.25 默认 0.10 / 切句停顿 400~1500ms 默认 800），滑条+数值输入双向同步、「恢复默认」一键回默认；持久化 demo_settings（`fs_*` 键），改动经 `SpeechVad.applyTuning` **采音中实时生效**（不重启聆听，LaunchedEffect 驱动）。排查调参先看 logcat `FreeSpeech` 1Hz `level rms=… startTh=… floor=…` 行（`SpeechVad.debugStartThreshold`）比对实际电平再动。
   - **UI**：聊天条左侧 `VoiceTalkModeToggle`（自由态高亮 primaryContainer），右侧 `FreeListenIndicator`（平静"自由说话中，直接开口"/VAD 有人声"听到你说话…"主色/识别中副色，8dp 状态点）；确认形态（autoSend=false 的文本框形态）下同样带切换钮。
   - **ai_cmd**：`voice_free on|off`（无参翻转）、`chat_state` 尾部 `freeTalk=true(listening,hearing)` 状态；help 同步。**生命周期**：语音/视频模式+开关+麦克风权限+硅基流动 Key 四条件齐才跑（`LaunchedEffect(inputMode, freeTalk, micGranted)`），切模式/关开关/组合销毁即停。
   - **单测 +7（203 全绿）**：WAV 头逐字段；VAD 安静无事件/起音+悬停判句尾/短促丢弃/超长断句/barge-in 三重门(宽限内中等声不触发·大声持续恰好一次·不重复)/说话期中等声不捕获且 VAD 存活/reset 清态。
@@ -627,7 +628,7 @@ LLM SSE delta
 | 视频模式进不去 | `chat_state` 看 `vision=`：false 就是当前模型不可收图——`set_llm_model Qwen/Qwen3.8-27B`（硅基流动）或 `set_provider volcano`（默认即视觉）；错误条文案里有原因 |
 | 视频模式没有画面/抓拍 | 先看系统相机权限（A.1 第 28 条，真手授权一次）；`state` 看 `video: active=` 与 `ring=`；`video_snapshot` 探测缓存；logcat `VideoTracker` 的 `camera bound`(preview=true 才对)/`released` 与 face detect 失败行；**小窗黑屏但 state active=true** = Preview 没绑上（A.1 第 29 条①的守卫失效时查这里） |
 | 注视点恒定偏向一侧（与脸位置无关） | 坐标系/分辨率错位而非翻转符号：查归一化用的是直立系还是缓冲系尺寸（A.1 第 29 条②，FaceFrameMath）；偏向随位置左右镜像才去翻 nx 符号 |
-| 自由说话不触发/误触发 | 先 `chat_state` 看尾部 `freeTalk=true(listening)` 确认在听；不触发=门限高了（调 `SpeechVad` startAbsolute 0.055↓ 或 floorMultiplier 4↑）；切句太碎=hangoverMs 800↓；虚拟人说话被打断太勤=bargeAbsolute 0.14↑/bargeSustainMs 350↑；都不动则先看 logcat `FreeSpeech` 的 utterance 字节行分清"没录到"vs"识别空" |
+| 自由说话不触发/误触发 | 先 `chat_state` 看尾部 `freeTalk=true(listening)` 确认在听；不触发=门限高了（先看 logcat `FreeSpeech` 1Hz `level rms=… startTh=…` 行比对实际电平与门限差距，设置页「自由说话」区调「说话门限」↓，`floorOffset` 0.012 是无 UI 内部项改 `SpeechVad` 构造）；切句太碎=设置页「切句停顿」↑；虚拟人说话被打断太勤=设置页「打断门限」↑（还不够再 `bargeSustainMs` 350↑）；都不动则先看 logcat `FreeSpeech` 的 utterance 字节行分清"没录到"vs"识别空" |
 | 视线转头太狠/太弱（视频模式） | `FacePointProjector` 构造参数 `maxLateralDegrees`（默认 22°）/`maxVerticalDegrees`（默认 15°）——脸贴画面边缘时的转角上限，角度语义与机位无关；只动这两个度数。"凑近画面低头太多"则调 `maxAlongFraction`（默认 0.2，前伸钳制比例）。saccade 抖动（±0.25 世界单位）与该幅度独立，嫌眼神飘另调 SaccadeEngine 的 jitterAmplitude |
 | 首句等待太久（发送→出声间隔长） | `adb logcat -s LlmPrompt` 看 RESPONSE 头行 `ttfb=`（首 token 延迟）与 `tok: cached=`（>0=前缀缓存命中；冷上下文首请求小属正常）；REQUEST 头行核对 `thinking=off`（火山 doubao-seed 系/硅基流动 Qwen3 系默认都开思考必须关，参数方言见 `llmExtraBody`，A.1 第 31 条）；再按 `SentenceQueued→SentenceStarted` 看 TTS 合成段（火山每句新建 WS 是结构性 ~1s，连接复用是后续项） |
 | 回复不提画面内容 | logcat 搜 `multimodal turn:`——没有=没带图（非视频模式/无相机权限/模型非视觉任一），有=带了图是模型理解问题（换 Qwen3-VL 或 doubao-pro 观察） |

@@ -84,6 +84,7 @@ import com.neethu.aiavatar_sdk.ui.SECTION_AI
 import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
 import com.neethu.aiavatar_sdk.ui.SECTION_CARD
 import com.neethu.aiavatar_sdk.ui.SECTION_CONTEXT
+import com.neethu.aiavatar_sdk.ui.SECTION_FREE_SPEECH
 import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
 import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
@@ -305,6 +306,18 @@ internal class DemoUiState(context: Context) {
     fun updateMotionSettings(m: MotionSettings) {
         motionSettings = m
         prefs.saveMotionSettings(m)
+    }
+
+    /**
+     * 自由说话灵敏度（起音/打断门限+切句停顿）。持久化；变更经
+     * FreeSpeechController.applyTuning 对采音中的 VAD 实时生效，不需重启聆听。
+     */
+    var freeSpeechSettings by mutableStateOf(prefs.loadFreeSpeechSettings())
+        private set
+
+    fun updateFreeSpeechSettings(s: FreeSpeechSettings) {
+        freeSpeechSettings = s
+        prefs.saveFreeSpeechSettings(s)
     }
 
     var selectedModel by mutableStateOf("SK_Sun_PERFORMANCE_jacket_off_1024.vrm")
@@ -785,7 +798,7 @@ private fun DemoScreen(
     val settingsExpandedSections = rememberSaveable {
         mutableStateOf(setOf(
             SECTION_AI, SECTION_CARD, SECTION_CONTEXT,
-            SECTION_ANIMATIONS, SECTION_QUALITY, SECTION_LIVENESS,
+            SECTION_ANIMATIONS, SECTION_QUALITY, SECTION_LIVENESS, SECTION_FREE_SPEECH,
         ))
     }
     val settingsListState = rememberLazyListState()
@@ -1041,7 +1054,19 @@ private fun DemoScreen(
     )
 
     // ── 自由说话（连续聆听 + VAD 自动断句，按住/自由按钮切换）─────────────
-    val freeSpeech = remember { FreeSpeechController(context) }
+    val freeSpeech = remember {
+        val s = uiState.freeSpeechSettings
+        FreeSpeechController(context, vad = SpeechVad(
+            startAbsolute = s.startAbsolute,
+            bargeAbsolute = s.bargeAbsolute,
+            hangoverMs = s.hangoverMs.toLong(),
+        ))
+    }
+    // 设置页改灵敏度/切句停顿：对采音中的 VAD 实时生效
+    LaunchedEffect(uiState.freeSpeechSettings) {
+        val s = uiState.freeSpeechSettings
+        freeSpeech.applyTuning(s.startAbsolute, s.bargeAbsolute, s.hangoverMs.toLong())
+    }
     var freeHearing by remember { mutableStateOf(false) }
     // 并发句串行:上一句还在 ASR 时新一句排队,防止识别结果乱序发送
     val freeAsrChain = remember { kotlinx.coroutines.sync.Mutex() }
@@ -2004,6 +2029,8 @@ private fun DemoScreen(
                 },
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
                 onMotionSettingsChange = { uiState.updateMotionSettings(it) },
+                freeSpeechSettings = uiState.freeSpeechSettings,
+                onFreeSpeechSettingsChange = { uiState.updateFreeSpeechSettings(it) },
                 onSettingsChange = applyRenderSettings,
                 onAiPrefsChange = { uiState.updateAiPrefs(it) },
                 onVoicePrefsChange = { uiState.updateVoicePrefs(it) },
