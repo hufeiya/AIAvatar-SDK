@@ -145,6 +145,16 @@ fun aiDebugHelp(): String = """
     |  interrupt_chat           Interrupt the current turn (same as ✕ button)
 |  chat_state               Dump chat phase / subtitle length / last error /
 |                           resolved provider/model/voice config
+|Skills (docs/rps-skill-feasibility.md; needs a session, video mode +
+|                           a vision LLM for the judge turn to see the frame):
+|  skill_status             Dump the RPS skill state machine (state/round/
+|                           last hand/pending frame)
+|  skill_exit               Force-exit the active skill (restores the VAD
+|                           sentence hangover)
+|  rps_throw <arg>          Force a throw: rock | scissor | paper (omit ai_arg
+|                           = status). The next utterance / send_chat becomes
+|                           the judge turn (local gesture + snapshot already
+|                           done) — real-device A/B entry point
 |Providers (dual-vendor: SiliconFlow + Volcano; LLM/TTS/ASR dropdowns in ⚙️):
 |  set_provider <arg>       Switch LLM provider: siliconflow | volcano
 |                           (model list follows; empty model = vendor default)

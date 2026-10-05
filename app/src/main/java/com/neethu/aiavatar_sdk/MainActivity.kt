@@ -107,6 +107,10 @@ import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
+import com.neethu.orchestrator.skill.RpsSkill
+import com.neethu.aiavatar_sdk.skills.DemoSkillHost
+import com.neethu.aiavatar_sdk.skills.isSkillGestureAsset
+import com.neethu.aiavatar_sdk.skills.rpsHandAssets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -779,7 +783,14 @@ private fun DemoScreen(
 
     // ── AI 对话：装配 AvatarSession 并订阅其状态 ──────────────────────────
     val scope = rememberCoroutineScope()
-    val aiChat = remember { AiChatController(scope, controller, context.applicationContext) }
+    // 技能框架（docs/rps-skill-feasibility.md §4.3）：host 先于会话创建（懒
+    // 引用，session/freeSpeech/videoTracker 就绪后回填 provider），随会话
+    // 构造传入；RpsSkill 实例跨会话重建保持状态（局数/激活态）。
+    val skillHost = remember { DemoSkillHost(scope) }
+    val rpsSkill = remember { RpsSkill(rpsHandAssets) }
+    val aiChat = remember {
+        AiChatController(scope, controller, context.applicationContext, skillHost)
+    }
 
     // Room 会话库（任务 3）：设置页「上下文」类别的数据源
     val convoDb = remember { ConversationDatabase.getInstance(context) }
@@ -820,11 +831,17 @@ private fun DemoScreen(
             // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加
             // 外置库。待机不在这里挂——它属于渲染控制器而非 AI 会话（见上方
             // LaunchedEffect(state) 的 applyIdle），未配置 AI 也有待机。
-            val assetPaths = uiState.assetAnimationPaths(context)
+            // 技能手势目录（11_技能_猜拳）排除在 LLM 目录之外：`<act:>` 广告
+            // 位不收技能 tag，技能走 session.playGestureFile 非广告通道。
+            val assetPaths = uiState.assetAnimationPaths(context).filterNot { isSkillGestureAsset(it) }
             val externalFiles =
-                if (uiState.useExternalAnimations) uiState.externalAnimationAbsolutePaths(context)
-                else emptyList()
+                if (uiState.useExternalAnimations) {
+                    uiState.externalAnimationAbsolutePaths(context).filterNot { isSkillGestureAsset(it) }
+                } else {
+                    emptyList()
+                }
             s.actionCatalog = buildLlmActionCatalog(assetPaths, externalFiles)
+            s.skills.register(rpsSkill)
         }
     }
 
@@ -937,6 +954,9 @@ private fun DemoScreen(
                     }
                     is AvatarEvent.PlaybackInterrupted ->
                         chatLog("PlaybackInterrupted")
+                    is AvatarEvent.SkillEvent ->
+                        // 技能进度（激活/出拳/裁判/退场），排查技能时序全靠它
+                        chatLog("Skill[${ev.skillId}] ${ev.detail}")
                 }
             }
         }
@@ -1076,6 +1096,10 @@ private fun DemoScreen(
     freeSpeech.onHearingChanged = { hearing -> freeHearing = hearing }
     freeSpeech.onUtterance = { wav ->
         scope.launch {
+            // 技能快路径（docs/rps-skill-feasibility.md §2 P0）：ASR 之前先把
+            // 「时机」给技能——猜拳 ARMED 态的短句=出拳信号，本地随机出手势+
+            // 抓帧，不等识别；ASR 文本稍后经 onUtterance 到达（裁判回合输入）
+            session?.skills?.onVadUtterance(wavDurationMs(wav))
             freeAsrChain.withLock {
                 voiceRecognizing = true
                 val result = runCatching {
@@ -1084,20 +1108,29 @@ private fun DemoScreen(
                     }
                 }
                 voiceRecognizing = false
-                result.onSuccess { raw ->
-                    val text = raw.trim()
-                    when {
-                        // 环境噪声切片常识别为空:静默忽略,不刷错误条
-                        text.isEmpty() -> Unit
-                        else -> {
-                            pushUserLine(text)
-                            session?.send(text, videoSnapshotImages())
-                        }
-                    }
-                }.onFailure { chatError = "语音识别失败：${it.message}" }
+                // 技能先看文本（激活/退出/裁判）；消费=技能已自行发起回合，
+                // 调用方跳过默认发送。ASR 失败也送空串：出拳已发生，图照样裁判。
+                val text = result.getOrNull()?.trim().orEmpty()
+                if (text.isNotEmpty()) pushUserLine(text)
+                val consumed = session?.skills?.onUtterance(text) ?: false
+                when {
+                    consumed -> if (text.isEmpty()) pushUserLine("（出拳）")
+                    text.isEmpty() -> result.onFailure { t -> chatError = "语音识别失败：${t.message}" }
+                    else -> session?.send(text, videoSnapshotImages())
+                }
             }
         }
     }
+
+    // 技能能力缝的懒引用回填：此刻 freeSpeech/videoTracker 已就绪，session 由
+    // produceState 持续更新（读的是最新值）
+    skillHost.sessionProvider = { session }
+    skillHost.snapshotProvider = { videoTracker.snapshotDataUrl() }
+    skillHost.vadTuner = { ms ->
+        val s = uiState.freeSpeechSettings
+        freeSpeech.applyTuning(s.startAbsolute, s.bargeAbsolute, ms)
+    }
+    skillHost.defaultHangoverMsProvider = { uiState.freeSpeechSettings.hangoverMs.toLong() }
     freeSpeech.isAvatarSpeaking = { chatPhase == ConversationPhase.SPEAKING }
 
     val onToggleFreeTalk: () -> Unit = {
@@ -1153,9 +1186,12 @@ private fun DemoScreen(
             } else {
                 voiceRecognizing = true
                 scope.launch {
+                    val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                    // 松手=句尾：技能快路径与自由说话同源（猜拳短句=出拳信号）
+                    session?.skills?.onVadUtterance(wavDurationMs(bytes))
                     val result = runCatching {
                         withContext(Dispatchers.IO) {
-                            asrFor().transcribe(file.readBytes(), mimeForFileName(file.name), asrConfig())
+                            asrFor().transcribe(bytes, mimeForFileName(file.name), asrConfig())
                         }
                     }
                     file.delete()
@@ -1166,7 +1202,8 @@ private fun DemoScreen(
                             chatError = "未识别到语音内容，请靠近一点重试"
                         } else if (uiState.voicePrefs.autoSend) {
                             pushUserLine(text)
-                            session?.send(text, videoSnapshotImages())
+                            val consumed = session?.skills?.onUtterance(text) ?: false
+                            if (!consumed) session?.send(text, videoSnapshotImages())
                         } else {
                             voicePrefill = text
                         }
@@ -1253,7 +1290,10 @@ private fun DemoScreen(
                 val s = session
                 if (s != null) {
                     pushUserLine(text)
-                    s.send(text, videoSnapshotImages())
+                    // 与打字路径同缝：技能先看文本，消费=技能已自行发起回合
+                    //（rps_throw 后 send_chat "三二一" 即可真机驱动裁判回合）
+                    val consumed = s.skills.onUtterance(text)
+                    if (!consumed) s.send(text, videoSnapshotImages())
                 }
                 s != null
             },
@@ -1535,6 +1575,11 @@ private fun DemoScreen(
                 fd.clearManualExpression()
                 "face easing back to neutral"
             },
+            // ai_cmd skill_status / skill_exit / rps_throw <手>：技能调试
+            skillDebug = { id, arg ->
+                session?.skills?.debug(id, arg)
+                    ?: throw IllegalStateException("no AI chat session (skills live on the session)")
+            },
         )
     }
 
@@ -1648,7 +1693,9 @@ private fun DemoScreen(
             onHoldEnd = onHoldEnd,
             onSend = { text ->
                 pushUserLine(text)
-                session?.send(text, videoSnapshotImages())
+                // 技能先看文本（激活/退出/裁判），消费=技能已自行发起回合
+                val consumed = session?.skills?.onUtterance(text) ?: false
+                if (!consumed) session?.send(text, videoSnapshotImages())
             },
             onInterrupt = { session?.interrupt() },
             modifier = Modifier

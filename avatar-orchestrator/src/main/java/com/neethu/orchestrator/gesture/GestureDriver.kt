@@ -51,15 +51,25 @@ open class GestureDriver(private val controller: AvatarController) {
     /** Load and start the clip for [tag]; false when unknown or unloadable. */
     open fun play(tag: String): Boolean {
         val entry = catalog[tag] ?: return false
+        return playFile(entry)
+    }
+
+    /**
+     * Load and start a clip directly by entry — the skill channel
+     * (docs/rps-skill-feasibility.md §4.3): bypasses the LLM catalog lookup so
+     * skill gestures never appear in the `<act:>` protocol block. Same one-shot
+     * semantics as [play] (non-looping, engine restores rest/idle afterwards).
+     */
+    open fun playFile(entry: ActionEntry): Boolean {
         val loaded = when {
             entry.assetPath != null -> controller.loadVrmaAnimation(entry.assetPath)
             else -> entry.filePath?.let { controller.loadVrmaAnimationFromFile(it) } ?: false
         }
         if (!loaded) {
-            Log.w(TAG, "gesture '$tag' failed to load (${entry.assetPath ?: entry.filePath})")
+            Log.w(TAG, "gesture '${entry.tag}' failed to load (${entry.assetPath ?: entry.filePath})")
             return false
         }
-        currentTag = tag
+        currentTag = entry.tag
         controller.playVrmaAnimation(loop = false)
         return true
     }

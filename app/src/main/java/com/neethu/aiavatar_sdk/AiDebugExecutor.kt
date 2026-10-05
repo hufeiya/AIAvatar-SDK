@@ -77,6 +77,10 @@ internal class AiChatDebugHooks(
     val manualExpression: ((String, Float) -> String)? = null,
     /** ai_cmd clear_expression：缓动回中性；null = 无会话，executor 直清控制器。 */
     val clearManualExpression: (() -> String)? = null,
+    /** ai_cmd skill_status / skill_exit / rps_throw <手>：技能框架调试（挂会话后可用）。 */
+    val skillDebug: (String, String?) -> String = { _, _ ->
+        "AI chat not wired in this screen"
+    },
 )
 
 /**
@@ -284,6 +288,20 @@ internal suspend fun executeAiCommand(
             "voice_free" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setVoiceFree(command.arg)
+            }
+            "skill_status" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.skillDebug("rps", "status")
+            }
+            "skill_exit" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.skillDebug("rps", "exit")
+            }
+            "rps_throw" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // ai_arg = rock|scissor|paper（缺省=查看状态）；强制出拳后下一句
+                // send_chat/语音即成为裁判回合——真机 A/B 驱动的关键入口
+                chat.skillDebug("rps", command.arg)
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

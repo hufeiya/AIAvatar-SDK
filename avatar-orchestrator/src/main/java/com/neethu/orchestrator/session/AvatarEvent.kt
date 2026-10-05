@@ -34,4 +34,7 @@ sealed interface AvatarEvent {
 
     /** Active playback was cut short by [AvatarSession.interrupt]. */
     data object PlaybackInterrupted : AvatarEvent
+
+    /** 技能进度事件（激活/出拳/判定/退场…），skill/ 框架经 SkillContext.event 发出。 */
+    data class SkillEvent(val skillId: String, val detail: String) : AvatarEvent
 }

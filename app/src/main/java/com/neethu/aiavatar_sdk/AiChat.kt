@@ -12,6 +12,7 @@ import com.neethu.corelib.AvatarController
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.history.RoomConversationStore
 import com.neethu.orchestrator.session.AvatarSession
+import com.neethu.orchestrator.skill.SkillHost
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -188,6 +189,8 @@ class AiChatController(
     private val avatarController: AvatarController,
     /** application context：Room 库单例的持有者。 */
     private val appContext: Context,
+    /** 技能框架能力缝（docs/rps-skill-feasibility.md §4.3）；null = 无技能能力。 */
+    private val skillHost: SkillHost? = null,
 ) {
     /** 会话身份：配置 + 上下文。任一变化都触发重建。 */
     data class SessionIdentity(val prefs: AiChatPrefs, val contextId: String)
@@ -244,6 +247,7 @@ class AiChatController(
                 recentTurnLimit = 40,
             ),
             store = store,
+            skillHost = skillHost,
         )
         val model = resolveLlmModel(prefs.provider, prefs.llmModel)
         session.llmConfig = LlmConfig(

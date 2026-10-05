@@ -52,6 +52,13 @@ object WavEncoder {
 }
 
 /**
+ * 标准 WAV（16bit PCM，[WavEncoder] 的输出）字节数 → 时长毫秒。
+ * 技能快路径用：VAD 判完句尾、ASR 之前，猜拳技能靠它判「短句=出拳信号」。
+ */
+fun wavDurationMs(wav: ByteArray, sampleRateHz: Int = 16_000): Long =
+    (wav.size - 44).coerceAtLeast(0) * 1_000L / (2 * sampleRateHz)
+
+/**
  * 软件语音端点检测（纯 JVM）。按 ~20ms 帧喂 [SpeechVad.feed]（RMS 归一化
  * 0..1 + 墙钟 + 虚拟人是否在说话），返回判定事件：
  *  - [SpeechVad.Event.SpeechStarted]：确认起音（调用方 flush 前滚、高亮"听到"）

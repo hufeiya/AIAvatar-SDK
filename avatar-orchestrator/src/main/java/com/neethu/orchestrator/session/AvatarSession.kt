@@ -30,6 +30,8 @@ import com.neethu.orchestrator.gesture.GestureDriver
 import com.neethu.orchestrator.history.ConversationStore
 import com.neethu.orchestrator.history.InMemoryConversationStore
 import com.neethu.orchestrator.pipeline.SpeechPipeline
+import com.neethu.orchestrator.skill.SkillHost
+import com.neethu.orchestrator.skill.SkillRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,6 +85,11 @@ class AvatarSession(
      * 持久化与多上下文。
      */
     store: ConversationStore = InMemoryConversationStore(),
+    /**
+     * 技能框架的能力缝（docs/rps-skill-feasibility.md §4）：null = 未接线，
+     * 技能状态机照常运转但能力调用（出动作/抓拍/VAD 调参）全部落空。
+     */
+    skillHost: SkillHost? = null,
 ) {
 
     data class Options(
@@ -166,6 +173,15 @@ class AvatarSession(
             field = value
             if (value != null) gestureDriver?.setIdle(value) else gestureDriver?.clearIdle()
         }
+
+    /**
+     * 技能注册表（docs/rps-skill-feasibility.md §4.2）：app 喂事件
+     * （语音文本/VAD 时机/相机手势），session 喂回合结果
+     * （[onTurnCompleted 钩子在 send]/interrupt），每轮组请求时读
+     * [SkillRegistry.activeDirective]。技能经能力缝反向调用本会话
+     * （[playGestureFile]/[speak]/[send]）——host 实现持有 session 引用即可。
+     */
+    val skills: SkillRegistry = SkillRegistry(skillHost) { emit(it) }
 
     private val queue: PlaybackQueue = playbackQueue ?: AudioTrackPlaybackQueue()
     private val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent)
@@ -375,12 +391,15 @@ class AvatarSession(
                 store.appendAssistant(replyBuffer.toString())
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
+                // 技能缝：回合结果广播给技能（猜拳 INVITED→ARMED / JUDGING→ARMED）
+                skills.onTurnCompleted(cleanBuffer.toString())
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
                 pipeline.cancelTurn("turn-error")
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnFailed(t))
+                skills.onTurnFailed()
             }
         }
     }
@@ -389,6 +408,18 @@ class AvatarSession(
     suspend fun sendAndAwait(text: String, images: List<String> = emptyList()) {
         send(text, images)
         turnJob?.join()
+    }
+
+    /**
+     * 技能专用动作通道：不经 LLM 动作目录直接按路径播一个动作 clip（非循环，
+     * 播完引擎自动回待机）——猜拳出拳手势走这里，`<act:>` 协议块里永远看不到
+     * 这些 tag（防 LLM 对话中随机刷出）。[assetPath] 是 assets 相对路径
+     * （"animations/…"）或绝对文件路径。
+     */
+    fun playGestureFile(assetPath: String): Boolean {
+        val driver = gestureDriver ?: return false
+        val name = assetPath.substringAfterLast('/').removeSuffix(".vrma")
+        return driver.playFile(ActionEntry(tag = "skill:$name", label = name, assetPath = assetPath))
     }
 
     /**
@@ -449,6 +480,7 @@ class AvatarSession(
         emotionsBySequence.clear()
         gestureDriver?.stop()
         pipeline.cancelTurn(reason)
+        skills.onInterrupted()
         scope.launch(Dispatchers.Main.immediate) {
             if (_phase.value != ConversationPhase.IDLE) _phase.value = ConversationPhase.IDLE
         }
@@ -591,13 +623,17 @@ class AvatarSession(
         // system 都不进 store，天然不受 recentTurnLimit 影响。
         val history = store.messages()
         list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
-        // 视角行 + 本轮抓拍（视频模式）：都挂到刚 append 的末尾 user 消息上——
-        // 请求里带，store 里的历史始终只有干净文字（见 send 的注释）。
+        // 视角行 + 技能指令行 + 本轮抓拍（视频模式）：都挂到刚 append 的末尾
+        // user 消息上——请求里带，store 里的历史始终只有干净文字（见 send 的
+        // 注释）。技能指令与视角行同级：逐轮变化、只改本轮请求副本、不碰
+        // system/协议（前缀缓存友好，A.1 第 34 条的"system 恒一条"不受影响）。
         val viewLine = currentViewLine()
-        if ((viewLine != null || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
+        val skillLine = skills.activeDirective()
+        val directivePrefix = listOfNotNull(viewLine, skillLine).joinToString("\n\n")
+        if ((directivePrefix.isNotEmpty() || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
             val last = list.last()
             list[list.size - 1] = last.copy(
-                content = if (viewLine != null) "$viewLine\n\n${last.content}" else last.content,
+                content = if (directivePrefix.isNotEmpty()) "$directivePrefix\n\n${last.content}" else last.content,
                 images = turnImages,
             )
         }
@@ -609,7 +645,7 @@ class AvatarSession(
         Log.i(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
-                "view=${viewLine ?: "n/a"} " +
+                "view=${viewLine ?: "n/a"} skill=${skillLine?.length ?: 0}ch " +
                 "persona=${persona.length}ch protocol=${pinnedProtocol?.length ?: 0}ch " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",
         )
