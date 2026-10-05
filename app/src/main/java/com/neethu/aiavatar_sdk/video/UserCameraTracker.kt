@@ -37,10 +37,15 @@ import java.util.concurrent.Executors
  *     压入 [ring]（深 3）——ASR 松手/打字发送时取 [snapshotDataUrl]（最
  *     清晰一帧）组装多模态请求。抓拍与脸检测解耦：没人脸也持续缓存
  *     （"看看房间里有什么"同样要图）。
+ *  3. **手势识别**（猜拳 P2）：[gestureEnabled] 为真时（技能激活）在前摄
+ *     分析帧上跑 MediaPipe GestureRecognizer（bundled ~8MB，IMAGE 模式
+ *     同步 10-20ms），结果经 [GestureStabilityGate] 确认后投 [onGestureConfirmed]
+ *     到主线程 → 技能缝。关着时零开销（不建引擎不转位图）。
  *
  * 生命周期：进出视频模式配对 [start]/[stop]；[switchLens] 重绑前后摄。
- * ML Kit 检测器随 start/stop 重建/释放。线程：相机绑定在主线程（CameraX
- * 要求），分析回调解在单线程 executor。
+ * ML Kit 检测器随 start/stop 重建/释放；手势引擎懒创建、stop 时经分析
+ * executor 串行释放（与识别调用同队列，杜绝并发 close 原生实例）。
+ * 线程：相机绑定在主线程（CameraX 要求），分析回调解在单线程 executor。
  */
 class UserCameraTracker(private val context: android.content.Context) {
 
@@ -71,6 +76,22 @@ class UserCameraTracker(private val context: android.content.Context) {
     @Volatile
     var latestFace: FaceObservation? = null
         private set
+
+    // ── 手势识别车道（猜拳 P2）───────────────────────────────────────────
+    // 开关/回调主线程写、分析线程读（@Volatile 保证可见性）；引擎与门控状态
+    // 只在分析线程触碰（创建/识别/释放都在 executor 队列里串行）。
+
+    /** 技能要手势吗（app 接 rpsSkill.isActive）：关=整条车道零开销。 */
+    @Volatile
+    var gestureEnabled: () -> Boolean = { false }
+
+    /** 确认手势回调（主线程投递）：1=石头,2=剪刀,3=布；0 永不发出。 */
+    @Volatile
+    var onGestureConfirmed: ((Int) -> Unit)? = null
+
+    private var gestureEngine: HandGestureRecognizer? = null
+    private val gestureGate = GestureStabilityGate()
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private var lastSnapshotMs = 0L
     private var lastDetectMs = 0L
@@ -118,6 +139,9 @@ class UserCameraTracker(private val context: android.content.Context) {
         val newProvider = ProcessCameraProvider.getInstance(context).get()
         newProvider.unbindAll()
         detector?.close()
+        // 重绑（换镜头/补 Preview/进出视频模式）后门控从干净态起步，别让上一段
+        // 会话遗留的「未重新武装」吞掉本段的第一个手势
+        gestureGate.reset()
         detector = FaceDetection.getClient(
             FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
@@ -169,6 +193,12 @@ class UserCameraTracker(private val context: android.content.Context) {
         detector = null
         latestFace = null
         busy.set(false)
+        // 手势引擎在分析线程释放：与可能还在跑的 recognize() 同队列串行，
+        // 杜绝主线程 close 撞上原生实例并发调用
+        executor.execute {
+            gestureEngine?.close()
+            gestureEngine = null
+        }
         Log.i(TAG, "camera released")
     }
 
@@ -214,6 +244,14 @@ class UserCameraTracker(private val context: android.content.Context) {
             (best?.let { "${it.byteCount}B sharpness=${"%.1f".format(it.sharpness)}" } ?: "none")
     }
 
+    /** 懒建手势引擎（只在分析线程触碰；模型缺失/初始化失败=手势车道静默停用）。 */
+    private fun obtainGestureEngine(): HandGestureRecognizer? {
+        gestureEngine?.let { return it }
+        return runCatching { HandGestureRecognizer(context).also { gestureEngine = it } }
+            .onFailure { Log.w(TAG, "gesture recognizer init failed: ${it.message}") }
+            .getOrNull()
+    }
+
     // ── 分析管线（analysis executor 线程）────────────────────────────────
 
     private fun analyzeFrame(proxy: ImageProxy) {
@@ -239,6 +277,10 @@ class UserCameraTracker(private val context: android.content.Context) {
         }
         try {
             val rotation = proxy.imageInfo.rotationDegrees
+            // 手势车道只在前摄+技能激活的分析帧上跑（关=零开销）；app 侧接的是
+            // rpsSkill.isActive，INVITED 起就预热引擎，ARMED 首个手势不必吃冷启动
+            val wantGesture = detectDue && lensFacing == CameraSelector.LENS_FACING_FRONT &&
+                gestureEnabled()
             val snapBitmap = if (snapDue) {
                 runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
             } else {
@@ -254,6 +296,24 @@ class UserCameraTracker(private val context: android.content.Context) {
                 return
             }
             lastDetectMs = now
+
+            // 手势识别与人脸检测同 80ms 节奏：ML Kit 走异步 Task，这里同步
+            // 10-20ms，同一 executor 串行不互抢。抓拍帧位图已转好就直接复用，
+            // 省一次 YUV→RGB（复用时所有权仍归 encodeSnapshot，不 recycle）。
+            if (wantGesture) {
+                val bmp = snapBitmap ?: runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
+                if (bmp != null) {
+                    val code = runCatching {
+                        obtainGestureEngine()?.recognize(bmp) ?: PresetGestures.NONE
+                    }.getOrDefault(PresetGestures.NONE)
+                    if (bmp !== snapBitmap) bmp.recycle()
+                    val confirmed = gestureGate.onDetection(code, now)
+                    val cb = onGestureConfirmed
+                    if (confirmed != PresetGestures.NONE && cb != null) {
+                        mainHandler.post { cb(confirmed) }
+                    }
+                }
+            }
 
             val w = proxy.width
             val h = proxy.height

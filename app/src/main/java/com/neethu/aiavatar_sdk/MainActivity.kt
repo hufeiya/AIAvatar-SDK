@@ -1131,6 +1131,13 @@ private fun DemoScreen(
         freeSpeech.applyTuning(s.startAbsolute, s.bargeAbsolute, ms)
     }
     skillHost.defaultHangoverMsProvider = { uiState.freeSpeechSettings.hangoverMs.toLong() }
+    // 猜拳 P2 手势车道（docs/rps-skill-feasibility.md §5）：技能激活（INVITED 起，
+    // 顺带预热引擎）才在分析线程跑 MediaPipe；确认手势主线程广播给全部技能。
+    // 无事件时零开销（不转位图不建引擎），MediaPipe 不可用则纯走 P0 语音路径。
+    videoTracker.gestureEnabled = { rpsSkill.isActive }
+    videoTracker.onGestureConfirmed = { code ->
+        scope.launch { session?.skills?.onUserGesture(code) }
+    }
     freeSpeech.isAvatarSpeaking = { chatPhase == ConversationPhase.SPEAKING }
 
     val onToggleFreeTalk: () -> Unit = {
@@ -1575,7 +1582,7 @@ private fun DemoScreen(
                 fd.clearManualExpression()
                 "face easing back to neutral"
             },
-            // ai_cmd skill_status / skill_exit / rps_throw <手>：技能调试
+            // ai_cmd skill_status / skill_exit / rps_throw <手> / rps_gesture <手>：技能调试
             skillDebug = { id, arg ->
                 session?.skills?.debug(id, arg)
                     ?: throw IllegalStateException("no AI chat session (skills live on the session)")

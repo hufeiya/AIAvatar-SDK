@@ -20,6 +20,9 @@ ksp = "2.0.21-1.0.28"
 # 短距模型，不依赖 Google Play Services，国产无 GMS 设备可跑）
 camerax = "1.4.2"
 mlkitFaceDetection = "16.1.7"
+# 猜拳技能 P2（docs/rps-skill-feasibility.md §5）：MediaPipe GestureRecognizer
+# 端侧手势识别（bundled gesture_recognizer.task ~8MB 在 app assets，同样无 GMS）
+mediapipeTasksVision = "0.10.14"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -52,6 +55,7 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFaceDetection" }
+mediapipe-tasks-vision = { group = "com.google.mediapipe", name = "tasks-vision", version.ref = "mediapipeTasksVision" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -58,6 +58,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.face.detection)
+    // 猜拳 P2：MediaPipe GestureRecognizer 端侧手势（bundled 模型 assets/gesture_recognizer.task）
+    implementation(libs.mediapipe.tasks.vision)
     // 预置卡导入映射/提示词覆盖的纯 JSON 逻辑（JVM 单测可跑；android.jar 的
     // org.json 是抛 "not mocked" 的桩，进不了单测）
     implementation(libs.kotlinx.serialization.json)

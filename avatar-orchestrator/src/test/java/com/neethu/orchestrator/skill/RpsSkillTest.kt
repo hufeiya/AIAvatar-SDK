@@ -239,6 +239,211 @@ class RpsSkillTest {
         assertEquals(RpsSkill.State.ARMED, skill.state)
     }
 
+    // ── P2 相机手势（本地权威判定，docs/rps-skill-feasibility.md §5）──────
+
+    @Test
+    fun `gesture codes map to hands`() {
+        assertEquals(RpsSkill.Hand.ROCK, RpsSkill.gestureCodeToHand(1))
+        assertEquals(RpsSkill.Hand.SCISSORS, RpsSkill.gestureCodeToHand(2))
+        assertEquals(RpsSkill.Hand.PAPER, RpsSkill.gestureCodeToHand(3))
+        assertNull(RpsSkill.gestureCodeToHand(0))
+        assertNull(RpsSkill.gestureCodeToHand(7))
+    }
+
+    @Test
+    fun `camera gesture in ARMED throws locally and speaks the verdict`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.nextRandom = 1 // 我出剪刀
+        skill.onUserGesture(1, ctx) // 用户石头 → 石头砸剪刀,用户赢
+        assertEquals(RpsSkill.State.THROWN, skill.state)
+        assertEquals(1, skill.round)
+        assertEquals(RpsSkill.Hand.ROCK, skill.lastUserGesture)
+        assertEquals(RpsSkill.Hand.SCISSORS, skill.lastChoice)
+        assertEquals(RpsSkill.Verdict.USER_WIN, skill.lastVerdict)
+        // 出的是我的手,存的是用户的手与帧
+        assertEquals(listOf(assets[RpsSkill.Hand.SCISSORS]), host.played)
+        assertEquals(RpsSkill.Hand.SCISSORS, skill.pendingThrow?.choice)
+        assertEquals(RpsSkill.Hand.ROCK, skill.pendingThrow?.userChoice)
+        assertEquals("data:image/jpeg;base64,FAKE", skill.pendingThrow?.frame)
+        // 即时宣判(直通 TTS,不经 LLM);LLM 回合还没发起
+        assertEquals(1, host.spoken.size)
+        assertTrue(host.spoken.single().contains("你出石头"))
+        assertTrue(host.spoken.single().contains("我出剪刀"))
+        assertTrue(host.spoken.single().contains("你赢"))
+        assertTrue(host.sent.isEmpty())
+    }
+
+    @Test
+    fun `local verdict matrix covers all nine combinations`() {
+        for ((seed, mine) in RpsSkill.Hand.entries.withIndex()) {
+            for (user in RpsSkill.Hand.entries) {
+                val (skill, host, ctx) = newSkill()
+                activateToArmed(skill, host, ctx)
+                host.nextRandom = seed
+                skill.onUserGesture(user.ordinal + 1, ctx)
+                val expected = when {
+                    user == mine -> RpsSkill.Verdict.DRAW
+                    user.beats(mine) -> RpsSkill.Verdict.USER_WIN
+                    else -> RpsSkill.Verdict.AVATAR_WIN
+                }
+                assertEquals("user=$user mine=$mine", expected, skill.lastVerdict)
+                val keyword = when (expected) {
+                    RpsSkill.Verdict.USER_WIN -> "你赢"
+                    RpsSkill.Verdict.AVATAR_WIN -> "我赢"
+                    RpsSkill.Verdict.DRAW -> "平局"
+                }
+                assertTrue(
+                    "user=$user mine=$mine spoken=${host.spoken}",
+                    host.spoken.single().contains(keyword),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `camera gesture in THROWN starts the next round`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.nextRandom = 0
+        skill.onUserGesture(1, ctx) // 第1局
+        assertEquals(1, skill.round)
+        host.nextRandom = 2
+        skill.onUserGesture(2, ctx) // 第2局:用户剪刀,我出布 → 剪刀剪布,用户赢
+        assertEquals(RpsSkill.State.THROWN, skill.state)
+        assertEquals(2, skill.round)
+        assertEquals(RpsSkill.Hand.SCISSORS, skill.lastUserGesture)
+        assertEquals(RpsSkill.Hand.PAPER, skill.lastChoice)
+        assertEquals(RpsSkill.Verdict.USER_WIN, skill.lastVerdict)
+        assertEquals(2, host.spoken.size)
+    }
+
+    @Test
+    fun `camera gesture outside ARMED-or-THROWN is ignored`() {
+        val (skill, host, ctx) = newSkill()
+        skill.onUserGesture(1, ctx) // IDLE
+        assertEquals(RpsSkill.State.IDLE, skill.state)
+        assertTrue(host.spoken.isEmpty())
+        skill.onUtterance("玩猜拳", ctx) // INVITED:激活回合还没完
+        skill.onUserGesture(1, ctx)
+        assertEquals(RpsSkill.State.INVITED, skill.state)
+        assertTrue(host.played.isEmpty())
+        skill.onTurnCompleted("好呀", ctx)
+        host.nextRandom = 0
+        skill.onUserGesture(1, ctx)
+        assertTrue(skill.onUtterance("三二一", ctx)) // JUDGING
+        host.spoken.clear()
+        skill.onUserGesture(3, ctx) // JUDGING 中忽略(多半是说话的比划)
+        assertEquals(RpsSkill.State.JUDGING, skill.state)
+        assertTrue(host.spoken.isEmpty())
+    }
+
+    @Test
+    fun `utterance after camera throw is the atmosphere turn with local result`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.nextRandom = 0 // 我出石头
+        skill.onUserGesture(2, ctx) // 用户剪刀 → 石头砸剪刀,我赢
+        assertTrue(skill.onUtterance("哈哈!", ctx))
+        assertEquals(RpsSkill.State.JUDGING, skill.state)
+        assertEquals(1, host.sent.size)
+        val (text, images) = host.sent.single()
+        assertEquals("哈哈!", text)
+        assertEquals(listOf("data:image/jpeg;base64,FAKE"), images)
+        val directive = skill.turnDirective(ctx)
+        assertTrue(directive!!.contains("本地摄像头识别"))
+        assertTrue(directive.contains("用户出的是「剪刀」"))
+        assertTrue(directive.contains("出的是「石头」"))
+        assertTrue(directive.contains("不要重新判定"))
+        skill.onTurnCompleted("哈哈你输了!", ctx)
+        assertEquals(RpsSkill.State.ARMED, skill.state)
+    }
+
+    @Test
+    fun `vad in a locally judged THROWN does not double throw`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        skill.onUserGesture(1, ctx)
+        val spokenBefore = host.spoken.size
+        skill.onVadUtterance(1_000L, ctx) // 三二一喊晚了,拳已经出了
+        assertEquals(RpsSkill.State.THROWN, skill.state)
+        assertEquals(1, skill.round)
+        assertEquals(spokenBefore, host.spoken.size)
+        assertEquals(1, host.played.size)
+    }
+
+    @Test
+    fun `late camera gesture upgrades a vad throw to local judging`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.nextRandom = 0 // 我出石头
+        skill.onVadUtterance(1_000L, ctx) // P0 语音先出拳(用户的手未知)
+        assertNull(skill.pendingThrow?.userChoice)
+        skill.onUserGesture(2, ctx) // 用户剪刀补观测到 → 石头砸剪刀,我赢
+        assertEquals(RpsSkill.Hand.SCISSORS, skill.pendingThrow?.userChoice)
+        assertEquals(RpsSkill.Verdict.AVATAR_WIN, skill.lastVerdict)
+        assertEquals(1, host.spoken.size) // 补即时宣判
+        assertEquals(1, host.played.size) // 不重出拳、不重抓帧
+        // ASR 到达后走气氛组指令,不再让 VLM 看图判定
+        assertTrue(skill.onUtterance("三二一!", ctx))
+        val directive = skill.turnDirective(ctx)
+        assertTrue(directive!!.contains("本地摄像头识别"))
+        assertFalse(directive.contains("看随本轮附上的抓拍画面"))
+    }
+
+    @Test
+    fun `camera throw without a frame still judges and speaks locally`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.frame = null
+        skill.onUserGesture(3, ctx)
+        assertEquals(1, host.spoken.size) // 本地判定不看图
+        assertTrue(skill.onUtterance("三二一", ctx))
+        assertTrue(host.sent.single().second.isEmpty())
+    }
+
+    @Test
+    fun `debug gesture command runs the same local path`() {
+        val (skill, host, ctx) = newSkill()
+        activateToArmed(skill, host, ctx)
+        host.nextRandom = 0 // 我出石头 vs 用户布 → 布包石头,用户赢
+        val result = skill.debugCommand("gesture_paper", ctx)
+        assertTrue(result.contains("verdict="))
+        assertEquals(RpsSkill.Hand.PAPER, skill.lastUserGesture)
+        assertEquals(RpsSkill.Verdict.USER_WIN, skill.lastVerdict)
+        assertEquals(1, host.spoken.size)
+        assertTrue(skill.debugCommand("status", ctx).contains("user=布"))
+        assertTrue(skill.debugCommand("status", ctx).contains("verdict=用户赢"))
+    }
+
+    @Test
+    fun `debug gesture outside a round is rejected`() {
+        val (skill, host, ctx) = newSkill()
+        assertTrue(skill.debugCommand("gesture_rock", ctx).contains("ignored"))
+    }
+
+    // ── 指令内容（用户反馈：AI 有时不知道规则，指令里写明胜负规则）────────
+
+    @Test
+    fun `directives teach the rps rules`() {
+        val (skill, host, ctx) = newSkill()
+        // INVITED：邀请回合的指令带全规则，LLM 照着讲不会讲错
+        skill.onUtterance("玩猜拳", ctx)
+        val invited = skill.turnDirective(ctx)!!
+        assertTrue(invited.contains("剪刀赢布"))
+        assertTrue(invited.contains("布赢石头"))
+        assertTrue(invited.contains("石头赢剪刀"))
+        assertTrue(invited.contains("平局"))
+        // ARMED：出拳间隙的对话指令也带规则
+        skill.onTurnCompleted("好呀", ctx)
+        assertTrue(skill.turnDirective(ctx)!!.contains("剪刀赢布"))
+        // P0 看图裁判指令带规则（VLM 据此宣判）
+        host.nextRandom = 0
+        skill.onVadUtterance(1_000L, ctx)
+        assertTrue(skill.onUtterance("三二一", ctx))
+        assertTrue(skill.turnDirective(ctx)!!.contains("剪刀赢布"))
+    }
+
     // ── 调试命令 ─────────────────────────────────────────────────────────
 
     @Test

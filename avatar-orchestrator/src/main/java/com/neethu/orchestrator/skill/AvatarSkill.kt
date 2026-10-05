@@ -37,7 +37,11 @@ interface AvatarSkill {
      */
     fun onVadUtterance(wavMs: Long, ctx: SkillContext) {}
 
-    /** 相机手势观测（P2 MediaPipe 缝）：0=无,1=石头,2=剪刀,3=布。 */
+    /**
+     * 相机手势观测（P2：MediaPipe GestureRecognizer 经稳定性门控的确认帧，
+     * app 层喂）：0=无,1=石头,2=剪刀,3=布。只在技能激活时才有事件
+     * （app 侧按 isActive 门控整条检测车道）。
+     */
     fun onUserGesture(gesture: Int, ctx: SkillContext) {}
 
     /** 一轮回合（含技能经 sendTurn 发起的）完整结束。 */

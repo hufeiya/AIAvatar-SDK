@@ -5,21 +5,27 @@ import kotlin.random.Random
 /**
  * 猜拳技能（石头剪刀布）——技能框架的第一个实现（docs/rps-skill-feasibility.md §4.4）。
  *
- * 实时性的关键取舍：大模型只当「裁判」，不当「选手」。用户喊三二一出拳时，
- * 虚拟人的手势由**本地随机**决定并立即用 VRMA 展示（[SkillHost.playGestureFile]），
- * 同时抓一帧相机画面存进技能态；等这句的 ASR 文本回来，再以「看图裁判」回合
- * 发给大模型（指令行告知本地已出的是什么，模型不改口，只判断用户的手势并
- * 宣布胜负）。
- *
- * 触发（P0 形态）：ARMED 态下 VAD 一判完句尾（技能激活时已把悬停收短到
- * [THROW_MAX_WAV_MS] 以下短句的节奏），先于 ASR 看 wav 时长——短句即视为出拳
- * 信号。误触发面=游戏语境里的随口短语，代价只是多玩一局，可接受。
+ * 触发有两条路（P0/P2 并存，谁先到谁主导）：
+ *  - **P0 语音快路径**：ARMED 态 VAD 一判完句尾、先于 ASR 看 wav 时长——短句
+ *    （≤[THROW_MAX_WAV_MS]）即视为出拳信号，本地随机出手势（VRMA）+抓帧；
+ *    ASR 文本稍后到，作为「看图裁判」回合发给大模型（指令行告知本地已出的
+ *    手，模型不改口，只看图判断用户的手并宣布胜负）。
+ *  - **P2 视觉路径**（[onUserGesture]，MediaPipe GestureRecognizer 端侧识别）：
+ *    用户手势在本地直接已知 → 虚拟人随机出拳后**当场判胜负并 speak() 即时
+ *    宣判**（TTS ~1.2s 出声，比 LLM 裁判的 3-5s 快一个量级，且判定是确定值）。
+ *    ASR 文本到达后的回合降级为「气氛组」：指令写明本地判定结果，模型只做
+ *    临场反应、不得重新判定。VAD 先触发的拳若随后观测到手势，就地补记用户
+ *    的手、升级成 P2 判定（VLM 看图误判的根治入口）。
  *
  * 状态机：
  * ```
  * IDLE ──命中激活词──▶ INVITED（收短 VAD 悬停；激活回合照常发送）
  * INVITED ──回合完成/被打断──▶ ARMED
- * ARMED ──短句 VAD──▶ THROWN（本地出拳+抓帧）──ASR 文本──▶ JUDGING（裁判回合）
+ * ARMED ──短句 VAD──▶ THROWN(本地随机出拳+抓帧,用户的手未知)
+ * ARMED ──相机手势──▶ THROWN(本地判定+speak 宣判,用户的手已知)
+ * THROWN(手未知) ──相机手势──▶ THROWN(补记用户的手,升级为本地判定)
+ * THROWN(手已知) ──相机手势──▶ THROWN(纯手势连局,直接开下一拳)
+ * THROWN ──ASR 文本──▶ JUDGING(手未知=VLM 裁判回合;手已知=气氛组回合)
  * JUDGING ──回合完成/失败/被让位──▶ ARMED
  * 任意态 ──命中退出词 / 强制退场──▶ IDLE（恢复 VAD 悬停）
  * ```
@@ -54,14 +60,29 @@ class RpsSkill(
 
     enum class State { IDLE, INVITED, ARMED, THROWN, JUDGING }
 
-    /** 待裁判的一拳：本地已出的手势 + 出拳瞬间的抓拍帧。 */
-    data class PendingThrow(val choice: Hand, val frame: String?, val round: Int)
+    /** P2 本地判定结论（以用户视角命名，宣判与气氛组指令共用）。 */
+    enum class Verdict(val zh: String) {
+        USER_WIN("用户赢"),
+        AVATAR_WIN("你赢"),
+        DRAW("平局"),
+    }
+
+    /** 待裁判的一拳：本地已出的手势 + 用户的手（P2 本地判定时非空）+ 出拳瞬间的抓拍帧。 */
+    data class PendingThrow(val choice: Hand, val userChoice: Hand?, val frame: String?, val round: Int)
 
     var state: State = State.IDLE
         private set
     var round: Int = 0
         private set
     var lastChoice: Hand? = null
+        private set
+
+    /** 用户最近一次被相机确认的手势（P2 观测/调试用）。 */
+    var lastUserGesture: Hand? = null
+        private set
+
+    /** 最近一局的本地判定结论（P2；VLM 裁判局不写）。 */
+    var lastVerdict: Verdict? = null
         private set
     private var pending: PendingThrow? = null
 
@@ -113,6 +134,22 @@ class RpsSkill(
         doThrow(choice, ctx, viaDebug = false)
     }
 
+    /**
+     * P2 视觉路径：相机确认的用户手势（1=石头,2=剪刀,3=布，0/未知忽略）。
+     * 用户的手本地已知，这一拳直接本地判定+speak 宣判，不等 LLM——见类 doc。
+     * JUDGING 中忽略（气氛组回合还在流式输出，这时的手势多半是说话时的比划）。
+     */
+    override fun onUserGesture(gesture: Int, ctx: SkillContext) {
+        val user = gestureCodeToHand(gesture)
+        if (user == null) return
+        when {
+            state == State.ARMED -> throwWithUser(user, ctx)
+            state == State.THROWN && pending?.userChoice == null -> upgradeWithUser(user, ctx)
+            state == State.THROWN -> throwWithUser(user, ctx)
+            else -> Unit
+        }
+    }
+
     override fun onTurnCompleted(reply: String, ctx: SkillContext) {
         when (state) {
             State.INVITED -> {
@@ -159,11 +196,13 @@ class RpsSkill(
     override fun turnDirective(ctx: SkillContext): String? = when (state) {
         State.IDLE -> null
         State.INVITED ->
-            "【技能:猜拳】用户刚提议玩石头剪刀布。请爽快答应,用一两句话说明玩法:两人同时喊" +
-                "「三、二、一」一起出拳,用户出什么手势会由摄像头拍下来给你判定;然后邀请用户出拳。"
+            "【技能:猜拳】用户刚提议玩石头剪刀布。请爽快答应,用一两句话说明玩法与胜负规则:" +
+                "两人同时喊「三、二、一」一起出拳(把手举到镜头前,摄像头会拍下来);" +
+                "规则是剪刀赢布、布赢石头、石头赢剪刀,出一样的算平局。然后邀请用户出拳。"
         State.ARMED ->
-            "【技能:猜拳·进行中】你们正在玩猜拳,已完成 $round 局。用户随时会喊「三二一」出拳," +
-                "出拳后系统会自动把摄像头画面发给你裁判;在收到出拳画面之前不要替任何一局宣布结果。" +
+            "【技能:猜拳·进行中】你们正在玩猜拳,已完成 $round 局(胜负规则:剪刀赢布、布赢石头、" +
+                "石头赢剪刀,出一样算平局)。用户会喊「三二一」出拳,或直接把手势亮给摄像头;" +
+                "每局的结果会由系统判定后告诉你,在那之前不要替任何一局宣布结果。" +
                 "用户这句话是出拳间隙的普通对话,正常回应,可以顺带催促出拳。"
         State.THROWN, State.JUDGING -> judgeDirective(pending)
     }
@@ -172,9 +211,19 @@ class RpsSkill(
         val n = p?.round ?: round
         val choice = p?.choice?.zh ?: lastChoice?.zh ?: Hand.SCISSORS.zh
         val announced = "你(虚拟人)出的是「$choice」,已经当着用户的面做出来了,不要改口。"
+        // P2 本地判定局:用户的手摄像头已识别,胜负当场宣布过,LLM 只做气氛组
+        val user = p?.userChoice
+        if (user != null) {
+            val verdict = verdictOf(user, p.choice)
+            return "【技能:猜拳·第${n}局已判】本地摄像头识别:用户出的是「${user.zh}」,$announced" +
+                "这一局${verdict.zh},结果你已经当着用户的面宣布过了,不要重新判定、不要改口。" +
+                "用户这句话是出拳前后喊的,请自然回应,顺势对这一局做点临场反应" +
+                "(赢了别太得意,输了可以不服气),然后邀请用户出下一局。"
+        }
         return if (p?.frame != null) {
             "【技能:猜拳·第${n}局判定】用户刚刚喊完三二一并出拳。$announced" +
-                "请看随本轮附上的抓拍画面,判断用户出的是石头、剪刀还是布,宣布这一轮胜负并自然地反应" +
+                "请看随本轮附上的抓拍画面,判断用户出的是石头、剪刀还是布(胜负规则:剪刀赢布、" +
+                "布赢石头、石头赢剪刀,出一样算平局),宣布这一轮胜负并自然地反应" +
                 "(赢了别太得意,输了可以不服气或约再一局)。如果画面里看不清手或没有手,就直说没看清," +
                 "邀请用户把手举到镜头前再出一局。"
         } else {
@@ -193,12 +242,66 @@ class RpsSkill(
         val frame = ctx.host.snapshotImage()
         round += 1
         lastChoice = choice
-        pending = PendingThrow(choice, frame, round)
+        pending = PendingThrow(choice, userChoice = null, frame = frame, round = round)
         state = State.THROWN
         ctx.event(
             "throw #$round choice=${choice.zh}${if (viaDebug) " (debug)" else ""} " +
                 "played=$played frame=${frame != null}"
         )
+    }
+
+    /**
+     * P2 本地权威判定出拳：用户的手由相机确认，本地随机出自己的手、当场算
+     * 胜负并 speak() 即时宣判（无 LLM 往返）。之后的 ASR 文本走气氛组回合。
+     */
+    private fun throwWithUser(user: Hand, ctx: SkillContext) {
+        val mine = Hand.entries[randomInt(Hand.entries.size).coerceIn(0, Hand.entries.lastIndex)]
+        val asset = handAssets[mine]
+        val played = asset != null && ctx.host.playGestureFile(asset)
+        val frame = ctx.host.snapshotImage()
+        round += 1
+        lastChoice = mine
+        lastUserGesture = user
+        lastVerdict = verdictOf(user, mine)
+        pending = PendingThrow(mine, userChoice = user, frame = frame, round = round)
+        state = State.THROWN
+        ctx.host.speak(verdictLine(lastVerdict!!, user, mine))
+        ctx.event(
+            "gesture throw #$round user=${user.zh} mine=${mine.zh} verdict=${lastVerdict} " +
+                "played=$played frame=${frame != null} (local judging)"
+        )
+    }
+
+    /**
+     * VAD 先触发的拳（用户的手未知）随后观测到手势：同一局补记用户的手，
+     * 升级为本地判定并即时宣判——出拳/抓帧不重做（这一拳已经摆出来了）。
+     */
+    private fun upgradeWithUser(user: Hand, ctx: SkillContext) {
+        val p = pending ?: return
+        lastUserGesture = user
+        lastVerdict = verdictOf(user, p.choice)
+        pending = p.copy(userChoice = user)
+        ctx.host.speak(verdictLine(lastVerdict!!, user, p.choice))
+        ctx.event(
+            "late gesture upgraded round #${p.round} to local judging: user=${user.zh} " +
+                "mine=${p.choice.zh} verdict=$lastVerdict"
+        )
+    }
+
+    private fun verdictOf(user: Hand, mine: Hand): Verdict = when {
+        user == mine -> Verdict.DRAW
+        user.beats(mine) -> Verdict.USER_WIN
+        else -> Verdict.AVATAR_WIN
+    }
+
+    /** 即时宣判词（直通 TTS，无 LLM）；变体按局数轮换，避免连局复读机。 */
+    private fun verdictLine(verdict: Verdict, user: Hand, mine: Hand): String {
+        val hands = "你出${user.zh},我出${mine.zh}"
+        return when (verdict) {
+            Verdict.USER_WIN -> if (round % 2 == 1) "$hands——这局你赢了!" else "$hands,你赢了,再来!"
+            Verdict.AVATAR_WIN -> if (round % 2 == 1) "$hands——这局我赢咯!" else "$hands,我赢啦,再比一局!"
+            Verdict.DRAW -> if (round % 2 == 1) "$hands,平局!再来一局!" else "$hands——打平了,再来!"
+        }
     }
 
     private fun judge(spoken: String, ctx: SkillContext) {
@@ -226,11 +329,26 @@ class RpsSkill(
     override fun debugCommand(arg: String?, ctx: SkillContext): String {
         val a = arg?.trim()?.lowercase()
         if (a == null || a == "status" || a == "state") {
-            return "rps: state=$state round=$round last=${lastChoice?.zh ?: "-"} pendingFrame=${pending?.frame != null}"
+            return "rps: state=$state round=$round last=${lastChoice?.zh ?: "-"} " +
+                "user=${lastUserGesture?.zh ?: "-"} verdict=${lastVerdict?.zh ?: "-"} " +
+                "pendingFrame=${pending?.frame != null}"
         }
         if (a == "exit") {
             exit(ctx, "debug command")
             return "rps: exited (state=${state})"
+        }
+        // gesture_<手>：模拟一次相机确认的用户手势（ai_cmd rps_gesture），
+        // 走真机 MediaPipe 之外的同一入口，免摄像头驱动本地判定路径
+        if (a.startsWith("gesture_")) {
+            val hand = Hand.parse(a.removePrefix("gesture_"))
+                ?: return "rps: gesture expects gesture_rock|gesture_scissor|gesture_paper"
+            val before = round
+            onUserGesture(hand.ordinal + 1, ctx)
+            return if (round != before) {
+                "rps: user gesture ${hand.zh} → mine=${lastChoice?.zh} verdict=${lastVerdict?.zh}, state=$state"
+            } else {
+                "rps: gesture ignored in state=$state (need ARMED, or THROWN for the next round)"
+            }
         }
         val hand = Hand.parse(a)
         if (hand != null) {
@@ -238,7 +356,7 @@ class RpsSkill(
             doThrow(hand, ctx, viaDebug = true)
             return "rps: threw ${hand.zh}, state=$state — next utterance becomes the judge turn"
         }
-        return "rps: debug expects status|exit|rock|scissor|paper"
+        return "rps: debug expects status|exit|rock|scissor|paper|gesture_<hand>"
     }
 
     companion object {
@@ -253,5 +371,8 @@ class RpsSkill(
 
         /** 技能态的 VAD 句尾悬停（默认 800→400，出拳延迟减半）。 */
         const val FAST_HANGOVER_MS = 400L
+
+        /** [AvatarSkill.onUserGesture] 的手势码约定：0=无,1=石头,2=剪刀,3=布。 */
+        fun gestureCodeToHand(code: Int): Hand? = Hand.entries.getOrNull(code - 1)
     }
 }

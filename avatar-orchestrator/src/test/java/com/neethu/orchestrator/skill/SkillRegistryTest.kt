@@ -18,6 +18,7 @@ class SkillRegistryTest {
         var utterances = mutableListOf<String>()
         var consumed = false
         var vadCalls = mutableListOf<Long>()
+        var gestures = mutableListOf<Int>()
         var exits = 0
         var debug: String? = null
         override val isActive: Boolean get() = active
@@ -28,6 +29,9 @@ class SkillRegistryTest {
         }
         override fun onVadUtterance(wavMs: Long, ctx: SkillContext) {
             vadCalls += wavMs
+        }
+        override fun onUserGesture(gesture: Int, ctx: SkillContext) {
+            gestures += gesture
         }
         override fun onExit(ctx: SkillContext) {
             exits++
@@ -109,6 +113,18 @@ class SkillRegistryTest {
         registry.onVadUtterance(1_234L)
         assertEquals(listOf(1_234L), a.vadCalls)
         assertEquals(listOf(1_234L), b.vadCalls)
+    }
+
+    @Test
+    fun `camera gesture broadcasts to all registered skills (p2 seam)`() {
+        val registry = SkillRegistry(CountingHost())
+        val a = StubSkill("a")
+        val b = StubSkill("b")
+        registry.register(a)
+        registry.register(b)
+        registry.onUserGesture(1)
+        assertEquals(listOf(1), a.gestures)
+        assertEquals(listOf(1), b.gestures)
     }
 
     @Test

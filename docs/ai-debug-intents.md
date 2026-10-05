@@ -68,9 +68,10 @@
 | `set_provider` | `ai_arg`= siliconflow \| volcano | 切换大模型服务商（持久化，设置页下拉框同款语义）：模型清单随服务商切换，存储的模型/音色不在新服务商清单时自动落回该服务商默认（防跨服务商残留）；火山 LLM 需方舟 Ark API Key（与豆包语音的 API Key 是两把钥匙） |
 | `set_tts_provider` | `ai_arg`= siliconflow \| volcano | TTS 独立服务商切换：自动取消「TTS 与大模型同服务商」勾选并切到目标服务商（模型/音色同样按清单校验回落）；硅基流动 TTS 两模型共用 CosyVoice 音色引用，火山只有 seed-tts-2.0 |
 | `set_llm_model` | `ai_arg`=清单内模型 id | 当前服务商下切换大模型（精确 id，清单见 `set_provider` 后的回落默认或代码 AiProviders.kt）：硅基流动视觉模型=`Qwen/Qwen3.8-27B`/`Qwen/Qwen3-VL-32B-Instruct`，火山 4 个 doubao 系全是视觉模型（默认 mini 即可）——视频模式验证用 |
-| `skill_status` | — | 猜拳技能状态机快照：state（IDLE/INVITED/ARMED/THROWN/JUDGING）/局数/上次出的手/是否已缓存抓拍帧（技能框架 docs/rps-skill-feasibility.md；激活走语音「玩猜拳」或含关键词的 send_chat） |
+| `skill_status` | — | 猜拳技能状态机快照：state（IDLE/INVITED/ARMED/THROWN/JUDGING）/局数/上次出的手/用户最近手势/最近本地判定/是否已缓存抓拍帧（技能框架 docs/rps-skill-feasibility.md；激活走语音「玩猜拳」或含关键词的 send_chat） |
 | `skill_exit` | — | 强制退场激活中的技能（=对用户说「不玩了」的效果）：恢复用户设置的 VAD 句尾悬停，回 IDLE |
 | `rps_throw` | `ai_arg`= rock \| scissor \| paper（省略=查状态） | **强制出拳**（须 ARMED 态）：本地随机改为指定手势，播手势 VRMA + 抓帧，state→THROWN；此后下一句话（语音或 `send_chat "三二一"`）即成为裁判回合（带帧+技能指令发给大模型）——真机 A/B 与不开麦验证玩法的关键入口 |
+| `rps_gesture` | `ai_arg`= rock \| scissor \| paper（省略=查状态） | **模拟相机确认的用户手势**（P2 本地判定路径，免摄像头/免真手势）：ARMED 收到即本地随机出拳+本地判胜负+`speak()` 即时宣判（无 LLM 往返）；THROWN 收到=纯手势连局开下一拳；下一句话（语音或 `send_chat`）成为气氛组回合（指令带本地判定结果，模型只反应不重判）。验证 P2 链路时大模型无需 vision——判定是本地确定值 |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。

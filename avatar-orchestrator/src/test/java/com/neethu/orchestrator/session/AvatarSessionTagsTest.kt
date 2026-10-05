@@ -255,8 +255,10 @@ class AvatarSessionTagsTest {
 
         assertEquals(0, events.filterIsInstance<AvatarEvent.CameraChanged>().size)
         val system = llm.requests[0].first { it.role == ChatRole.SYSTEM }
-        assertFalse(system.content.contains("<cam:"))
-        assertTrue(system.content.contains("<emo:"))
+        // 断言用协议块的镜头段专属串——身份前言的"协议遵循"提醒合法地包含
+        // 标签家族写法 <cam:（那是提醒文本，不是镜头段）
+        assertFalse(system.content.contains("<cam:机位>"))
+        assertTrue(system.content.contains("<emo:名字:强度>"))
     }
 
     @Test

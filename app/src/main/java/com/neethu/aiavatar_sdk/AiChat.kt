@@ -242,8 +242,9 @@ class AiChatController(
             AvatarSession.Options(
                 enableLlmCamera = prefs.llmCamera,
                 // Room 持久化后上下文可无限增长；请求只带最近 40 条 user/assistant
-                //（≈20 轮）。人设与协议两条 system 消息不进 store、不受裁剪；
-                // 协议块（~12K chars 目录）每上下文只钉一次，不逐轮重拼
+                //（≈20 轮）。身份前言每轮恒带；人设全文+协议目录（~12K chars）
+                // 只随上下文首轮发送、失败自动重发（AvatarSession 内聚，见
+                // buildRequestMessages），都不进 store、不受裁剪
                 recentTurnLimit = 40,
             ),
             store = store,

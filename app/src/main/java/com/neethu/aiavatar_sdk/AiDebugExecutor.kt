@@ -303,6 +303,13 @@ internal suspend fun executeAiCommand(
                 // send_chat/语音即成为裁判回合——真机 A/B 驱动的关键入口
                 chat.skillDebug("rps", command.arg)
             }
+            "rps_gesture" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // ai_arg = rock|scissor|paper：模拟一次相机确认的用户手势（P2 本地
+                // 判定路径），免摄像头/免真手势驱动——本地出拳+即时宣判立即发生，
+                // 下一句 send_chat/语音成为气氛组回合
+                chat.skillDebug("rps", command.arg?.lowercase()?.let { "gesture_$it" } ?: "status")
+            }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
             )
