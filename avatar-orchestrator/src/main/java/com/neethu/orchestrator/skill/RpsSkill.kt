@@ -1,5 +1,9 @@
 package com.neethu.orchestrator.skill
 
+import com.neethu.corelib.Lang
+import com.neethu.orchestrator.i18n.RpsTexts
+import com.neethu.orchestrator.i18n.RpsVerdict
+import com.neethu.orchestrator.i18n.rpsTextsOf
 import kotlin.random.Random
 
 /**
@@ -39,10 +43,22 @@ class RpsSkill(
 
     override val id: String = "rps"
 
-    enum class Hand(val assetKey: String, val zh: String) {
-        ROCK("rock", "石头"),
-        SCISSORS("scissor", "剪刀"),
-        PAPER("paper", "布");
+    /**
+     * 提示词语言（多语言支持）：指令行与宣判词随之切换。demo 由 MainActivity
+     * 在语言设置变化时更新（实例跨会话重建保持状态，语言只影响文案）；
+     * 默认中文保持既有行为与单测不变。
+     */
+    var lang: Lang = Lang.ZH
+
+    private val texts: RpsTexts get() = rpsTextsOf(lang)
+
+    enum class Hand(val assetKey: String, val zh: String, val en: String) {
+        ROCK("rock", "石头", "rock"),
+        SCISSORS("scissor", "剪刀", "scissors"),
+        PAPER("paper", "布", "paper");
+
+        /** 语言化显示名（指令行/宣判词/调试输出用）。 */
+        fun label(lang: Lang): String = if (lang == Lang.EN) en else zh
 
         /** 本手是否赢 [other]（P2 本地判定用；P0 由 LLM 看图裁判）。 */
         fun beats(other: Hand): Boolean = when (this) {
@@ -53,7 +69,7 @@ class RpsSkill(
 
         companion object {
             fun parse(text: String): Hand? = entries.firstOrNull {
-                it.assetKey == text || it.zh == text || it.name.lowercase() == text
+                it.assetKey == text || it.zh == text || it.en == text || it.name.lowercase() == text
             }
         }
     }
@@ -61,10 +77,20 @@ class RpsSkill(
     enum class State { IDLE, INVITED, ARMED, THROWN, JUDGING }
 
     /** P2 本地判定结论（以用户视角命名，宣判与气氛组指令共用）。 */
-    enum class Verdict(val zh: String) {
-        USER_WIN("用户赢"),
-        AVATAR_WIN("你赢"),
-        DRAW("平局"),
+    enum class Verdict(val zh: String, val en: String) {
+        USER_WIN("用户赢", "the user won"),
+        AVATAR_WIN("你赢", "you (the avatar) won"),
+        DRAW("平局", "a draw");
+
+        /** 语言化显示名（指令行/宣判词/调试输出用）。 */
+        fun label(lang: Lang): String = if (lang == Lang.EN) en else zh
+
+        /** 映射到文案目录的宣判结论键。 */
+        fun toRps(): RpsVerdict = when (this) {
+            USER_WIN -> RpsVerdict.USER_WIN
+            AVATAR_WIN -> RpsVerdict.AVATAR_WIN
+            DRAW -> RpsVerdict.DRAW
+        }
     }
 
     /** 待裁判的一拳：本地已出的手势 + 用户的手（P2 本地判定时非空）+ 出拳瞬间的抓拍帧。 */
@@ -195,41 +221,25 @@ class RpsSkill(
 
     override fun turnDirective(ctx: SkillContext): String? = when (state) {
         State.IDLE -> null
-        State.INVITED ->
-            "【技能:猜拳】用户刚提议玩石头剪刀布。请爽快答应,用一两句话说明玩法与胜负规则:" +
-                "两人同时喊「三、二、一」一起出拳(把手举到镜头前,摄像头会拍下来);" +
-                "规则是剪刀赢布、布赢石头、石头赢剪刀,出一样的算平局。然后邀请用户出拳。"
-        State.ARMED ->
-            "【技能:猜拳·进行中】你们正在玩猜拳,已完成 $round 局(胜负规则:剪刀赢布、布赢石头、" +
-                "石头赢剪刀,出一样算平局)。用户会喊「三二一」出拳,或直接把手势亮给摄像头;" +
-                "每局的结果会由系统判定后告诉你,在那之前不要替任何一局宣布结果。" +
-                "用户这句话是出拳间隙的普通对话,正常回应,可以顺带催促出拳。"
+        State.INVITED -> texts.invitedDirective()
+        State.ARMED -> texts.armedDirective(round)
         State.THROWN, State.JUDGING -> judgeDirective(pending)
     }
 
     private fun judgeDirective(p: PendingThrow?): String {
         val n = p?.round ?: round
-        val choice = p?.choice?.zh ?: lastChoice?.zh ?: Hand.SCISSORS.zh
-        val announced = "你(虚拟人)出的是「$choice」,已经当着用户的面做出来了,不要改口。"
+        val choice = p?.choice ?: lastChoice ?: Hand.SCISSORS
+        val announced = texts.announced(choice.label(lang))
         // P2 本地判定局:用户的手摄像头已识别,胜负当场宣布过,LLM 只做气氛组
         val user = p?.userChoice
         if (user != null) {
-            val verdict = verdictOf(user, p.choice)
-            return "【技能:猜拳·第${n}局已判】本地摄像头识别:用户出的是「${user.zh}」,$announced" +
-                "这一局${verdict.zh},结果你已经当着用户的面宣布过了,不要重新判定、不要改口。" +
-                "用户这句话是出拳前后喊的,请自然回应,顺势对这一局做点临场反应" +
-                "(赢了别太得意,输了可以不服气),然后邀请用户出下一局。"
+            val verdict = verdictOf(user, choice)
+            return texts.judgedDirective(n, user.label(lang), verdict.label(lang), announced)
         }
         return if (p?.frame != null) {
-            "【技能:猜拳·第${n}局判定】用户刚刚喊完三二一并出拳。$announced" +
-                "请看随本轮附上的抓拍画面,判断用户出的是石头、剪刀还是布(胜负规则:剪刀赢布、" +
-                "布赢石头、石头赢剪刀,出一样算平局),宣布这一轮胜负并自然地反应" +
-                "(赢了别太得意,输了可以不服气或约再一局)。如果画面里看不清手或没有手,就直说没看清," +
-                "邀请用户把手举到镜头前再出一局。"
+            texts.frameJudgeDirective(n, choice.label(lang), announced)
         } else {
-            "【技能:猜拳·第${n}局判定】用户刚刚喊完三二一并出拳。$announced" +
-                "但这一轮系统没能抓拍到用户画面(相机没开或不在视频模式),请告诉用户你没看到," +
-                "提醒进入视频模式(相机开着)再玩,把这一局自然带过。"
+            texts.noFrameJudgeDirective(n, choice.label(lang), announced)
         }
     }
 
@@ -295,14 +305,9 @@ class RpsSkill(
     }
 
     /** 即时宣判词（直通 TTS，无 LLM）；变体按局数轮换，避免连局复读机。 */
-    private fun verdictLine(verdict: Verdict, user: Hand, mine: Hand): String {
-        val hands = "你出${user.zh},我出${mine.zh}"
-        return when (verdict) {
-            Verdict.USER_WIN -> if (round % 2 == 1) "$hands——这局你赢了!" else "$hands,你赢了,再来!"
-            Verdict.AVATAR_WIN -> if (round % 2 == 1) "$hands——这局我赢咯!" else "$hands,我赢啦,再比一局!"
-            Verdict.DRAW -> if (round % 2 == 1) "$hands,平局!再来一局!" else "$hands——打平了,再来!"
-        }
-    }
+    private fun verdictLine(verdict: Verdict, user: Hand, mine: Hand): String =
+        texts.handsLine(user.label(lang), mine.label(lang)) +
+            texts.verdictTail(verdict.toRps(), round % 2 == 1)
 
     private fun judge(spoken: String, ctx: SkillContext) {
         val p = pending
@@ -312,7 +317,7 @@ class RpsSkill(
         }
         state = State.JUDGING
         // 文本进历史与字幕面板由调用方推送;这里发出的回合文本带出拳语境
-        ctx.host.sendTurn(spoken.ifBlank { "（出拳）" }, listOfNotNull(p.frame))
+        ctx.host.sendTurn(spoken.ifBlank { texts.throwPlaceholder }, listOfNotNull(p.frame))
         ctx.event("judge turn #$round sent (spoken=\"${spoken.take(24)}\", images=${if (p.frame != null) 1 else 0})")
     }
 
@@ -329,8 +334,8 @@ class RpsSkill(
     override fun debugCommand(arg: String?, ctx: SkillContext): String {
         val a = arg?.trim()?.lowercase()
         if (a == null || a == "status" || a == "state") {
-            return "rps: state=$state round=$round last=${lastChoice?.zh ?: "-"} " +
-                "user=${lastUserGesture?.zh ?: "-"} verdict=${lastVerdict?.zh ?: "-"} " +
+            return "rps: state=$state round=$round last=${lastChoice?.label(lang) ?: "-"} " +
+                "user=${lastUserGesture?.label(lang) ?: "-"} verdict=${lastVerdict?.label(lang) ?: "-"} " +
                 "pendingFrame=${pending?.frame != null}"
         }
         if (a == "exit") {
@@ -345,7 +350,7 @@ class RpsSkill(
             val before = round
             onUserGesture(hand.ordinal + 1, ctx)
             return if (round != before) {
-                "rps: user gesture ${hand.zh} → mine=${lastChoice?.zh} verdict=${lastVerdict?.zh}, state=$state"
+                "rps: user gesture ${hand.label(lang)} → mine=${lastChoice?.label(lang)} verdict=${lastVerdict?.label(lang)}, state=$state"
             } else {
                 "rps: gesture ignored in state=$state (need ARMED, or THROWN for the next round)"
             }
@@ -354,17 +359,28 @@ class RpsSkill(
         if (hand != null) {
             if (state != State.ARMED) return "rps: cannot throw in state=$state (need ARMED)"
             doThrow(hand, ctx, viaDebug = true)
-            return "rps: threw ${hand.zh}, state=$state — next utterance becomes the judge turn"
+            return "rps: threw ${hand.label(lang)}, state=$state — next utterance becomes the judge turn"
         }
         return "rps: debug expects status|exit|rock|scissor|paper|gesture_<hand>"
     }
 
     companion object {
-        /** 命中即激活技能（本地正则，不等 LLM）。 */
-        val ACTIVATE_PATTERN = Regex("猜拳|石头剪刀布|剪刀石头布|划拳")
+        /**
+         * 命中即激活技能（本地正则，不等 LLM）。中英双语词表合并在同一正则里
+         * （不随 [lang] 切换）：激活词来自用户语音，识别语言跟随设备/识别引擎
+         * 而非界面语言，双语都收才不漏触发。
+         */
+        val ACTIVATE_PATTERN = Regex(
+            "猜拳|石头剪刀布|剪刀石头布|划拳|rock\\W*paper\\W*scissors",
+            RegexOption.IGNORE_CASE,
+        )
 
-        /** 命中即退场。 */
-        val EXIT_PATTERN = Regex("不玩了|不玩啦|退出猜拳|结束猜拳|别猜了")
+        /** 命中即退场（同 [ACTIVATE_PATTERN]，双语合并）。 */
+        val EXIT_PATTERN = Regex(
+            "不玩了|不玩啦|退出猜拳|结束猜拳|别猜了" +
+                "|stop\\s+playing|let'?s\\s+(stop|quit)|i('m|\\s+am)\\s+done|no\\s+more\\s+rounds",
+            RegexOption.IGNORE_CASE,
+        )
 
         /** ARMED 态短于此的语音句视为出拳信号。 */
         const val THROW_MAX_WAV_MS = 2_500L

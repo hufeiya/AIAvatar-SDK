@@ -13,6 +13,8 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import com.neethu.corelib.Lang
+import com.neethu.aiavatar_sdk.i18n.Strings
 
 /**
  * 系统内置语音识别（Android 标准 `SpeechRecognizer`）：免费、无 Key，不消耗
@@ -29,19 +31,9 @@ import android.util.Log
  * 暂停期的终稿/部分结果一律丢弃。
  */
 
-/** 错误码 → 用户可读消息（纯函数可测）。 */
-internal fun systemAsrErrorMessage(code: Int): String = when (code) {
-    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "识别网络超时"
-    SpeechRecognizer.ERROR_NETWORK -> "识别服务网络错误"
-    SpeechRecognizer.ERROR_AUDIO -> "识别音频录制错误"
-    SpeechRecognizer.ERROR_SERVER -> "识别服务端错误"
-    SpeechRecognizer.ERROR_CLIENT -> "识别客户端错误"
-    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有听到说话"
-    SpeechRecognizer.ERROR_NO_MATCH -> "没有匹配到语音内容"
-    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "识别服务忙"
-    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "缺少麦克风权限"
-    else -> "识别错误(code=$code)"
-}
+/** 错误码 → 用户可读消息（纯函数可测；文案表在 i18n.Strings，默认中文）。 */
+internal fun systemAsrErrorMessage(code: Int, lang: Lang = Lang.ZH): String =
+    Strings(lang).systemAsrErrorMessage(code)
 
 /**
  * 连续聆听的重启策略（纯 JVM 可测）：静默类错误（没听到/没匹配）是自由说话
@@ -153,6 +145,19 @@ fun isSystemAsrAvailable(context: Context): Boolean {
  */
 class SystemAsrController(private val context: Context) {
 
+    /**
+     * 用户可读文案表（多语言支持）：错误回调与异常消息的语言。MainActivity 在
+     * 语言设置变化时更新（实例不重建，识别会话跨语言切换保持）。
+     */
+    var texts: Strings = Strings(Lang.ZH)
+
+    /**
+     * 识别语言（BCP-47，如 "zh-CN"/"en-US"；null = 跟随系统默认）。多语言：
+     * 显式指定让识别语言与界面语言一致（EN 界面 + 中文系统语言的设备也能
+     * 正确收英文）。下一个 startListening 生效。
+     */
+    var languageTag: String? = null
+
     /** 一句终稿（[singleShot] 区分按住说话/自由说话两条处理路径）。主线程回调。 */
     var onFinal: ((text: String, singleShot: Boolean) -> Unit)? = null
 
@@ -196,8 +201,8 @@ class SystemAsrController(private val context: Context) {
     }
 
     private fun startInternal(singleShotMode: Boolean) {
-        check(!running && !singleShot) { "系统语音识别已在进行中" }
-        check(isAvailable()) { "本机没有系统语音识别服务（需要 Google 服务或厂商语音服务）" }
+        check(!running && !singleShot) { texts.systemAsrAlreadyRunning }
+        check(isAvailable()) { texts.systemAsrUnavailable }
         ensureRecognizer()
         policy.reset()
         paused = false
@@ -263,7 +268,12 @@ class SystemAsrController(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            // 不设 EXTRA_LANGUAGE：跟随系统默认语言（海外用户=其设备语言）
+            // 识别语言跟随界面语言（languageTag 非空时）；null = 系统默认
+            // （海外用户=其设备语言）
+            languageTag?.let {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, it)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, it)
+            }
         }
         listening = runCatching { r.startListening(intent) }
             .onFailure { Log.w(TAG, "startListening failed: ${it.message}") }
@@ -320,7 +330,7 @@ class SystemAsrController(private val context: Context) {
             if (singleShot) {
                 // 单发（按住说话）：错误直接进回调（"没有听到说话"等），路径终止
                 singleShot = false
-                onError?.invoke(systemAsrErrorMessage(error))
+                onError?.invoke(texts.systemAsrErrorMessage(error))
                 return
             }
             when (val d = policy.onError(error)) {
@@ -343,7 +353,7 @@ class SystemAsrController(private val context: Context) {
                 SystemAsrRestartPolicy.Decision.Stop -> {
                     running = false
                     onError?.invoke(
-                        "连续失败已停止（最后：${systemAsrErrorMessage(error)}），请重开自由说话或改用云端识别"
+                        texts.systemAsrStopped(texts.systemAsrErrorMessage(error))
                     )
                 }
             }

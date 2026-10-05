@@ -72,6 +72,12 @@ internal class AiChatDebugHooks(
     val setVoiceFree: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_asr cloud|system：切语音识别引擎（云端=跟随大模型服务商；系统=平台 SpeechRecognizer）。 */
     val setAsrEngine: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+
+    /**
+     * ai_cmd set_language system|zh|en：切界面语言（持久化；会话随之重建、提示词
+     * 换语言，历史保留）。
+     */
+    val setLanguage: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /**
      * ai_cmd set_expression <名字> [强度]：走 FaceDriver 手动表情通道（缓动
      * 进场、不自动归零）；null = 无会话，executor 直写控制器（即时，一帧）。
@@ -294,6 +300,10 @@ internal suspend fun executeAiCommand(
             "set_asr" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setAsrEngine(command.arg)
+            }
+            "set_language" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setLanguage(command.arg)
             }
             "skill_status" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")

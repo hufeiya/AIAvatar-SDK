@@ -231,6 +231,11 @@ class FreeSpeechController(
     private val vad: SpeechVad = SpeechVad(),
     private val sampleRateHz: Int = 16_000,
 ) {
+
+    /** 用户可读文案表（多语言支持）：start 的异常消息语言，MainActivity 随语言更新。 */
+    var texts: com.neethu.aiavatar_sdk.i18n.Strings =
+        com.neethu.aiavatar_sdk.i18n.Strings(com.neethu.corelib.Lang.ZH)
+
     /** 一句话说完（WAV 16k 单声道）。采音线程回调。 */
     var onUtterance: ((wav: ByteArray) -> Unit)? = null
 
@@ -260,7 +265,7 @@ class FreeSpeechController(
     /** 开始连续聆听；麦克风被占用/不可用时抛 [IllegalStateException]。 */
     @SuppressLint("MissingPermission") // 调用方已确保 RECORD_AUDIO 授权
     fun start(echoCancellation: Boolean) {
-        check(!running) { "自由说话已在进行中" }
+        check(!running) { texts.freeSpeechAlreadyRunning }
         val source = if (echoCancellation) {
             MediaRecorder.AudioSource.VOICE_COMMUNICATION
         } else {
@@ -268,14 +273,14 @@ class FreeSpeechController(
         }
         val frameShorts = sampleRateHz / 50 // 20ms
         val minBuf = AudioRecord.getMinBufferSize(sampleRateHz, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        require(minBuf > 0) { "AudioRecord 最小缓冲获取失败" }
+        require(minBuf > 0) { texts.freeSpeechMinBufferFailed }
         val record = AudioRecord(
             source, sampleRateHz, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf * 2, frameShorts * 16),
         )
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
-            throw IllegalStateException("麦克风不可用（可能被其他应用占用）")
+            throw IllegalStateException(texts.micUnavailable)
         }
         vad.reset()
         this.record = record

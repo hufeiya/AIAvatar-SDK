@@ -85,6 +85,7 @@ import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
 import com.neethu.aiavatar_sdk.ui.SECTION_CARD
 import com.neethu.aiavatar_sdk.ui.SECTION_CONTEXT
 import com.neethu.aiavatar_sdk.ui.SECTION_FREE_SPEECH
+import com.neethu.aiavatar_sdk.ui.SECTION_LANGUAGE
 import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
 import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
@@ -96,12 +97,18 @@ import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.Lang
 import com.neethu.corelib.rememberAvatarController
+import com.neethu.aiavatar_sdk.i18n.AppLang
+import com.neethu.aiavatar_sdk.i18n.LocalStrings
+import com.neethu.aiavatar_sdk.i18n.Strings
+import com.neethu.aiavatar_sdk.i18n.resolveAppLang
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.face.GazeMode
+import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
@@ -187,6 +194,7 @@ internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 /** 场景选择持久化（空串 = 无场景，纯色背景）。 */
 private const val KEY_SELECTED_SCENE = "selected_scene"
+private const val KEY_APP_LANGUAGE = "app_language"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
 /** 当前上下文创建时的大模型身份签名（[llmIdentitySignature]）；换模型即轮换上下文。 */
 private const val KEY_AI_CONTEXT_LLM_SIG = "ai_context_llm_sig"
@@ -202,16 +210,39 @@ private const val KEY_AI_CARD_PROMPT_OVERRIDES = "ai_card_prompt_overrides"
 private fun newContextId(): String = java.util.UUID.randomUUID().toString()
 
 /**
- * 卡片人设应用到会话：卡片默认人设 + 设置页人工编辑覆盖（session 重建也必须
- * 重放覆盖，否则编辑会被 assemble 冲掉）。预置 grid、导入列表、adb 导入共用。
+ * 卡片人设应用到会话：卡片默认人设（英文模式下预置中文卡替换为英文人设）+
+ * 设置页人工编辑覆盖（session 重建也必须重放覆盖，否则编辑会被 assemble 冲掉）。
+ * 预置 grid、导入列表、adb 导入共用。
  */
 private fun applyCardToSession(
     session: AvatarSession,
     entry: CharacterCardStore.Entry,
     overrideFor: (String) -> String?,
+    lang: Lang,
+    presetAssetByFile: (String) -> String? = { null },
 ) {
-    session.setCharacterCard(entry.card)
+    val assetFile = presetAssetByFile(entry.fileName)?.substringAfterLast('/')
+    session.setCharacterCard(PresetCardsEn.translate(entry.card, assetFile, lang) ?: entry.card)
     overrideFor(entry.fileName)?.takeIf { it.isNotEmpty() }?.let { session.systemPrompt = it }
+}
+
+/** 语言化后的卡片对象（预置中文卡在英文模式下替换为英文人设；其余原样）。 */
+private fun localizedCard(
+    uiState: DemoUiState,
+    entry: CharacterCardStore.Entry,
+): CharacterCard {
+    val assetFile = uiState.presetAssetByFile(entry.fileName)?.substringAfterLast('/')
+    return PresetCardsEn.translate(entry.card, assetFile, uiState.lang) ?: entry.card
+}
+
+/** 卡片显示名（英文模式下预置中文卡显示英文名）。 */
+private fun localizedCardName(
+    entry: CharacterCardStore.Entry,
+    lang: Lang,
+    presetAssetByFile: (String) -> String? = { null },
+): String {
+    val assetFile = presetAssetByFile(entry.fileName)?.substringAfterLast('/')
+    return PresetCardsEn.translate(entry.card, assetFile, lang)?.name ?: entry.card.name
 }
 
 /** 读取枚举设置项；名字失效（如改过枚举名）时回落到默认值。 */
@@ -272,6 +303,31 @@ internal class DemoUiState(context: Context) {
 
     /** 设置持久化：动画来源 + 全部渲染设置。 */
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /** applicationContext：读系统语言（配置区）用，判定「跟随系统」的生效语言。 */
+    private val appContext = context.applicationContext
+
+    // ── 界面语言（多语言支持）────────────────────────────────────────────
+    /** 语言偏好（跟随系统/中文/英文），持久化；生效语言见 [lang]。 */
+    var appLangPref by mutableStateOf(prefs.enumValue(KEY_APP_LANGUAGE, AppLang.SYSTEM))
+        private set
+
+    /** 生效语言：偏好按系统语言解析（系统中文→简体，否则英文）。 */
+    val lang: Lang
+        get() = resolveAppLang(
+            appLangPref,
+            appContext.resources.configuration.locales[0].language,
+        )
+
+    /** 非组合代码（调试命令/错误回调）取文案表：总是按当前语言现建。 */
+    fun strings(): Strings = Strings(lang)
+
+    /** 切换界面语言并持久化；会话由 produceState 依 lang 重建（提示词换语言）。 */
+    fun setAppLang(pref: AppLang) {
+        if (pref == appLangPref) return
+        appLangPref = pref
+        prefs.edit().putString(KEY_APP_LANGUAGE, pref.name).apply()
+    }
 
     val modelFiles: List<String> = listAssets(context, "vrms") {
         it.endsWith(".glb") || it.endsWith(".vrm")
@@ -393,11 +449,10 @@ internal class DemoUiState(context: Context) {
      * 视频模式准入门控：需求是"只能多模态可以输入图片的大模型才能开启"。
      * 返回 null = 可进入；否则返回给用户的拒绝原因（错误条展示）。
      */
-    fun videoModeBlockReason(): String? = when {
-        !aiPrefs.isConfigured -> "先在 ⚙️ 设置里配置 AI 服务，再开视频模式"
+    fun videoModeBlockReason(s: Strings): String? = when {
+        !aiPrefs.isConfigured -> s.videoNeedsConfig
         !isVisionLlm(aiPrefs.provider, aiPrefs.llmModel) ->
-            "当前大模型「${resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel)}」不支持图片输入，" +
-                "视频模式需要多模态模型（⚙️ 设置里切换：硅基流动选 Qwen3.8-27B / Qwen3-VL，火山默认模型即可）"
+            s.videoNeedsVision(resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel))
         else -> null
     }
 
@@ -713,6 +768,9 @@ private fun DemoScreen(
     val state by controller.state.collectAsState()
     val fps by controller.fps.collectAsState()
 
+    // ── 界面语言（多语言支持）：语言变化 = 重组全部 UI 文案 + 重建 AI 会话 ──
+    val strings = remember(uiState.lang) { Strings(uiState.lang) }
+
     // Camera-shot cycling: null = no shot applied yet (first tap → CLOSE_UP).
     var currentShot by remember { mutableStateOf<CameraShot?>(null) }
     var shotLabel by remember { mutableStateOf<String?>(null) }
@@ -789,6 +847,8 @@ private fun DemoScreen(
     // 构造传入；RpsSkill 实例跨会话重建保持状态（局数/激活态）。
     val skillHost = remember { DemoSkillHost(scope) }
     val rpsSkill = remember { RpsSkill(rpsHandAssets) }
+    // 技能指令行/宣判词随界面语言切换（实例跨会话重建保持状态）
+    LaunchedEffect(uiState.lang) { rpsSkill.lang = uiState.lang }
     val aiChat = remember {
         AiChatController(scope, controller, context.applicationContext, skillHost)
     }
@@ -809,7 +869,7 @@ private fun DemoScreen(
     // 设置面板的滚动位置与分类展开状态：Activity 级持有，面板关开不丢失
     val settingsExpandedSections = rememberSaveable {
         mutableStateOf(setOf(
-            SECTION_AI, SECTION_CARD, SECTION_CONTEXT,
+            SECTION_LANGUAGE, SECTION_AI, SECTION_CARD, SECTION_CONTEXT,
             SECTION_ANIMATIONS, SECTION_QUALITY, SECTION_LIVENESS, SECTION_FREE_SPEECH,
         ))
     }
@@ -818,7 +878,7 @@ private fun DemoScreen(
     // 会话身份 = AI 配置 + 上下文 id：任一变化（含新建/切换上下文）即重建
     val session by produceState<AvatarSession?>(
         initialValue = null, state, uiState.aiPrefs, uiState.useExternalAnimations,
-        uiState.contextId,
+        uiState.contextId, uiState.lang,
     ) {
         // 设置页逐字符提交配置；不等输入停稳就 ensure 会把会话每个按键重建一次，
         // 正在播放/合成的回合被反复杀掉（表现为"还没输完就不出声了"）。
@@ -828,6 +888,7 @@ private fun DemoScreen(
             ready = state is AvatarState.Ready,
             contextId = uiState.contextId,
             characterId = uiState.activeCardFile,
+            lang = uiState.lang,
         )?.also { s ->
             // 动作目录 = 内置库全量扫描（分类子文件夹 → tag），外置模式追加
             // 外置库。待机不在这里挂——它属于渲染控制器而非 AI 会话（见上方
@@ -889,10 +950,10 @@ private fun DemoScreen(
             uiState.cardByFile(file)?.let { entry ->
                 val deferredActivation = uiState.pendingGreetingFile == file
                 if (deferredActivation) s.clearHistory()
-                applyCardToSession(s, entry) { fileName -> uiState.cardPromptOverride(fileName) }
+                applyCardToSession(s, entry, { fileName -> uiState.cardPromptOverride(fileName) }, uiState.lang, uiState::presetAssetByFile)
                 if (deferredActivation) {
                     uiState.pendingGreetingFile = null
-                    val greeting = entry.card.spokenGreeting()
+                    val greeting = localizedCard(uiState, entry).spokenGreeting(promptTextsOf(uiState.lang).userAlias)
                     if (greeting.isNotEmpty()) launch { runCatching { s.speak(greeting) } }
                 }
             }
@@ -916,7 +977,7 @@ private fun DemoScreen(
                         chatLog("SentenceEnded #${ev.sequence}")
                     is AvatarEvent.SentenceFailed -> {
                         // 上错误条：静默失败的句子只会让人以为"没出声/崩了"
-                        chatError = "第 ${ev.sequence + 1} 句语音合成失败：${ev.message}"
+                        chatError = uiState.strings().sentenceFailed(ev.sequence, ev.message)
                         Log.w(AI_LOG_TAG, "[InfoStreamDectect] chat: SentenceFailed #${ev.sequence}: ${ev.message}")
                     }
                     is AvatarEvent.EmotionChanged ->
@@ -930,7 +991,7 @@ private fun DemoScreen(
                     is AvatarEvent.CameraChanged -> {
                         // 与手动视角 FAB 共用同一枚徽标，LLM 切机位时同步显示
                         currentShot = ev.shot
-                        shotLabel = ev.shot.label
+                        shotLabel = ev.shot.label(uiState.lang)
                         chatLog("CameraChanged ${ev.shot.name}")
                     }
                     is AvatarEvent.TurnCompleted -> {
@@ -944,13 +1005,13 @@ private fun DemoScreen(
                                 if (uiState.inputMode == InputMode.VIDEO) {
                                     controller.setCameraShot(CameraShot.CLOSE_UP)
                                     currentShot = CameraShot.CLOSE_UP
-                                    shotLabel = CameraShot.CLOSE_UP.label
+                                    shotLabel = CameraShot.CLOSE_UP.label(uiState.lang)
                                 }
                             }
                         }
                     }
                     is AvatarEvent.TurnFailed -> {
-                        chatError = ev.error.message ?: "对话失败"
+                        chatError = ev.error.message ?: uiState.strings().turnFailed
                         Log.e(AI_LOG_TAG, "[InfoStreamDectect] chat: TurnFailed: ${ev.error.message}")
                     }
                     is AvatarEvent.PlaybackInterrupted ->
@@ -988,7 +1049,7 @@ private fun DemoScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         micGranted = granted
-        if (!granted) chatError = "需要麦克风权限才能语音输入"
+        if (!granted) chatError = uiState.strings().micPermissionNeeded
     }
 
     // ── 视频模式（任务 6）：用户相机追踪 + PiP 小窗 + 发送附抓拍 ──────────
@@ -1005,7 +1066,7 @@ private fun DemoScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         cameraGranted = granted
-        if (!granted) chatError = "需要相机权限才能视频通话（打字/按住说话仍可用，无抓拍与注视追踪）"
+        if (!granted) chatError = uiState.strings().cameraPermissionNeeded
     }
 
     /**
@@ -1025,7 +1086,7 @@ private fun DemoScreen(
             // 需求 1：视频模式默认面部特写（视频通话的取景）
             controller.setCameraShot(CameraShot.CLOSE_UP)
             currentShot = CameraShot.CLOSE_UP
-            shotLabel = CameraShot.CLOSE_UP.label
+            shotLabel = CameraShot.CLOSE_UP.label(uiState.lang)
         } else {
             videoTracker.stop()
             session?.faceDriver?.setGazeMode(GazeMode.CAMERA)
@@ -1067,7 +1128,7 @@ private fun DemoScreen(
     fun asrFor(): OpenAiCompatibleAsrAdapter {
         val p = asrProviderFor(uiState.aiPrefs.provider)
         val key = uiState.aiPrefs.apiKeyFor(p)
-        check(key.isNotBlank()) { "语音识别走${p.label}：请先在 ⚙️ 设置里填${p.label} API Key" }
+        check(key.isNotBlank()) { uiState.strings().asrNeedsKey(p) }
         return OpenAiCompatibleAsrAdapter(p.baseUrl, key)
     }
 
@@ -1097,11 +1158,20 @@ private fun DemoScreen(
     // ── 系统内置语音识别（免费无 Key，海外用户主场景；SystemAsr.kt）────────
     // 与 freeSpeech（云端链路采音+VAD）互斥运行：freeTalk 引擎=SYSTEM 时用它
     val systemAsr = remember { SystemAsrController(context) }
+    // 识别语言/错误文案随界面语言（SYSTEM 偏好 = 跟随系统默认识别语言）
+    LaunchedEffect(uiState.lang, uiState.appLangPref) {
+        systemAsr.texts = Strings(uiState.lang)
+        systemAsr.languageTag = when (uiState.appLangPref) {
+            AppLang.ZH -> "zh-CN"
+            AppLang.EN -> "en-US"
+            AppLang.SYSTEM -> null
+        }
+    }
     systemAsr.onPartial = { text -> freeHearing = text.isNotEmpty() }
-    systemAsr.onError = { msg -> scope.launch { chatError = "系统语音识别：$msg" } }
+    systemAsr.onError = { msg -> scope.launch { chatError = uiState.strings().systemAsrError(msg) } }
     systemAsr.onConsentNeeded = {
         scope.launch {
-            chatError = "系统语音识别等待授权：请在屏幕弹窗中点「允许」，授权后自动继续"
+            chatError = uiState.strings().systemAsrConsent
         }
     }
     systemAsr.onFinal = { text, singleShot ->
@@ -1110,7 +1180,7 @@ private fun DemoScreen(
                 // 按住说话（系统识别版）：终稿或错误直接落同一条发送链
                 voiceRecognizing = false
                 if (text.isEmpty()) {
-                    chatError = "未识别到语音内容，请靠近一点重试"
+                    chatError = uiState.strings().noSpeechHeard
                     return@launch
                 }
                 if (uiState.voicePrefs.autoSend) {
@@ -1162,12 +1232,18 @@ private fun DemoScreen(
                 if (text.isNotEmpty()) pushUserLine(text)
                 val consumed = session?.skills?.onUtterance(text) ?: false
                 when {
-                    consumed -> if (text.isEmpty()) pushUserLine("（出拳）")
-                    text.isEmpty() -> result.onFailure { t -> chatError = "语音识别失败：${t.message}" }
+                    consumed -> if (text.isEmpty()) pushUserLine(uiState.strings().threwPlaceholder)
+                    text.isEmpty() -> result.onFailure { t -> chatError = uiState.strings().asrFailed(t.message) }
                     else -> session?.send(text, videoSnapshotImages())
                 }
             }
         }
+    }
+
+    // 文案表随界面语言（控制器异常消息的语言）
+    LaunchedEffect(strings) {
+        voiceRecorder.texts = strings
+        freeSpeech.texts = strings
     }
 
     // 技能能力缝的懒引用回填：此刻 freeSpeech/videoTracker 已就绪，session 由
@@ -1190,15 +1266,16 @@ private fun DemoScreen(
 
     val onToggleFreeTalk: () -> Unit = {
         val new = !uiState.voicePrefs.freeTalk
+        val s = uiState.strings()
         uiState.updateVoicePrefs(uiState.voicePrefs.copy(freeTalk = new))
         when {
             new && !micGranted -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
             new && uiState.voicePrefs.asrEngine == AsrEngine.CLOUD &&
                 uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isBlank() ->
-                chatError = "自由说话（云端识别）需要硅基流动 API Key，先在 ⚙️ 设置里配置或改用系统识别"
+                chatError = s.freeTalkCloudNeedsKey
             new && uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM && !systemAsr.isAvailable() ->
-                chatError = "本机没有系统语音识别服务，请改用云端识别"
-            new -> chatError = "自由说话已开启（${uiState.voicePrefs.asrEngine.label}）：直接开口，说完一句自动发送；系统识别在虚拟人说话期间暂停聆听"
+                chatError = s.freeTalkNoSystemAsr
+            new -> chatError = s.freeTalkEnabled(uiState.voicePrefs.asrEngine)
         }
     }
 
@@ -1215,11 +1292,11 @@ private fun DemoScreen(
         if (want && system) {
             freeSpeech.stop()
             runCatching { systemAsr.startContinuous() }
-                .onFailure { chatError = "自由说话启动失败：${it.message}" }
+                .onFailure { chatError = uiState.strings().freeTalkStartFailed(it.message) }
         } else if (want) {
             systemAsr.stop()
             runCatching { freeSpeech.start(echoCancellation = uiState.inputMode == InputMode.VIDEO) }
-                .onFailure { chatError = "自由说话启动失败：${it.message}" }
+                .onFailure { chatError = uiState.strings().freeTalkStartFailed(it.message) }
         } else {
             freeSpeech.stop()
             systemAsr.stop()
@@ -1249,7 +1326,7 @@ private fun DemoScreen(
                     systemAsr.startSingleShot()
                     voiceRecording = true
                 } catch (e: IllegalStateException) {
-                    chatError = e.message ?: "系统语音识别启动失败"
+                    chatError = e.message ?: uiState.strings().systemAsrStartFailed
                 }
             }
             else -> {
@@ -1261,7 +1338,7 @@ private fun DemoScreen(
                     voiceRecorder.start(echoCancellation = uiState.inputMode == InputMode.VIDEO)
                     voiceRecording = true
                 } catch (e: IllegalStateException) {
-                    chatError = e.message ?: "录音启动失败"
+                    chatError = e.message ?: uiState.strings().recordStartFailed
                 }
             }
         }
@@ -1276,7 +1353,7 @@ private fun DemoScreen(
             voiceRecording = false
             val file = voiceRecorder.stop()
             if (file == null) {
-                chatError = "没录到声音——按下后稍等半秒再开口"
+                chatError = uiState.strings().noAudioRecorded
             } else {
                 voiceRecognizing = true
                 scope.launch {
@@ -1293,7 +1370,7 @@ private fun DemoScreen(
                     result.onSuccess { raw ->
                         val text = raw.trim()
                         if (text.isEmpty()) {
-                            chatError = "未识别到语音内容，请靠近一点重试"
+                            chatError = uiState.strings().noSpeechHeard
                         } else if (uiState.voicePrefs.autoSend) {
                             pushUserLine(text)
                             val consumed = session?.skills?.onUtterance(text) ?: false
@@ -1302,7 +1379,7 @@ private fun DemoScreen(
                             voicePrefill = text
                         }
                     }.onFailure {
-                        chatError = "语音识别失败：${it.message}"
+                        chatError = uiState.strings().asrFailed(it.message)
                     }
                 }
             }
@@ -1334,9 +1411,9 @@ private fun DemoScreen(
             val s = session
             when {
                 s != null -> {
-                    applyCardToSession(s, entry, applyOverrideFor)
+                    applyCardToSession(s, entry, applyOverrideFor, uiState.lang, uiState::presetAssetByFile)
                     s.clearHistory()
-                    val greeting = entry.card.spokenGreeting()
+                    val greeting = localizedCard(uiState, entry).spokenGreeting(promptTextsOf(uiState.lang).userAlias)
                     if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
                 }
                 else -> uiState.pendingGreetingFile = entry.fileName
@@ -1351,7 +1428,7 @@ private fun DemoScreen(
     val selectPresetCard: (PresetCard) -> Unit = { preset ->
         val entry = uiState.importPresetCard(context, preset)
         if (entry == null) {
-            chatError = "预置卡不可读（${preset.assetPath}）"
+            chatError = uiState.strings().presetCardUnreadable(preset.assetPath)
         } else {
             activateEntry(entry)
         }
@@ -1371,7 +1448,7 @@ private fun DemoScreen(
         if (uri != null) {
             val entry = uiState.importCard(context, uri)
             if (entry == null) {
-                chatError = "无法解析所选文件为角色卡（支持 SillyTavern PNG / JSON）"
+                chatError = uiState.strings().cardParseFailed
             } else {
                 activateCard(entry)
             }
@@ -1528,11 +1605,11 @@ private fun DemoScreen(
                     )
                 }
                 if (mode == InputMode.VIDEO) {
-                    val reason = uiState.videoModeBlockReason()
+                    val reason = uiState.videoModeBlockReason(uiState.strings())
                     if (reason != null) throw IllegalStateException(reason)
                 }
                 uiState.switchInputMode(mode)
-                "input mode = ${mode.name.lowercase()} (${mode.label})" +
+                "input mode = ${mode.name.lowercase()} (${uiState.strings().inputMode(mode)})" +
                     if (mode == InputMode.VIDEO) " — camera starting" else ""
             },
             showButtons = { arg ->
@@ -1625,7 +1702,7 @@ private fun DemoScreen(
             // 视频模式命令组：前后摄切换 / 抓拍缓存探测 / state 增量行
             switchLens = { arg ->
                 if (!videoTracker.isActive) {
-                    error("视频相机未启动——先进入视频模式 (set_mode video)")
+                    error(uiState.strings().videoCameraNotRunning)
                 }
                 val wantFront = when (arg?.lowercase()) {
                     null, "toggle", "flip" -> !videoTracker.currentLensFront
@@ -1646,10 +1723,10 @@ private fun DemoScreen(
             },
             videoSnapshot = {
                 if (!videoTracker.isActive) {
-                    error("视频相机未启动——先进入视频模式 (set_mode video)")
+                    error(uiState.strings().videoCameraNotRunning)
                 }
                 val f = videoTracker.ring.best()
-                    ?: error("抓拍缓存还是空的——相机刚起或第一帧还没编码完，等 1s 再试")
+                    ?: error(uiState.strings().videoSnapshotEmpty)
                 "snapshot ${f.byteCount}B sharpness=${"%.1f".format(f.sharpness)} " +
                     "age=${android.os.SystemClock.elapsedRealtime() - f.atMs}ms ring=${videoTracker.ring.size()}"
             },
@@ -1683,6 +1760,20 @@ private fun DemoScreen(
                 "asrEngine=${engine.name.lowercase()} " +
                     if (engine == AsrEngine.SYSTEM) "(avail=${systemAsr.isAvailable()})" else "(cloud chain follows LLM provider)"
             },
+            // ai_cmd set_language system|zh|en：界面语言切换（持久化）。会话身份含
+            // 语言 → 自动重建、提示词按新语言重发；上下文不轮换，历史保留
+            setLanguage = { arg ->
+                val pref = when (arg?.lowercase()) {
+                    "system", "auto" -> AppLang.SYSTEM
+                    "zh", "cn", "chinese" -> AppLang.ZH
+                    "en", "english" -> AppLang.EN
+                    null -> throw IllegalArgumentException("set_language expects system|zh|en, got null")
+                    else -> throw IllegalArgumentException("set_language expects system|zh|en, got '$arg'")
+                }
+                uiState.setAppLang(pref)
+                "appLang=${pref.name.lowercase()} (effective=${uiState.lang.name.lowercase()}, " +
+                    "prompts follow this language; history kept)"
+            },
             // ai_cmd set_expression：走 FaceDriver 手动表情通道（缓动进场、保持不归零）
             manualExpression = { name, weight ->
                 val fd = session?.faceDriver
@@ -1713,6 +1804,7 @@ private fun DemoScreen(
         }
     }
 
+    CompositionLocalProvider(LocalStrings provides strings) {
     Box(modifier = modifier.fillMaxSize()) {
         // 3D Avatar (full-screen background)
         AvatarView(
@@ -1782,7 +1874,7 @@ private fun DemoScreen(
                 onSelect = { mode ->
                     // 视频模式准入：只有多模态模型可进（需求硬性门控），拒绝原因上错误条
                     if (mode == InputMode.VIDEO) {
-                        val reason = uiState.videoModeBlockReason()
+                        val reason = uiState.videoModeBlockReason(strings)
                         if (reason != null) {
                             chatError = reason
                             return@InputModeSelector
@@ -1860,7 +1952,8 @@ private fun DemoScreen(
                         contentDescription = "Exit drag mode"
                     )
                 } else {
-                    Text(text = "移", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    val s = LocalStrings.current
+                    Text(text = s.fabMove, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -1871,7 +1964,7 @@ private fun DemoScreen(
                     val next = shots[(shots.indexOf(currentShot) + 1).mod(shots.size)]
                     currentShot = next
                     controller.setCameraShot(next)
-                    shotLabel = next.label
+                    shotLabel = next.label(uiState.lang)
                 },
                 shape = RoundedCornerShape(50),
                 containerColor = if (currentShot != null)
@@ -1879,7 +1972,7 @@ private fun DemoScreen(
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
-                Text(text = "视", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = LocalStrings.current.fabView, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
 
             // Settings FAB (⚙️ gear icon) — opens the full settings screen
@@ -1939,7 +2032,7 @@ private fun DemoScreen(
                 )
             }
 
-            // Character card FAB (人物卡, text "卡" like the camera "视" FAB)
+            // Character card FAB (人物卡, text like the camera FAB)
             SmallFloatingActionButton(
                 onClick = {
                     uiState.activePanel =
@@ -1952,7 +2045,7 @@ private fun DemoScreen(
                 else
                     MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
             ) {
-                Text(text = "卡", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = LocalStrings.current.fabCard, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
 
             // Animation FAB
@@ -2027,8 +2120,9 @@ private fun DemoScreen(
                 .fillMaxWidth()
                 .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
         ) {
+            val s = LocalStrings.current
             ListPanel(
-                title = "Animations · 长按条目设为待机",
+                title = s.animationsTitle,
                 items = uiState.animationFiles,
                 selectedItem = uiState.selectedAnimation,
                 // 只隐藏顶层目录名（如 VRMA_Selected_Categorized），保留分类子文件夹
@@ -2037,7 +2131,7 @@ private fun DemoScreen(
                     if (idlePrefValueFor(
                             it, uiState.useExternalAnimations, uiState.externalAnimationsRoot(context)
                         ) == uiState.idleAnimation
-                    ) "$base · 待机" else base
+                    ) "$base ${s.idleSuffix}" else base
                 },
                 onItemClick = { fileName ->
                     uiState.selectedAnimation = fileName
@@ -2048,14 +2142,14 @@ private fun DemoScreen(
                     val root = uiState.externalAnimationsRoot(context)
                     val entry = idleEntryFor(fileName, uiState.useExternalAnimations, root)
                     if (entry == null) {
-                        Toast.makeText(context, "该文件无法设为待机", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, s.idleSetFailed, Toast.LENGTH_SHORT).show()
                     } else {
                         val prefValue = idlePrefValueFor(fileName, uiState.useExternalAnimations, root)
                         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                             .edit().putString(KEY_IDLE_ANIMATION, prefValue).apply()
                         uiState.idleAnimation = prefValue
                         applyIdle(entry)
-                        Toast.makeText(context, "待机动作：${entry.label}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, s.idleSet(entry.label), Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -2111,7 +2205,7 @@ private fun DemoScreen(
                 title = "Scenes",
                 items = listOf("") + uiState.sceneFiles,
                 selectedItem = uiState.selectedScene ?: "",
-                displayName = { if (it.isEmpty()) "无（纯色背景）" else it.removeSuffix(".glb").replace("_", " ") },
+                displayName = { if (it.isEmpty()) strings.sceneNone else it.removeSuffix(".glb").replace("_", " ") },
                 onItemClick = { fileName ->
                     uiState.setScene(fileName.ifEmpty { null })
                     uiState.activePanel = PanelType.NONE
@@ -2133,6 +2227,11 @@ private fun DemoScreen(
                 cards = uiState.cards,
                 activeFile = uiState.activeCardFile,
                 presets = uiState.presetCards,
+                presetNameFor = { preset ->
+                    // 英文模式下预置中文卡显示英文名（grid 与激活名一致）
+                    PresetCardsEn.translate(preset.card, preset.assetPath.substringAfterLast('/'), uiState.lang)
+                        ?.name ?: preset.card.name
+                },
                 activePresetAsset = uiState.presetAssetByFile(uiState.activeCardFile),
                 onSelectPreset = selectPresetCard,
                 onClearCard = deactivateCard,
@@ -2149,10 +2248,10 @@ private fun DemoScreen(
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.fillMaxSize()
         ) {
-            // 人物卡提示词 = 卡片默认人设（SystemPromptAssembler 拼装）+ 人工编辑覆盖
+            // 人物卡提示词 = 卡片默认人设（英文模式下预置中文卡为英文人设）+ 人工编辑覆盖
             val activeCardEntry = uiState.activeCardFile?.let { uiState.cardByFile(it) }
             val cardPromptDefault = activeCardEntry
-                ?.let { SystemPromptAssembler().assemble(it.card) }
+                ?.let { SystemPromptAssembler().assemble(localizedCard(uiState, it)) }
                 .orEmpty()
             val cardPromptOverride = uiState.activeCardFile?.let { uiState.cardPromptOverride(it) }
             SettingsScreen(
@@ -2169,11 +2268,16 @@ private fun DemoScreen(
                 externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
                 aiPrefs = uiState.aiPrefs,
                 voicePrefs = uiState.voicePrefs,
+                appLangPref = uiState.appLangPref,
+                onAppLangChange = { uiState.setAppLang(it) },
+                appLang = uiState.lang,
                 contexts = contextList,
                 activeContextId = uiState.contextId,
                 protocolPrompt = session?.protocolBlock().orEmpty(),
-                cardNameFor = { characterId -> uiState.cardByFile(characterId)?.card?.name },
-                activeCardName = activeCardEntry?.card?.name,
+                cardNameFor = { characterId ->
+                    uiState.cardByFile(characterId)?.let { localizedCardName(it, uiState.lang, uiState::presetAssetByFile) }
+                },
+                activeCardName = activeCardEntry?.let { localizedCardName(it, uiState.lang, uiState::presetAssetByFile) },
                 activeCardPromptDefault = cardPromptDefault,
                 activeCardPromptOverride = cardPromptOverride,
                 onSaveCardPrompt = { text ->
@@ -2183,7 +2287,9 @@ private fun DemoScreen(
                         // 空文本 = 视为还原默认（CardPromptOverrides.set 会清除该键）
                         val entry = uiState.cardByFile(file)
                         if (text.isEmpty()) {
-                            if (entry != null) session?.let { applyCardToSession(it, entry, applyOverrideFor) }
+                            if (entry != null) session?.let {
+                                applyCardToSession(it, entry, applyOverrideFor, uiState.lang, uiState::presetAssetByFile)
+                            }
                         } else {
                             session?.systemPrompt = text
                         }
@@ -2194,7 +2300,9 @@ private fun DemoScreen(
                     val entry = file?.let { uiState.cardByFile(it) }
                     if (file != null && entry != null) {
                         uiState.setCardPromptOverride(file, null)
-                        session?.let { applyCardToSession(it, entry, applyOverrideFor) }
+                        session?.let {
+                            applyCardToSession(it, entry, applyOverrideFor, uiState.lang, uiState::presetAssetByFile)
+                        }
                     }
                 },
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
@@ -2218,6 +2326,7 @@ private fun DemoScreen(
                 onDismiss = { uiState.activePanel = PanelType.NONE }
             )
         }
+    }
     }
 }
 
@@ -2272,6 +2381,7 @@ private fun AiChatBar(
     modifier: Modifier = Modifier,
 ) {
     var input by remember { mutableStateOf("") }
+    val s = LocalStrings.current
     val busy = phase != ConversationPhase.IDLE
 
     // 语音识别后不直接发送的路径：识别文本填入输入框，由用户确认发送
@@ -2307,7 +2417,7 @@ private fun AiChatBar(
                     chatLines.forEach { line ->
                         val user = line.role == ChatRole.USER
                         Text(
-                            text = if (user) "我：${line.text}" else line.text,
+                            text = if (user) "${s.transcriptUserPrefix}${line.text}" else line.text,
                             color = if (user) Color(0xFF9ED8FF) else Color.White,
                             fontSize = 13.sp,
                             lineHeight = 18.sp,
@@ -2348,8 +2458,8 @@ private fun AiChatBar(
                 AnimatedVisibility(visible = busy) {
                     Text(
                         text = when (phase) {
-                            ConversationPhase.THINKING -> "思考中"
-                            ConversationPhase.SPEAKING -> "说话中"
+                            ConversationPhase.THINKING -> s.phaseThinking
+                            ConversationPhase.SPEAKING -> s.phaseSpeaking
                             ConversationPhase.IDLE -> ""
                         },
                         fontSize = 12.sp,
@@ -2411,10 +2521,10 @@ private fun AiChatBar(
                         placeholder = {
                             Text(
                                 text = when {
-                                    !enabled -> "先在 ⚙️ 设置里配置 AI 服务"
-                                    inputMode == InputMode.VIDEO -> "说话（视频模式：每轮附相机画面）…"
-                                    inputMode == InputMode.VOICE -> "识别结果确认后发送…"
-                                    else -> "说点什么，回车或发送…"
+                                    !enabled -> s.placeholderNotConfigured
+                                    inputMode == InputMode.VIDEO -> s.placeholderVideo
+                                    inputMode == InputMode.VOICE -> s.placeholderVoiceConfirm
+                                    else -> s.placeholderType
                                 },
                                 fontSize = 13.sp
                             )
@@ -2447,7 +2557,7 @@ private fun AiChatBar(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "发送",
+                            contentDescription = s.sendA11y,
                             tint = if (enabled && input.isNotBlank())
                                 MaterialTheme.colorScheme.primary
                             else
@@ -2459,7 +2569,7 @@ private fun AiChatBar(
                     IconButton(onClick = onInterrupt) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "打断"
+                            contentDescription = s.interruptA11y
                         )
                     }
                 }
@@ -2487,11 +2597,12 @@ private fun HoldToTalk(
         recognizing -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
     }
+    val s = LocalStrings.current
     val label = when {
-        recording -> "松开 识别"
-        recognizing -> "识别中…"
-        enabled -> "按住 说话"
-        else -> "未配置 AI 服务"
+        recording -> s.holdReleaseToRecognize
+        recognizing -> s.recognizing
+        enabled -> s.holdToTalk
+        else -> s.notConfigured
     }
     Box(
         modifier = modifier
@@ -2548,14 +2659,15 @@ private fun VoiceTalkModeToggle(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
+            val s = LocalStrings.current
             Text(
-                text = if (free) "自由" else "按住",
+                text = if (free) s.toggleFree else s.toggleHold,
                 color = if (free) MaterialTheme.colorScheme.onPrimaryContainer else Color.White,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "说话",
+                text = s.talk,
                 color = if (free) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                 else Color.White.copy(alpha = 0.7f),
                 fontSize = 9.sp,
@@ -2583,11 +2695,12 @@ private fun FreeListenIndicator(
         },
         label = "freeListenBg",
     )
+    val s = LocalStrings.current
     val label = when {
-        recognizing -> "识别中…"
-        hearing -> "听到你说话…"
-        enabled -> "自由说话中，直接开口"
-        else -> "未配置 AI 服务"
+        recognizing -> s.recognizing
+        hearing -> s.hearingYou
+        enabled -> s.freeListening
+        else -> s.notConfigured
     }
     Box(
         modifier = modifier
@@ -2628,6 +2741,7 @@ private fun InputModeSelector(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
     Box(modifier) {
         Surface(
             onClick = { expanded = true },
@@ -2639,14 +2753,14 @@ private fun InputModeSelector(
                 modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp)
             ) {
                 Text(
-                    text = current.label,
+                    text = s.inputMode(current),
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "切换输入模式",
+                    contentDescription = s.toggleInputModeA11y,
                     tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
@@ -2657,7 +2771,7 @@ private fun InputModeSelector(
                 DropdownMenuItem(
                     text = {
                         Text(
-                            text = if (mode == current) "${mode.label}（当前）" else mode.label,
+                            text = if (mode == current) s.inputMode(mode) + s.currentSuffix else s.inputMode(mode),
                             fontWeight = if (mode == current) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     },
@@ -2687,8 +2801,9 @@ private fun ButtonsToggle(
         color = Color.Black.copy(alpha = 0.45f),
         modifier = modifier,
     ) {
+        val s = LocalStrings.current
         Text(
-            text = if (visible) "隐藏按钮" else "显示按钮",
+            text = if (visible) s.hideButtons else s.showButtons,
             color = Color.White,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -2789,8 +2904,9 @@ private fun VideoCallPip(
                 shape = CircleShape,
                 containerColor = Color.Black.copy(alpha = 0.55f),
             ) {
+                val s = LocalStrings.current
                 Text(
-                    text = if (lensFront) "前" else "后",
+                    text = if (lensFront) s.pipFront else s.pipBack,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color.White,
@@ -2810,6 +2926,7 @@ private fun CardsPanel(
     cards: List<CharacterCardStore.Entry>,
     activeFile: String?,
     presets: List<PresetCard>,
+    presetNameFor: (PresetCard) -> String,
     activePresetAsset: String?,
     onSelectPreset: (PresetCard) -> Unit,
     onClearCard: () -> Unit,
@@ -2817,6 +2934,7 @@ private fun CardsPanel(
     onActivate: (CharacterCardStore.Entry) -> Unit,
     onDelete: (CharacterCardStore.Entry) -> Unit,
 ) {
+    val s = LocalStrings.current
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -2826,7 +2944,7 @@ private fun CardsPanel(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                text = "预置角色",
+                text = s.presetCardsTitle,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 6.dp, start = 4.dp)
@@ -2844,6 +2962,7 @@ private fun CardsPanel(
                 items(presets, key = { it.assetPath }) { preset ->
                     PresetCardCell(
                         preset = preset,
+                        displayName = presetNameFor(preset),
                         selected = preset.assetPath == activePresetAsset,
                         onClick = { onSelectPreset(preset) },
                     )
@@ -2857,13 +2976,13 @@ private fun CardsPanel(
                     .padding(top = 10.dp, bottom = 4.dp, start = 4.dp)
             ) {
                 Text(
-                    text = "我的卡片",
+                    text = s.myCardsTitle,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 TextButton(onClick = onImport) {
-                    Text(text = "导入 PNG/JSON…", fontSize = 13.sp)
+                    Text(text = s.importCard, fontSize = 13.sp)
                 }
             }
 
@@ -2891,7 +3010,7 @@ private fun CardsPanel(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = entry.card.name.ifEmpty { "（未命名卡片）" },
+                                text = entry.card.name.ifEmpty { s.unnamedCard },
                                 fontSize = 14.sp,
                                 fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                                 color = if (isActive)
@@ -2915,7 +3034,7 @@ private fun CardsPanel(
                         }
                         if (isActive) {
                             Text(
-                                text = "使用中",
+                                text = s.cardInUse,
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.padding(end = 4.dp)
@@ -2924,7 +3043,7 @@ private fun CardsPanel(
                         IconButton(onClick = { onDelete(entry) }, modifier = Modifier.size(28.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "删除卡片",
+                                contentDescription = s.deleteCardA11y,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -2934,8 +3053,7 @@ private fun CardsPanel(
                 if (cards.isEmpty()) {
                     item {
                         Text(
-                            text = "点上方预置角色即可开始对话；从 SillyTavern 导出的 PNG / JSON " +
-                                "卡导入后也会出现在这里。",
+                            text = s.cardsEmptyHint,
                             fontSize = 12.sp,
                             lineHeight = 17.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2966,10 +3084,11 @@ private fun rememberPresetCardBitmap(assetPath: String): ImageBitmap? {
     }
 }
 
-/** 预置卡 grid 单元：卡图 + 名称；选中描边高亮。 */
+/** 预置卡 grid 单元：卡图 + 名称（[displayName] 已按语言本地化）；选中描边高亮。 */
 @Composable
 private fun PresetCardCell(
     preset: PresetCard,
+    displayName: String,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -2994,7 +3113,7 @@ private fun PresetCardCell(
         if (bitmap != null) {
             Image(
                 bitmap = bitmap,
-                contentDescription = preset.card.name,
+                contentDescription = displayName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3018,7 +3137,7 @@ private fun PresetCardCell(
             }
         }
         Text(
-            text = preset.card.name,
+            text = displayName,
             fontSize = 11.sp,
             lineHeight = 13.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
@@ -3061,14 +3180,15 @@ private fun EmptyCardCell(selected: Boolean, onClick: () -> Unit) {
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
             contentAlignment = Alignment.Center
         ) {
+            val s = LocalStrings.current
             Icon(
                 imageVector = Icons.Default.Person,
-                contentDescription = "取消人物卡",
+                contentDescription = s.clearCardA11y,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Text(
-            text = "无人物卡",
+            text = LocalStrings.current.noCard,
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

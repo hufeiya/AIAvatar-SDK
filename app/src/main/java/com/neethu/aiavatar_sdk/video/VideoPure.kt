@@ -133,12 +133,27 @@ object FaceFrameMath {
  * images)` 时复用判定。
  */
 object VisionKeywords {
-    val DEFAULT: List<String> = listOf(
+    /** 中文口语关键词（默认；既有行为不变）。 */
+    val ZH: List<String> = listOf(
         "看", "瞧", "这个", "那个", "什么", "谁", "衣服", "颜色", "图片", "图像",
         "东西", "好看", "漂亮", "颜值", "背后", "后面", "旁边", "穿", "戴", "头发",
     )
 
-    /** 任一关键词出现即命中（子串匹配，无分词——中文口语够用）。 */
+    /** 英文口语关键词（多语言支持；英文模式下识别文本走这套）。 */
+    val EN: List<String> = listOf(
+        "look", "see", "this", "that", "what", "who", "wearing", "outfit", "color",
+        "picture", "photo", "nice", "pretty", "beautiful", "behind", "beside",
+        "next to", "hair", "background", "show me",
+    )
+
+    /** 兼容别名（SDK 集成者按自家语言接）。 */
+    val DEFAULT: List<String> get() = ZH
+
+    /** 按语言取词表。 */
+    fun forLang(lang: com.neethu.corelib.Lang): List<String> =
+        if (lang == com.neethu.corelib.Lang.EN) EN else ZH
+
+    /** 任一关键词出现即命中（子串匹配，无分词——中文口语够用；英文按词命中）。 */
     fun matches(text: String, keywords: List<String> = DEFAULT): Boolean =
-        keywords.any { it.isNotEmpty() && text.contains(it) }
+        keywords.any { it.isNotEmpty() && text.contains(it, ignoreCase = true) }
 }

@@ -85,7 +85,9 @@ import com.neethu.aiavatar_sdk.TtsEngine
 import com.neethu.aiavatar_sdk.VoicePrefs
 import com.neethu.aiavatar_sdk.asrExplicitAsrModels
 import com.neethu.aiavatar_sdk.isSystemAsrAvailable
+import com.neethu.aiavatar_sdk.i18n.AppLang
 import com.neethu.aiavatar_sdk.asrProviderFor
+import com.neethu.aiavatar_sdk.i18n.LocalStrings
 import com.neethu.aiavatar_sdk.composeVoiceRef
 import com.neethu.aiavatar_sdk.resolveEdgeVoice
 import com.neethu.aiavatar_sdk.resolveLlmModel
@@ -109,13 +111,14 @@ internal const val SECTION_ANIMATIONS = "animations"
 internal const val SECTION_QUALITY = "quality"
 internal const val SECTION_LIVENESS = "liveness"
 internal const val SECTION_FREE_SPEECH = "free_speech"
+internal const val SECTION_LANGUAGE = "language"
 
 /** 下拉框的一个选项：[value] 为存进 prefs 的值，[label] 为显示名。 */
 internal data class DropdownOption(val value: String, val label: String)
 
-/** 服务商下拉的统一选项。 */
-private fun providerOptions(): List<DropdownOption> =
-    AiProvider.entries.map { DropdownOption(it.name, it.label) }
+/** 服务商下拉的统一选项（显示名随语言）。 */
+internal fun providerOptions(s: com.neethu.aiavatar_sdk.i18n.Strings): List<DropdownOption> =
+    AiProvider.entries.map { DropdownOption(it.name, s.provider(it)) }
 
 /** 写指定服务商的 API Key（其余服务商的 key 原样保留）。 */
 private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): AiChatPrefs =
@@ -183,6 +186,11 @@ internal fun SettingsScreen(
     listState: androidx.compose.foundation.lazy.LazyListState,
     aiPrefs: AiChatPrefs,
     voicePrefs: VoicePrefs,
+    /** 界面语言偏好（跟随系统/中文/英文）。 */
+    appLangPref: AppLang,
+    onAppLangChange: (AppLang) -> Unit,
+    /** 生效语言（会话实际使用的提示词/默认音色语言，显示一致性用）。 */
+    appLang: com.neethu.corelib.Lang,
     contexts: List<ConversationContextSummary>,
     activeContextId: String,
     protocolPrompt: String,
@@ -205,6 +213,7 @@ internal fun SettingsScreen(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val s = LocalStrings.current
     // ── 半屏 ⇄ 全屏：拖动标题连续调整，松手按阈值吸附 ──────────────────────
     var heightFraction by remember { mutableStateOf(SHEET_HALF_FRACTION) }
     val animatable = remember { Animatable(SHEET_HALF_FRACTION) }
@@ -316,13 +325,13 @@ internal fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Settings",
+                            text = s.settingsTitle,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(onClick = onDismiss) {
-                            Icon(imageVector = Icons.Default.Close, contentDescription = "Close settings")
+                            Icon(imageVector = Icons.Default.Close, contentDescription = s.closeSettingsA11y)
                         }
                     }
                 }
@@ -335,37 +344,53 @@ internal fun SettingsScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // ── 语言 ─────────────────────────────────────────────
+                    item {
+                        CollapsibleSection(
+                            title = s.sectionLanguage,
+                            expanded = SECTION_LANGUAGE in expandedSections,
+                            onToggle = { toggleSection(SECTION_LANGUAGE) }
+                        ) {
+                            SettingsDropdownRow(
+                                title = s.languageTitle,
+                                options = AppLang.entries.map { DropdownOption(it.name, s.appLangLabel(it.name)) },
+                                selectedValue = appLangPref.name,
+                            ) { value -> onAppLangChange(AppLang.valueOf(value)) }
+                            SettingsGroupLabel(s.languageSubtitle)
+                        }
+                    }
+
                     // ── AI 配置 ───────────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "AI 配置 (AI Chat · 大模型/语音 双服务商)",
+                            title = s.sectionAi,
                             expanded = SECTION_AI in expandedSections,
                             onToggle = { toggleSection(SECTION_AI) }
                         ) {
                             SettingsGroupLabel(
                                 when {
-                                    aiPrefs.isConfigured -> "已配置，保存后立即生效"
-                                    aiPrefs.ttsEngine == TtsEngine.EDGE -> "填大模型 API Key 即可对话（Edge-TTS 免 Key）"
-                                    else -> "选择服务商、填 API Key 即可对话"
+                                    aiPrefs.isConfigured -> s.aiConfigured
+                                    aiPrefs.ttsEngine == TtsEngine.EDGE -> s.aiEdgeReadyHint
+                                    else -> s.aiPickProviderHint
                                 }
                             )
                             // ── 大模型 ────────────────────────────────────
                             SettingsDropdownRow(
-                                title = "大模型服务商",
-                                options = providerOptions(),
+                                title = s.llmProviderTitle,
+                                options = providerOptions(s),
                                 selectedValue = aiPrefs.provider.name,
                             ) { value ->
                                 // 同服务商勾选时 TTS 由 ttsProviderResolved 自动跟随 provider
                                 onAiPrefsChange(aiPrefs.copy(provider = AiProvider.valueOf(value)))
                             }
                             SettingsTextFieldRow(
-                                title = aiPrefs.provider.llmKeyLabel,
+                                title = s.llmKeyLabel(aiPrefs.provider),
                                 value = aiPrefs.apiKeyFor(aiPrefs.provider),
-                                placeholder = aiPrefs.provider.llmKeyHint,
+                                placeholder = s.keyHint(aiPrefs.provider, tts = false),
                                 password = true
                             ) { onAiPrefsChange(withApiKey(aiPrefs, aiPrefs.provider, it)) }
                             SettingsDropdownRow(
-                                title = "大模型",
+                                title = s.llmModelTitle,
                                 options = aiPrefs.provider.llmModels.map { DropdownOption(it, it) },
                                 selectedValue = resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel),
                             ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
@@ -374,24 +399,25 @@ internal fun SettingsScreen(
                             // 下文 ASR 区块也引用（硅基流动 Key 显隐判定），提在引擎分支外
                             val ttsProvider = aiPrefs.ttsProviderResolved
                             SettingsDropdownRow(
-                                title = "TTS 引擎",
-                                options = TtsEngine.entries.map { DropdownOption(it.name, it.label) },
+                                title = s.ttsEngineTitle,
+                                options = TtsEngine.entries.map { DropdownOption(it.name, s.ttsEngine(it)) },
                                 selectedValue = aiPrefs.ttsEngine.name,
                             ) { value ->
                                 onAiPrefsChange(aiPrefs.copy(ttsEngine = TtsEngine.valueOf(value)))
                             }
                             if (aiPrefs.ttsEngine == TtsEngine.EDGE) {
                                 // Edge-TTS（任务 6）：免费无 Key，服务商/Key/模型全旁路
-                                SettingsGroupLabel("Edge-TTS：微软朗读接口，免费、无需 Key（接口无 SLA，失败会提示）")
+                                SettingsGroupLabel(s.edgeTtsHint)
                                 SettingsDropdownRow(
-                                    title = "音色 Voice",
-                                    options = EdgeTtsCatalog.voices.map { DropdownOption(it.first, it.second) },
-                                    selectedValue = resolveEdgeVoice(aiPrefs.voice),
+                                    title = s.voiceTitle,
+                                    options = EdgeTtsCatalog.voices.map { DropdownOption(it.first, s.edgeVoiceLabel(it.first)) },
+                                    // 默认音色按语言解析（英文模式空配置=Emma，与实际请求一致）
+                                    selectedValue = resolveEdgeVoice(aiPrefs.voice, appLang),
                                 ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
                             } else {
                             SettingsCheckRow(
-                                title = "语音合成与 大模型 同服务商",
-                                subtitle = "勾选时 TTS 直接使用上面的大模型服务商；取消可为 TTS 单独选服务商（必要时单独填 Key）",
+                                title = s.sameProviderTitle,
+                                subtitle = s.sameProviderSubtitle,
                                 checked = aiPrefs.ttsSameProvider
                             ) { onAiPrefsChange(
                                 // 取消勾选瞬间 TTS 行为不跳变：独立服务商初始化为
@@ -400,8 +426,8 @@ internal fun SettingsScreen(
                             ) }
                             if (!aiPrefs.ttsSameProvider) {
                                 SettingsDropdownRow(
-                                    title = "TTS 服务商",
-                                    options = providerOptions(),
+                                    title = s.ttsProviderTitle,
+                                    options = providerOptions(s),
                                     selectedValue = ttsProvider.name,
                                 ) { value ->
                                     onAiPrefsChange(aiPrefs.copy(ttsProvider = AiProvider.valueOf(value)))
@@ -411,20 +437,20 @@ internal fun SettingsScreen(
                                     // 控制台 vs 方舟控制台），勾了「同服务商」也必须单填；
                                     // 硅基流动 TTS 仅在独立于大模型服务商时才露 key
                                     SettingsTextFieldRow(
-                                        title = ttsProvider.ttsKeyLabel,
+                                        title = s.ttsKeyLabel(ttsProvider),
                                         value = aiPrefs.apiKeyForTts(),
-                                        placeholder = ttsProvider.ttsKeyHint,
+                                        placeholder = s.keyHint(ttsProvider, tts = true),
                                         password = true
                                     ) { onAiPrefsChange(withTtsApiKey(aiPrefs, ttsProvider, it)) }
                                 }
                             }
                             SettingsDropdownRow(
-                                title = "TTS 模型",
+                                title = s.ttsModelTitle,
                                 options = ttsProvider.ttsModels.map { DropdownOption(it, ttsProvider.ttsModelLabel(it)) },
                                 selectedValue = resolveTtsModel(ttsProvider, aiPrefs.ttsModel),
                             ) { onAiPrefsChange(aiPrefs.copy(ttsModel = it)) }
                             SettingsDropdownRow(
-                                title = "音色 Voice",
+                                title = s.voiceTitle,
                                 options = voiceOptionsWithFetched(ttsProvider, fetchedVoices, resolveVoice(ttsProvider, aiPrefs.voice)),
                                 selectedValue = resolveVoice(ttsProvider, aiPrefs.voice),
                             ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
@@ -436,7 +462,7 @@ internal fun SettingsScreen(
                             // （LLM 不走硅基流动、TTS 也不走硅基流动）时单独填一份
                             val asrProvider = asrProviderFor(aiPrefs.provider)
                             SettingsGroupLabel(
-                                "语音输入（按住说话 · ASR 走${asrProvider.label}${if (aiPrefs.provider == AiProvider.VOLCANO) "（火山回落）" else ""}）"
+                                s.asrGroupLabel(asrProvider, aiPrefs.provider == AiProvider.VOLCANO)
                             )
                             if (asrProvider == AiProvider.SILICONFLOW &&
                                 aiPrefs.provider != AiProvider.SILICONFLOW &&
@@ -444,7 +470,7 @@ internal fun SettingsScreen(
                                 voicePrefs.asrEngine == AsrEngine.CLOUD
                             ) {
                                 SettingsTextFieldRow(
-                                    title = "硅基流动 API Key（语音识别用）",
+                                    title = s.sfAsrKeyTitle,
                                     value = aiPrefs.apiKeySiliconflow,
                                     placeholder = "sk-...",
                                     password = true
@@ -452,8 +478,8 @@ internal fun SettingsScreen(
                             }
                             // ── 识别引擎：云端（跟随大模型服务商）或系统内置（免费）──
                             SettingsDropdownRow(
-                                title = "识别引擎",
-                                options = AsrEngine.entries.map { DropdownOption(it.name, it.label) },
+                                title = s.recognitionEngineTitle,
+                                options = AsrEngine.entries.map { DropdownOption(it.name, s.asrEngine(it)) },
                                 selectedValue = voicePrefs.asrEngine.name,
                             ) { value ->
                                 onVoicePrefsChange(voicePrefs.copy(asrEngine = AsrEngine.valueOf(value)))
@@ -462,13 +488,12 @@ internal fun SettingsScreen(
                                 // 系统识别：平台 SpeechRecognizer（GMS=Google，国产 ROM=厂商服务）
                                 val systemAsrReady = remember { isSystemAsrAvailable(context) }
                                 SettingsGroupLabel(
-                                    if (systemAsrReady) "本机可用：系统语音识别服务已就绪（免费、无 Key、不消耗云端额度）；虚拟人说话期间自动暂停聆听"
-                                    else "本机不可用：未检测到系统语音识别服务（无 Google 服务/厂商服务），请改用云端识别"
+                                    if (systemAsrReady) s.systemAsrAvailableHint else s.systemAsrUnavailableHint
                                 )
                             } else {
                             SettingsDropdownRow(
-                                title = "ASR 模型",
-                                options = listOf(DropdownOption("", "自动（推荐）")) +
+                                title = s.asrModelTitle,
+                                options = listOf(DropdownOption("", s.asrModelAuto)) +
                                     asrExplicitAsrModels(asrProvider).map {
                                         DropdownOption(it, it)
                                     },
@@ -476,14 +501,14 @@ internal fun SettingsScreen(
                             ) { onVoicePrefsChange(voicePrefs.copy(asrModel = it)) }
                             }
                             SettingsSwitchRow(
-                                title = "语音直接发送",
-                                subtitle = "松手识别成功即发送；关闭则识别文本先填入输入框，确认后再发",
+                                title = s.voiceAutoSendTitle,
+                                subtitle = s.voiceAutoSendSubtitle,
                                 checked = voicePrefs.autoSend
                             ) { onVoicePrefsChange(voicePrefs.copy(autoSend = it)) }
 
                             SettingsSwitchRow(
-                                title = "AI 可控镜头",
-                                subtitle = "允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
+                                title = s.llmCameraTitle,
+                                subtitle = s.llmCameraSubtitle,
                                 checked = aiPrefs.llmCamera
                             ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
                         }
@@ -492,7 +517,7 @@ internal fun SettingsScreen(
                     // ── 人物卡提示词 ──────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "人物卡 (Character Card · 人设提示词)",
+                            title = s.sectionCard,
                             expanded = SECTION_CARD in expandedSections,
                             onToggle = { toggleSection(SECTION_CARD) }
                         ) {
@@ -509,19 +534,17 @@ internal fun SettingsScreen(
                     // ── 对话上下文 ────────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "对话上下文 (Contexts)",
+                            title = s.sectionContext,
                             expanded = SECTION_CONTEXT in expandedSections,
                             onToggle = { toggleSection(SECTION_CONTEXT) }
                         ) {
                             SettingsActionRow(
-                                title = "新建上下文",
-                                subtitle = "开始一段全新对话；旧上下文保留，可随时切回"
+                                title = s.newContextTitle,
+                                subtitle = s.newContextSubtitle
                             ) { onNewContext() }
-                            SettingsGroupLabel("历史上下文（点按切换，删除不可恢复）")
+                            SettingsGroupLabel(s.contextHistoryLabel)
                             if (contexts.isEmpty()) {
-                                SettingsGroupLabel(
-                                    "还没有历史上下文。发送第一条消息后，当前上下文会出现在这里。"
-                                )
+                                SettingsGroupLabel(s.contextEmptyHint)
                             }
                             contexts.forEach { summary ->
                                 ContextRow(
@@ -529,7 +552,7 @@ internal fun SettingsScreen(
                                     title = summary.characterId
                                         ?.let { cardNameFor(it) }
                                         ?.takeIf { it.isNotBlank() }
-                                        ?: "自由对话",
+                                        ?: s.freeChat,
                                     active = summary.id == activeContextId,
                                     onSelect = { onSelectContext(summary.id) },
                                     onDelete = { onDeleteContext(summary) }
@@ -543,28 +566,26 @@ internal fun SettingsScreen(
                     // ── 动画资源 ─────────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "动画资源 (Animations)",
+                            title = s.sectionAnimations,
                             expanded = SECTION_ANIMATIONS in expandedSections,
                             onToggle = { toggleSection(SECTION_ANIMATIONS) }
                         ) {
                             SettingsOptionRow(
-                                title = "APK 内置动画",
-                                subtitle = "打包在 assets/animations 中，开箱即用（默认）",
+                                title = s.animBuiltInTitle,
+                                subtitle = s.animBuiltInSubtitle,
                                 selected = !useExternalAnimations
                             ) {
                                 onAnimationSourceChange(false)
                             }
                             SettingsOptionRow(
-                                title = "手机外存动画",
-                                subtitle = "扫描 App data 目录及其子文件夹中的 .vrma，不占 APK 体积",
+                                title = s.animExternalTitle,
+                                subtitle = s.animExternalSubtitle,
                                 selected = useExternalAnimations
                             ) {
                                 onAnimationSourceChange(true)
                             }
                             if (useExternalAnimations) {
-                                SettingsGroupLabel(
-                                    "目录：${externalRootPath ?: "外部存储不可用"}\n将 .vrma 文件放入该目录即可（支持子文件夹分类）"
-                                )
+                                SettingsGroupLabel(s.animExternalDir(externalRootPath))
                             }
                         }
                     }
@@ -572,7 +593,7 @@ internal fun SettingsScreen(
                     // ── 画质设置 ─────────────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "画质设置 (Quality)",
+                            title = s.sectionQuality,
                             expanded = SECTION_QUALITY in expandedSections,
                             onToggle = { toggleSection(SECTION_QUALITY) }
                         ) {
@@ -583,20 +604,20 @@ internal fun SettingsScreen(
                     // ── 拟人感（呼吸/视线/眨眼） ─────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "拟人感 (呼吸 / 视线 / 眨眼)",
+                            title = s.sectionLiveness,
                             expanded = SECTION_LIVENESS in expandedSections,
                             onToggle = { toggleSection(SECTION_LIVENESS) }
                         ) {
-                            SettingsGroupLabel("自主微动作；改动立即生效并持久化")
+                            SettingsGroupLabel(s.livenessGroupLabel)
                             SettingsActionRow(
-                                title = "恢复默认",
-                                subtitle = "呼吸/视线/眨眼全部回到默认参数"
+                                title = s.restoreDefault,
+                                subtitle = s.livenessRestoreSubtitle
                             ) {
                                 onMotionSettingsChange(MotionSettings())
                             }
                             SettingsSwitchRow(
-                                title = "呼吸",
-                                subtitle = "胸肩起伏与头部微动（自然呼吸）",
+                                title = s.breathTitle,
+                                subtitle = s.breathSubtitle,
                                 checked = motionSettings.breathEnabled,
                                 onCheckedChange = { v ->
                                     onMotionSettingsChange(motionSettings.copy(breathEnabled = v))
@@ -604,7 +625,7 @@ internal fun SettingsScreen(
                             )
                             if (motionSettings.breathEnabled) {
                                 SliderTextFieldRow(
-                                    title = "呼吸幅度",
+                                    title = s.breathAmplitude,
                                     value = motionSettings.breathAmplitude,
                                     valueRange = 0f..2f,
                                     format = "%.2f",
@@ -614,11 +635,11 @@ internal fun SettingsScreen(
                                     }
                                 )
                                 SliderTextFieldRow(
-                                    title = "呼吸频率",
+                                    title = s.breathRate,
                                     value = motionSettings.breathRateBpm,
                                     valueRange = 8f..30f,
                                     format = "%.1f",
-                                    unit = "次/分",
+                                    unit = s.bpmUnit,
                                     decimalCount = 1,
                                     onCommit = { v ->
                                         onMotionSettingsChange(motionSettings.copy(breathRateBpm = v))
@@ -626,8 +647,8 @@ internal fun SettingsScreen(
                                 )
                             }
                             SettingsSwitchRow(
-                                title = "视线微动 (Saccade)",
-                                subtitle = "注视点自然游移（模拟人视线不锁定一点）",
+                                title = s.saccadeTitle,
+                                subtitle = s.saccadeSubtitle,
                                 checked = motionSettings.saccadeEnabled,
                                 onCheckedChange = { v ->
                                     onMotionSettingsChange(motionSettings.copy(saccadeEnabled = v))
@@ -635,7 +656,7 @@ internal fun SettingsScreen(
                             )
                             if (motionSettings.saccadeEnabled) {
                                 SliderTextFieldRow(
-                                    title = "视线幅度",
+                                    title = s.saccadeAmplitude,
                                     value = motionSettings.saccadeJitter,
                                     valueRange = 0f..0.25f,
                                     format = "%.3f",
@@ -647,8 +668,8 @@ internal fun SettingsScreen(
                                 )
                             }
                             SettingsSwitchRow(
-                                title = "眨眼",
-                                subtitle = "自动眨眼（间隔随机）",
+                                title = s.blinkTitle,
+                                subtitle = s.blinkSubtitle,
                                 checked = motionSettings.blinkEnabled,
                                 onCheckedChange = { v ->
                                     onMotionSettingsChange(motionSettings.copy(blinkEnabled = v))
@@ -656,11 +677,11 @@ internal fun SettingsScreen(
                             )
                             if (motionSettings.blinkEnabled) {
                                 SliderTextFieldRow(
-                                    title = "眨眼平均间隔",
+                                    title = s.blinkInterval,
                                     value = motionSettings.blinkIntervalS,
                                     valueRange = 1f..8f,
                                     format = "%.1f",
-                                    unit = "秒",
+                                    unit = s.secondsUnit,
                                     decimalCount = 1,
                                     onCommit = { v ->
                                         onMotionSettingsChange(motionSettings.copy(blinkIntervalS = v))
@@ -673,24 +694,22 @@ internal fun SettingsScreen(
                     // ── 自由说话（灵敏度） ────────────────────────────────
                     item {
                         CollapsibleSection(
-                            title = "自由说话 (Free Talk · 灵敏度)",
+                            title = s.sectionFreeSpeech,
                             expanded = SECTION_FREE_SPEECH in expandedSections,
                             onToggle = { toggleSection(SECTION_FREE_SPEECH) }
                         ) {
                             if (voicePrefs.asrEngine == AsrEngine.SYSTEM) {
-                                SettingsGroupLabel(
-                                    "当前识别引擎为系统识别：断句由系统服务决定，以下灵敏度参数仅对云端识别生效"
-                                )
+                                SettingsGroupLabel(s.freeSpeechSystemNote)
                             }
-                            SettingsGroupLabel("语音端点检测参数；改动实时生效并持久化，门限越低越灵敏")
+                            SettingsGroupLabel(s.freeSpeechGroupLabel)
                             SettingsActionRow(
-                                title = "恢复默认",
-                                subtitle = "起音/打断门限与切句停顿回到默认值"
+                                title = s.restoreDefault,
+                                subtitle = s.freeSpeechRestoreSubtitle
                             ) {
                                 onFreeSpeechSettingsChange(FreeSpeechSettings())
                             }
                             SliderTextFieldRow(
-                                title = "说话门限（越低越灵敏）",
+                                title = s.startThreshold,
                                 value = freeSpeechSettings.startAbsolute,
                                 valueRange = FreeSpeechSettings.START_ABSOLUTE_RANGE,
                                 format = "%.3f",
@@ -701,7 +720,7 @@ internal fun SettingsScreen(
                                 }
                             )
                             SliderTextFieldRow(
-                                title = "打断门限（越低越容易打断）",
+                                title = s.bargeThreshold,
                                 value = freeSpeechSettings.bargeAbsolute,
                                 valueRange = FreeSpeechSettings.BARGE_ABSOLUTE_RANGE,
                                 format = "%.2f",
@@ -712,7 +731,7 @@ internal fun SettingsScreen(
                                 }
                             )
                             SliderTextFieldRow(
-                                title = "切句停顿（说完静默多久算一句话）",
+                                title = s.hangoverTitle,
                                 value = freeSpeechSettings.hangoverMs,
                                 valueRange = FreeSpeechSettings.HANGOVER_MS_RANGE,
                                 format = "%.0f",
@@ -817,11 +836,12 @@ private fun QualityPresetContent(
     settings: AvatarRenderSettings,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
 ) {
+    val s = LocalStrings.current
     // ── 画质预设 ──────────────────────────────────────────────────────────
-    SettingsSectionHeader("画质预设 · 一键档位")
+    SettingsSectionHeader(s.qualityPresetHeader)
     SettingsActionRow(
-        title = "低配 Low",
-        subtitle = "单主光 · 1024 阴影 · 无AO · FXAA · 移动端稳 60fps"
+        title = s.presetLow,
+        subtitle = s.presetLowSubtitle
     ) {
         onSettingsChange(
             QualityPreset.LOW.toRenderSettings(
@@ -832,8 +852,8 @@ private fun QualityPresetContent(
         )
     }
     SettingsActionRow(
-        title = "主流 Medium",
-        subtitle = "主光+辅光 · 1024 阴影 · SSAO · ACES + 轻度泛光"
+        title = s.presetMedium,
+        subtitle = s.presetMediumSubtitle
     ) {
         onSettingsChange(
             QualityPreset.MEDIUM.toRenderSettings(
@@ -844,8 +864,8 @@ private fun QualityPresetContent(
         )
     }
     SettingsActionRow(
-        title = "高配 High",
-        subtitle = "三点布光 · 2048 阴影 · GTAO · ACES + 泛光"
+        title = s.presetHigh,
+        subtitle = s.presetHighSubtitle
     ) {
         onSettingsChange(
             QualityPreset.HIGH.toRenderSettings(
@@ -856,8 +876,8 @@ private fun QualityPresetContent(
         )
     }
     SettingsActionRow(
-        title = "3A Ultra",
-        subtitle = "4096 阴影 + 接触阴影 · GTAO · TAA · 泛光 + 景深 + 材质增强"
+        title = s.presetUltra,
+        subtitle = s.presetUltraSubtitle
     ) {
         onSettingsChange(
             QualityPreset.ULTRA.toRenderSettings(
@@ -869,9 +889,9 @@ private fun QualityPresetContent(
     }
 
     // ── 光照与环境 ───────────────────────────────────────────────────────
-    SettingsSectionHeader("光照与环境 (Lighting & IBL)")
+    SettingsSectionHeader(s.lightingHeader)
     SettingsSliderRow(
-        title = "IBL 环境光强度",
+        title = s.iblIntensity,
         valueText = "${settings.iblIntensity.roundToInt()} lux",
         value = settings.iblIntensity,
         valueRange = 0f..50_000f
@@ -879,132 +899,132 @@ private fun QualityPresetContent(
         onSettingsChange(settings.copy(iblIntensity = it))
     }
     SettingsSliderRow(
-        title = "IBL 环境光旋转",
+        title = s.iblRotation,
         valueText = "${settings.iblRotationDegrees.roundToInt()}°",
         value = settings.iblRotationDegrees,
         valueRange = 0f..360f
     ) {
         onSettingsChange(settings.copy(iblRotationDegrees = it))
     }
-    SettingsGroupLabel("布光方案")
+    SettingsGroupLabel(s.lightingRigLabel)
     SettingsOptionRow(
-        title = "单主光",
-        subtitle = "仅 1 盏主平行光 + IBL，性能最优",
+        title = s.rigKeyOnly,
+        subtitle = s.rigKeyOnlySubtitle,
         selected = settings.lightingRig == LightingRig.KEY_ONLY
     ) {
         onSettingsChange(settings.copy(lightingRig = LightingRig.KEY_ONLY))
     }
     SettingsOptionRow(
-        title = "双点光",
-        subtitle = "主光 + 冷色辅光",
+        title = s.rigKeyFill,
+        subtitle = s.rigKeyFillSubtitle,
         selected = settings.lightingRig == LightingRig.KEY_FILL
     ) {
         onSettingsChange(settings.copy(lightingRig = LightingRig.KEY_FILL))
     }
     SettingsOptionRow(
-        title = "摄影棚三点布光",
-        subtitle = "主光 + 辅光 + 强轮廓背光，勾勒发丝与肩膀",
+        title = s.rigStudio,
+        subtitle = s.rigStudioSubtitle,
         selected = settings.lightingRig == LightingRig.STUDIO
     ) {
         onSettingsChange(settings.copy(lightingRig = LightingRig.STUDIO))
     }
 
     // ── 阴影 ─────────────────────────────────────────────────────────────
-    SettingsSectionHeader("阴影 (Shadows)")
-    SettingsGroupLabel("阴影贴图分辨率")
+    SettingsSectionHeader(s.shadowsHeader)
+    SettingsGroupLabel(s.shadowResolutionLabel)
     SettingsOptionRow(
         title = "1024 (Low)",
-        subtitle = "低端机适用",
+        subtitle = s.shadow1024Subtitle,
         selected = settings.shadowMapSize == 1024
     ) {
         onSettingsChange(settings.copy(shadowMapSize = 1024))
     }
     SettingsOptionRow(
         title = "2048 (Medium)",
-        subtitle = "精度与开销平衡，旗舰机适用",
+        subtitle = s.shadow2048Subtitle,
         selected = settings.shadowMapSize == 2048
     ) {
         onSettingsChange(settings.copy(shadowMapSize = 2048))
     }
     SettingsOptionRow(
         title = "4096 (Ultra)",
-        subtitle = "发丝级阴影细节，高端机适用",
+        subtitle = s.shadow4096Subtitle,
         selected = settings.shadowMapSize == 4096
     ) {
         onSettingsChange(settings.copy(shadowMapSize = 4096))
     }
     SettingsSwitchRow(
-        title = "软阴影 (PCSS)",
-        subtitle = "基于物理的阴影半影，边缘近实远虚；Adreno 上开销极大（实测个位数帧率），仅限旗舰机尝试",
+        title = s.pcssTitle,
+        subtitle = s.pcssSubtitle,
         checked = settings.softShadows
     ) {
         onSettingsChange(settings.copy(softShadows = it))
     }
     SettingsSwitchRow(
-        title = "接触阴影 (Contact Shadows)",
-        subtitle = "屏幕空间微阴影：睫毛、鼻翼极近距离暗部，轻微 GPU 开销",
+        title = s.contactShadowsTitle,
+        subtitle = s.contactShadowsSubtitle,
         checked = settings.contactShadows
     ) {
         onSettingsChange(settings.copy(contactShadows = it))
     }
 
     // ── 环境光遮蔽 ───────────────────────────────────────────────────────
-    SettingsSectionHeader("环境光遮蔽 (Ambient Occlusion)")
+    SettingsSectionHeader(s.aoHeader)
     SettingsOptionRow(
-        title = "关闭",
-        subtitle = "省电，模型易显“漂浮感”",
+        title = s.off,
+        subtitle = s.aoOffSubtitle,
         selected = settings.ambientOcclusion == AmbientOcclusionQuality.OFF
     ) {
         onSettingsChange(settings.copy(ambientOcclusion = AmbientOcclusionQuality.OFF))
     }
     SettingsOptionRow(
-        title = "标准 SSAO",
-        subtitle = "屏幕空间环境光遮蔽，中等采样",
+        title = s.aoSsao,
+        subtitle = s.aoSsaoSubtitle,
         selected = settings.ambientOcclusion == AmbientOcclusionQuality.STANDARD
     ) {
         onSettingsChange(settings.copy(ambientOcclusion = AmbientOcclusionQuality.STANDARD))
     }
     SettingsOptionRow(
-        title = "高质量 GTAO (推荐)",
-        subtitle = "Ground-Truth AO + 双边滤波，眼眶/鼻窝/褶皱暗角自然",
+        title = s.aoGtao,
+        subtitle = s.aoGtaoSubtitle,
         selected = settings.ambientOcclusion == AmbientOcclusionQuality.HIGH
     ) {
         onSettingsChange(settings.copy(ambientOcclusion = AmbientOcclusionQuality.HIGH))
     }
 
     // ── 后处理 ───────────────────────────────────────────────────────────
-    SettingsSectionHeader("后处理 (Post-Processing)")
-    SettingsGroupLabel("色调映射")
+    SettingsSectionHeader(s.postHeader)
+    SettingsGroupLabel(s.toneMappingLabel)
     SettingsOptionRow(
         title = "Linear",
-        subtitle = "线性，不推荐：高光极易过曝",
+        subtitle = s.toneLinearSubtitle,
         selected = settings.toneMapping == ToneMappingMode.LINEAR
     ) {
         onSettingsChange(settings.copy(toneMapping = ToneMappingMode.LINEAR))
     }
     SettingsOptionRow(
         title = "Filmic",
-        subtitle = "高对比度电影感",
+        subtitle = s.toneFilmicSubtitle,
         selected = settings.toneMapping == ToneMappingMode.FILMIC
     ) {
         onSettingsChange(settings.copy(toneMapping = ToneMappingMode.FILMIC))
     }
     SettingsOptionRow(
-        title = "ACES (推荐)",
-        subtitle = "Unreal/3A 标配，极佳的高光滚降",
+        title = s.toneAces,
+        subtitle = s.toneAcesSubtitle,
         selected = settings.toneMapping == ToneMappingMode.ACES
     ) {
         onSettingsChange(settings.copy(toneMapping = ToneMappingMode.ACES))
     }
     SettingsSwitchRow(
-        title = "泛光 (Bloom)",
-        subtitle = "强光照射金属/眼球时的漫溢辉光",
+        title = s.bloomTitle,
+        subtitle = s.bloomSubtitle,
         checked = settings.bloomEnabled
     ) {
         onSettingsChange(settings.copy(bloomEnabled = it))
     }
     SettingsSliderRow(
-        title = "泛光强度",
+        title = s.bloomStrength,
         valueText = "%.2f".format(settings.bloomStrength),
         value = settings.bloomStrength,
         valueRange = 0f..0.5f
@@ -1012,59 +1032,59 @@ private fun QualityPresetContent(
         onSettingsChange(settings.copy(bloomStrength = it))
     }
     SettingsSwitchRow(
-        title = "景深 (Depth of Field)",
-        subtitle = "特写模式虚化背景，单反微距质感；全身全景建议关闭",
+        title = s.dofTitle,
+        subtitle = s.dofSubtitle,
         checked = settings.depthOfFieldEnabled
     ) {
         onSettingsChange(settings.copy(depthOfFieldEnabled = it))
     }
 
     // ── 抗锯齿 ───────────────────────────────────────────────────────────
-    SettingsSectionHeader("抗锯齿 (Anti-Aliasing)")
+    SettingsSectionHeader(s.aaHeader)
     SettingsOptionRow(
-        title = "关闭",
-        subtitle = "无抗锯齿",
+        title = s.off,
+        subtitle = s.aaOffSubtitle,
         selected = settings.antiAliasing == AntiAliasingMode.NONE
     ) {
         onSettingsChange(settings.copy(antiAliasing = AntiAliasingMode.NONE))
     }
     SettingsOptionRow(
         title = "FXAA",
-        subtitle = "轻量，低端机适用，画面略糊",
+        subtitle = s.aaFxaaSubtitle,
         selected = settings.antiAliasing == AntiAliasingMode.FXAA
     ) {
         onSettingsChange(settings.copy(antiAliasing = AntiAliasingMode.FXAA))
     }
     SettingsOptionRow(
         title = "MSAA 4x",
-        subtitle = "几何边缘清晰，开销较大",
+        subtitle = s.aaMsaaSubtitle,
         selected = settings.antiAliasing == AntiAliasingMode.MSAA_4X
     ) {
         onSettingsChange(settings.copy(antiAliasing = AntiAliasingMode.MSAA_4X))
     }
     SettingsOptionRow(
-        title = "TAA (3A 画质首选)",
-        subtitle = "抹平高频闪烁，带锐化；快速运动可能有轻微拖影",
+        title = s.aaTaa,
+        subtitle = s.aaTaaSubtitle,
         selected = settings.antiAliasing == AntiAliasingMode.TAA
     ) {
         onSettingsChange(settings.copy(antiAliasing = AntiAliasingMode.TAA))
     }
 
     // ── 材质 ─────────────────────────────────────────────────────────────
-    SettingsSectionHeader("材质增强 (Materials)")
+    SettingsSectionHeader(s.materialsHeader)
     SettingsSwitchRow(
-        title = "材质特性增强",
-        subtitle = "眼球 ClearCoat + 皮肤/头发粗糙度优化；实际效果取决于模型材质支持，关闭后自动重载模型还原",
+        title = s.enhanceMaterialsTitle,
+        subtitle = s.enhanceMaterialsSubtitle,
         checked = settings.enhanceMaterials
     ) {
         onSettingsChange(settings.copy(enhanceMaterials = it))
     }
 
     // ── 显示 ─────────────────────────────────────────────────────────────
-    SettingsSectionHeader("显示 (Display)")
+    SettingsSectionHeader(s.displayHeader)
     SettingsSwitchRow(
-        title = "显示 FPS 帧率",
-        subtitle = "在右上角实时显示渲染帧率",
+        title = s.showFpsTitle,
+        subtitle = s.showFpsSubtitle,
         checked = settings.showFps
     ) {
         onSettingsChange(settings.copy(showFps = it))
@@ -1100,7 +1120,7 @@ private fun CollapsibleSection(
             )
             Icon(
                 imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = if (expanded) "收起" else "展开",
+                contentDescription = if (expanded) LocalStrings.current.collapseA11y else LocalStrings.current.expandA11y,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.rotate(rotation)
             )
@@ -1128,6 +1148,7 @@ private fun ContextRow(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val s = LocalStrings.current
     val bgColor by animateColorAsState(
         targetValue = if (active)
             MaterialTheme.colorScheme.primaryContainer
@@ -1155,7 +1176,7 @@ private fun ContextRow(
                     MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "${summary.updatedAtText} · ${summary.messageCount} 条消息",
+                text = "${summary.updatedAtText} ${s.slashCount(summary.messageCount)}",
                 fontSize = 12.sp,
                 color = if (active)
                     MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
@@ -1165,7 +1186,7 @@ private fun ContextRow(
         }
         if (active) {
             Text(
-                text = "当前",
+                text = s.contextCurrent,
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.padding(end = 4.dp)
@@ -1174,7 +1195,7 @@ private fun ContextRow(
         IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
             Icon(
                 imageVector = Icons.Default.Delete,
-                contentDescription = "删除上下文",
+                contentDescription = s.deleteContextA11y,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp)
             )
@@ -1197,12 +1218,10 @@ private fun CardPromptSection(
 ) {
     var editing by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
+    val s = LocalStrings.current
 
     if (cardName == null) {
-        SettingsGroupLabel(
-            "未激活人物卡。在「卡」面板点选一位角色后，这里会显示该卡的人设提示词，" +
-                "并可以编辑成你自己想要的版本。"
-        )
+        SettingsGroupLabel(s.cardNotActive)
         return
     }
 
@@ -1211,8 +1230,8 @@ private fun CardPromptSection(
     if (!editing) {
         SettingsGroupLabel(
             buildString {
-                append("当前：$cardName")
-                append(if (override != null) "（人工编辑版，只读展示）" else "（卡片默认，只读展示）")
+                append(s.cardCurrent(cardName))
+                append(if (override != null) s.cardPromptEdited else s.cardPromptDefault)
             }
         )
         Surface(
@@ -1221,7 +1240,7 @@ private fun CardPromptSection(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = effective.ifEmpty { "（该卡没有人设文本）" },
+                text = effective.ifEmpty { s.cardPromptEmpty },
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -1239,11 +1258,11 @@ private fun CardPromptSection(
                 draft = effective
                 editing = true
             }) {
-                Text(text = "编辑", fontSize = 13.sp)
+                Text(text = s.cardEdit, fontSize = 13.sp)
             }
         }
     } else {
-        SettingsGroupLabel("编辑人物卡提示词（该卡的完整 system 人设，逐字替换）")
+        SettingsGroupLabel(s.cardEditHint)
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -1262,11 +1281,11 @@ private fun CardPromptSection(
                     onReset()
                     editing = false
                 }) {
-                    Text(text = "还原默认", fontSize = 13.sp)
+                    Text(text = s.cardRestoreDefault, fontSize = 13.sp)
                 }
             }
             TextButton(onClick = { editing = false }) {
-                Text(text = "取消", fontSize = 13.sp)
+                Text(text = s.cancel, fontSize = 13.sp)
             }
             FilledTonalButton(onClick = {
                 onSave(draft.trim())
@@ -1285,6 +1304,7 @@ private fun CardPromptSection(
 @Composable
 private fun ProtocolPromptSection(prompt: String) {
     var open by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
     val rotation by animateFloatAsState(
         targetValue = if (open) 180f else 0f,
         label = "promptChevron"
@@ -1298,7 +1318,7 @@ private fun ProtocolPromptSection(prompt: String) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "标签协议提示词（只读）",
+            text = s.protocolPromptTitle,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1306,7 +1326,7 @@ private fun ProtocolPromptSection(prompt: String) {
         )
         Icon(
             imageVector = Icons.Default.KeyboardArrowDown,
-            contentDescription = if (open) "收起提示词" else "查看提示词",
+            contentDescription = if (open) s.protocolCollapseA11y else s.protocolExpandA11y,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.rotate(rotation)
         )
@@ -1324,9 +1344,9 @@ private fun ProtocolPromptSection(prompt: String) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text(
                     text = if (prompt.isEmpty())
-                        "（AI 会话尚未就绪，或协议指令已关闭）"
+                        s.protocolEmpty
                     else
-                        "以下 ${prompt.length} 字符与实际发给大模型的 system 提示词逐字一致：",
+                        s.protocolIntro(prompt.length),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 6.dp)
@@ -1575,6 +1595,7 @@ private fun SettingsDropdownRow(
     onSelect: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val s = LocalStrings.current
     val selectedLabel = options.firstOrNull { it.value == selectedValue }?.label ?: selectedValue
     Column(
         modifier = Modifier
@@ -1607,7 +1628,7 @@ private fun SettingsDropdownRow(
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "选择$title",
+                    contentDescription = s.chooseA11y(title),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )
@@ -1617,7 +1638,7 @@ private fun SettingsDropdownRow(
                     DropdownMenuItem(
                         text = {
                             Text(
-                                text = if (option.value == selectedValue) "${option.label}（当前）" else option.label,
+                                text = if (option.value == selectedValue) option.label + s.currentSuffix else option.label,
                                 fontWeight = if (option.value == selectedValue) FontWeight.SemiBold else FontWeight.Normal
                             )
                         },

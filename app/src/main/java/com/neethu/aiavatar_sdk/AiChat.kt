@@ -4,13 +4,17 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.mutableStateOf
 import com.neethu.aiadapter.edge.EdgeTtsAdapter
+import com.neethu.aiadapter.text.EdgeTtsTexts
+import com.neethu.aiadapter.text.VolcanoTtsTexts
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
 import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
 import com.neethu.aiadapter.volcengine.VolcanoEngineTtsAdapter
 import com.neethu.corelib.AvatarController
+import com.neethu.corelib.Lang
 import com.neethu.orchestrator.history.ConversationDatabase
+import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.history.RoomConversationStore
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.skill.SkillHost
@@ -150,9 +154,9 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
  *  - [SYSTEM]：系统内置 `SpeechRecognizer`（免费无 Key，见 [SystemAsrController]）
  *    ——GMS 设备走 Google 服务（海外用户主场景），国产 ROM 走厂商服务。
  */
-enum class AsrEngine(val label: String) {
-    CLOUD("云端 ASR（按大模型服务商）"),
-    SYSTEM("系统识别（免费无 Key）"),
+enum class AsrEngine {
+    CLOUD,
+    SYSTEM,
 }
 
 /**
@@ -233,8 +237,8 @@ class AiChatController(
     /** 技能框架能力缝（docs/rps-skill-feasibility.md §4.3）；null = 无技能能力。 */
     private val skillHost: SkillHost? = null,
 ) {
-    /** 会话身份：配置 + 上下文。任一变化都触发重建。 */
-    data class SessionIdentity(val prefs: AiChatPrefs, val contextId: String)
+    /** 会话身份：配置 + 上下文 + 提示词语言。任一变化都触发重建。 */
+    data class SessionIdentity(val prefs: AiChatPrefs, val contextId: String, val lang: Lang)
 
     var session: AvatarSession? = null
         private set
@@ -254,9 +258,11 @@ class AiChatController(
         ready: Boolean,
         contextId: String,
         characterId: String?,
+        /** 提示词语言（多语言支持）：语言变化即重建会话，身份块自动按新语言重发。 */
+        lang: Lang = Lang.ZH,
     ): AvatarSession? {
         if (!prefs.isConfigured) return null
-        val identity = SessionIdentity(prefs, contextId)
+        val identity = SessionIdentity(prefs, contextId, lang)
         val existing = session
         if (existing != null && builtFor == identity) {
             if (ready && !faceDrivingStarted) existing.startFaceDriving().also { faceDrivingStarted = true }
@@ -272,7 +278,7 @@ class AiChatController(
         val tts = when (prefs.ttsEngine) {
             // Edge-TTS（任务 6）：微软朗读接口免费无 Key；输出恒 MP3 24kHz，
             // orchestrator 的 PcmDecoder MediaCodec 路径直接可解
-            TtsEngine.EDGE -> EdgeTtsAdapter()
+            TtsEngine.EDGE -> EdgeTtsAdapter(texts = edgeTtsTexts(lang))
             TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
                 // 硅基流动走 OpenAI 兼容 /audio/speech（wav 16k，两 TTS 模型实测可用）
                 AiProvider.SILICONFLOW ->
@@ -280,7 +286,7 @@ class AiChatController(
                 // 火山 seed-tts-2.0 只提供 V3 双向流式 WebSocket；适配器对外仍是
                 // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
                 AiProvider.VOLCANO ->
-                    VolcanoEngineTtsAdapter(prefs.apiKeyForTts())
+                    VolcanoEngineTtsAdapter(prefs.apiKeyForTts(), texts = volcanoTtsTexts(lang))
                 // OpenRouter 同一 OpenAI 兼容 schema，适配器直接复用
                 AiProvider.OPENROUTER ->
                     OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
@@ -289,6 +295,7 @@ class AiChatController(
         val session = AvatarSession(
             scope, llm, tts, avatarController,
             AvatarSession.Options(
+                lang = lang,
                 enableLlmCamera = prefs.llmCamera,
                 // Room 持久化后上下文可无限增长；请求只带最近 40 条 user/assistant
                 //（≈20 轮）。身份前言每轮恒带；人设全文+协议目录（~12K chars）
@@ -317,7 +324,7 @@ class AiChatController(
                 // mp3 容器自带采样率（24kHz），无需指定；voice 不在目录即落默认
                 TtsConfig(
                     model = "edge-readaloud",
-                    voice = resolveEdgeVoice(prefs.voice),
+                    voice = resolveEdgeVoice(prefs.voice, lang),
                     responseFormat = "mp3",
                 )
             TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
@@ -359,3 +366,11 @@ class AiChatController(
         faceDrivingStarted = false
     }
 }
+
+/** 应用语言 → Edge-TTS 错误文案目录（适配器模块不依赖 corelib，这里做映射）。 */
+fun edgeTtsTexts(lang: Lang): EdgeTtsTexts =
+    if (lang == Lang.EN) EdgeTtsTexts.EN else EdgeTtsTexts.ZH
+
+/** 应用语言 → 火山 TTS 错误文案目录。 */
+fun volcanoTtsTexts(lang: Lang): VolcanoTtsTexts =
+    if (lang == Lang.EN) VolcanoTtsTexts.EN else VolcanoTtsTexts.ZH

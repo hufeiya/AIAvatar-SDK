@@ -8,45 +8,49 @@ package com.neethu.corelib
  * Close-Up look-at tracks the head, the other shots track the chest/hips —
  * so every model (and any animation pose) is framed correctly.
  *
- * @property label Human-readable label, usable directly in UI.
+ * @property label Human-readable label (Chinese), usable directly in UI.
+ * @property labelEn English label for English-mode UI and prompts.
  */
-enum class CameraShot(val label: String) {
+enum class CameraShot(val label: String, val labelEn: String) {
 
     /**
      * 面部特写 — chest-up to head (bust shot). The look-at point is bound
      * to the model's head bone.
      */
-    CLOSE_UP("面部特写 CU"),
+    CLOSE_UP("面部特写 CU", "Close-Up CU"),
 
     /**
      * 面部微距 — tighter than CLOSE_UP: the pivot stays on the face and the
      * camera dollies to ~0.6× of the close-up distance, so the face fills
      * the frame. Exposed to the LLM as `<cam:macro>`.
      */
-    MACRO("面部微距 MC"),
+    MACRO("面部微距 MC", "Face Macro MC"),
 
     /**
      * 中景半身 — waist-up to head, the standard streamer framing.
      * Look-at is bound between head and hips.
      */
-    MEDIUM_SHOT("中景半身 MS"),
+    MEDIUM_SHOT("中景半身 MS", "Medium Shot MS"),
 
     /**
      * 全景全身 — head to feet with some ground below.
      * Look-at is bound around the hips (body center).
      */
-    FULL_SHOT("全景全身 FS"),
+    FULL_SHOT("全景全身 FS", "Full Shot FS"),
 
     /**
      * 远景 — the full-body shot pulled further back, leaving margin above
      * the head and below the feet so large dance movements stay in frame.
      * Look-at is bound to the hips (body center).
      */
-    LONG_SHOT("远景 LS"),
+    LONG_SHOT("远景 LS", "Long Shot LS"),
 
     /**
      * 反应侧景 — half-body view from ~38° to the side-front, as if seen
      * over a conversation partner's shoulder.
      */
-    OVER_SHOULDER("反应侧景 OS");
+    OVER_SHOULDER("反应侧景 OS", "Over-Shoulder OS");
+
+    /** Language-aware label for UI badges and prompt lines. */
+    fun label(lang: Lang): String = if (lang == Lang.EN) labelEn else label
 }

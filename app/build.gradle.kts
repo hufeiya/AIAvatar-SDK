@@ -64,6 +64,8 @@ dependencies {
     // org.json 是抛 "not mocked" 的桩，进不了单测）
     implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
+    // StringsI18nTest 反射扫 Strings 全部属性做「EN 无中文」不变量
+    testImplementation(kotlin("reflect"))
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

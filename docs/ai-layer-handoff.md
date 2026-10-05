@@ -291,6 +291,13 @@
   - **已知取舍**：①系统识别无中间 JSON/置信度，语言跟随设备默认；②暂停期服务仍在跑识别只是结果被丢弃（正确性由 handleFinal/onPartial 的 paused 丢弃保证）；③OEM 服务识别质量参差（mibrain 云端免费但断句/langs 行为与 Google 不同），海外用户在 GMS 设备上拿到的是 Google 语义；④按住说话的单发监听在同服务上同样受授权/瞬态影响，错误直接上错误条（单发无重启语义）。
 
 
+- **多语言支持：简体中文 + English（2026-10-05，用户需求「添加多语言包括所有 module；系统中文（简繁都算）默认简体否则英文；设置加语言切换；拼接提示词也要多语言，英文模式不出现中文，但提示词会频繁修改要考虑维护性」；单测 +24 全量 410 全绿 app124/adapter74/corelib44/orchestrator168；APK 组装验证，真机待验收）**：
+  - **语言模型**：corelib 新增 `Lang`(ZH/EN) 枚举全链路唯一语言标识；app `i18n/AppLang.kt`——`AppLang`(SYSTEM/ZH/EN) 偏好持久化 `app_language`（默认 SYSTEM），`resolveAppLang(pref, 系统语言)` 纯函数：SYSTEM→`Lang.fromSystemLanguage`（zh 一律算中文含繁体），设置页「语言 (Language)」分区下拉切换 + `ai_cmd set_language system|zh|en`。
+  - **三份双语文案目录（每份中英按成员顺序对齐、改一处同步两语、无中文泄漏由单测反射/逐成员锁死）**：①orchestrator `i18n/PromptTexts`（身份前言/协议遵循提醒/视角行/协议块全文/情绪词表/镜头目录/动作分类名/userAlias）——**全部提示词正本从 AvatarSession/SystemPromptAssembler 迁入**，语言经 `AvatarSession.Options.lang`（默认 ZH 保既有行为与旧测试）传入，Options 默认 assembler 也随 lang 取文案目录（⚠ 曾漏：assembler 默认实例恒 ZH，EN 会话协议块整体中文，AvatarSessionLangTest 抓住）；②orchestrator `i18n/RpsTexts`（猜拳指令/宣判词/占位语）——RpsSkill 加 `var lang`（demo 在 LaunchedEffect 随语言更新，实例跨会话保持状态）；激活/退出词表**中英合并不随语言切换**（识别语言跟随设备而非界面）；③adapter `text/TtsErrorTexts`（Edge/Volcano 全部用户可读错误，IOException.message 直上错误条）——适配器不依赖 corelib，语言由 AiChatController.ensure 注入 texts 对象。分类名本地化在协议块**内部**做（PromptTexts.actionCategory，调用方可给 assets 原始中文分类）。
+  - **app UI**：`i18n/Strings.kt` 单类全量 UI 文案（~250 成员，`if (lang==EN)` 每成员中英相邻），`LocalStrings` CompositionLocal 由 DemoScreen 根部 provide；非组合代码（错误回调/调试钩子）经 `uiState.strings()` 按当前语言现取。枚举 label 全部收进 Strings（InputMode/AsrEngine label 属性已删，AiProvider.label 仅剩 adb 调试输出引用）；设置页 SettingsScreen 全量走 Strings + 新增语言分区；语言选择器两项刻意双语标注（"跟随系统 (System)"/语言名原文，找不着设置的用户认自己的语言）并从无中文不变量豁免。
+  - **语言变化语义**：SessionIdentity 加入 lang → 重建会话但**上下文不轮换**（llmIdentitySignature 不含 lang），身份块按「未送达」自动整段重发、协议块新语言重钉，历史保留；系统识别 `languageTag`（zh-CN/en-US/null 跟随系统）+ 控制器文案表随语言更新；Edge-TTS **默认音色语言化**（EN 且未配置=Emma 多语种，ZH=晓晓不变，用户显式选过的不动）；预置卡 13 张中文原创卡全字段英文翻译在 `PresetCardsEn`（asset 文件名索引，EN 模式组装人设/开场白/grid 显示名时替换；官方英文卡与用户导入卡永不翻译；`{{user}}` 宏保留给 spokenGreeting）。会话级不变量测试 AvatarSessionLangTest：EN 会话整条请求（system+user 前缀含技能指令）无中文字符、ZH 锚点不变。
+  - 残留中文均为「数据非文案」：assets 分类文件夹名/技能手势目录名（路径键）、SentenceChunker 标点表、VisionKeywords 中文词表（EN 词表并列新增）、SoulLinkRenderer VRM morph 名匹配表、RpsSkill 事件日志的 zh 手名。已知未覆盖：设置页语言下拉与真机 E2E（切语言→提示词英文→模型英文回复）待真手/真机验证。
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。

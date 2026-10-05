@@ -1,6 +1,7 @@
 package com.neethu.aiadapter.edge
 
 import com.neethu.aiadapter.api.TtsAdapter
+import com.neethu.aiadapter.text.EdgeTtsTexts
 import com.neethu.aiadapter.model.TtsAudioFormat
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.model.TtsResult
@@ -54,6 +55,8 @@ class EdgeTtsAdapter(
     client: OkHttpClient = OkHttpClient(),
     /** 时钟可注入：Sec-MS-GEC token 是时间衍生的，单测用固定时钟锁已知答案。 */
     private val nowMs: () -> Long = { System.currentTimeMillis() },
+    /** 用户可读错误文案的语言（多语言支持）；缺省中文保持既有行为。 */
+    private val texts: EdgeTtsTexts = EdgeTtsTexts.ZH,
 ) : TtsAdapter {
 
     /** 独立配置：WebSocket 建连/读超时对长句要留余量，且不得污染调用方的 client。 */
@@ -68,10 +71,11 @@ class EdgeTtsAdapter(
 
     override suspend fun synthesize(text: String, config: TtsConfig): TtsResult =
         withContext(Dispatchers.IO) {
-            if (text.isBlank()) throw IOException("EdgeTTS：合成文本为空")
+            if (text.isBlank()) throw IOException(texts.emptyText())
             val chunks = splitTextByByteLength(
                 escapeXml(removeIncompatibleCharacters(text)),
                 MAX_TEXT_BYTES,
+                texts = texts,
             )
             val audio = java.io.ByteArrayOutputStream()
             for (chunk in chunks) {
@@ -84,7 +88,7 @@ class EdgeTtsAdapter(
                 }
             }
             val bytes = audio.toByteArray()
-            if (bytes.isEmpty()) throw IOException("EdgeTTS：未收到任何音频（音色/参数可能不被支持）")
+            if (bytes.isEmpty()) throw IOException(texts.noAudio())
             TtsResult(bytes, TtsAudioFormat.MP3)
         }
 
@@ -135,12 +139,12 @@ class EdgeTtsAdapter(
                     if (date != null) {
                         // 按服务端时间校偏（edge-tts DRM.handle_client_response_error）
                         clockSkewSeconds = date.time / 1000 - nowMs() / 1000
-                        inbox.trySend(InboxEvent(failure = ClockSkewRetry("EdgeTTS鉴权403（已按服务端时间校偏）")))
+                        inbox.trySend(InboxEvent(failure = ClockSkewRetry(texts.auth403())))
                         return
                     }
                 }
                 val hint = response?.let { " HTTP ${it.code}" } ?: ""
-                inbox.trySend(InboxEvent(failure = IOException("EdgeTTS连接失败$hint: ${t.message}", t)))
+                inbox.trySend(InboxEvent(failure = IOException(texts.connectFailed(hint, t.message), t)))
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
@@ -173,12 +177,12 @@ class EdgeTtsAdapter(
                     break
                 }
                 if (ev.closed) {
-                    throw IOException("EdgeTTS连接在合成完成前被关闭（未收到 turn.end）")
+                    throw IOException(texts.closedBeforeTurnEnd())
                 }
             }
             finished = true
             if (out.size() == 0) {
-                throw IOException("EdgeTTS：未收到任何音频（音色/参数可能不被支持）")
+                throw IOException(texts.noAudio())
             }
             return out.toByteArray()
         } finally {
@@ -204,7 +208,7 @@ class EdgeTtsAdapter(
     private suspend fun receiveEvent(inbox: Channel<InboxEvent>): InboxEvent {
         // 每条消息 30s 看门狗：服务器停摆时不无限占用 SpeechPipeline 的合成槽
         val ev = withTimeoutOrNull(MESSAGE_TIMEOUT_MS) { inbox.receive() }
-        return ev ?: InboxEvent(failure = IOException("EdgeTTS等待服务器消息超时(${MESSAGE_TIMEOUT_MS}ms)"))
+        return ev ?: InboxEvent(failure = IOException(texts.messageTimeout(MESSAGE_TIMEOUT_MS)))
     }
 
     private fun speechConfigMessage(): String {
@@ -238,7 +242,7 @@ class EdgeTtsAdapter(
 
     internal fun parseTextMessage(text: String): InboxEvent {
         val sep = text.indexOf("\r\n\r\n")
-        if (sep < 0) return InboxEvent(failure = IOException("EdgeTTS响应缺消息头: ${text.take(120)}"))
+        if (sep < 0) return InboxEvent(failure = IOException(texts.missingMessageHeader(text.take(120))))
         val headers = text.substring(0, sep)
             .split("\r\n")
             .mapNotNull { line ->
@@ -249,18 +253,18 @@ class EdgeTtsAdapter(
         return when (headers["Path"]) {
             "turn.end" -> InboxEvent(turnEnd = true)
             "turn.start", "response", "audio.metadata" -> InboxEvent()
-            null -> InboxEvent(failure = IOException("EdgeTTS响应缺 Path 头: ${text.take(120)}"))
-            else -> InboxEvent(failure = IOException("EdgeTTS未知响应类型: ${headers["Path"]}"))
+            null -> InboxEvent(failure = IOException(texts.missingPathHeader(text.take(120))))
+            else -> InboxEvent(failure = IOException(texts.unknownPath(headers["Path"])))
         }
     }
 
     internal fun parseBinaryMessage(bytes: ByteArray): InboxEvent {
         if (bytes.size < 2) {
-            return InboxEvent(failure = IOException("EdgeTTS二进制帧过短（缺头长字段）"))
+            return InboxEvent(failure = IOException(texts.binaryFrameTooShort()))
         }
         val headerLength = ((bytes[0].toInt() and 0xFF) shl 8) or (bytes[1].toInt() and 0xFF)
         if (headerLength > bytes.size) {
-            return InboxEvent(failure = IOException("EdgeTTS二进制帧头长越界: $headerLength > ${bytes.size}"))
+            return InboxEvent(failure = IOException(texts.headerLengthOutOfRange(headerLength, bytes.size)))
         }
         val headerText = String(bytes, 2, headerLength, Charsets.UTF_8)
         val headers = headerText.split("\r\n")
@@ -271,20 +275,20 @@ class EdgeTtsAdapter(
             }
             .toMap()
         if (headers["Path"] != "audio") {
-            return InboxEvent(failure = IOException("EdgeTTS二进制帧不是音频: ${headers["Path"]}"))
+            return InboxEvent(failure = IOException(texts.binaryNotAudio(headers["Path"])))
         }
         val payload = bytes.copyOfRange(2 + headerLength, bytes.size)
         val contentType = headers["Content-Type"]
         if (contentType == null) {
             // 结束前的空音频帧（无 Content-Type 且无数据）按 edge-tts 语义跳过
             if (payload.isEmpty()) return InboxEvent()
-            return InboxEvent(failure = IOException("EdgeTTS二进制帧缺 Content-Type 但带数据"))
+            return InboxEvent(failure = IOException(texts.binaryDataWithoutContentType()))
         }
         if (contentType != "audio/mpeg") {
-            return InboxEvent(failure = IOException("EdgeTTS音频帧 Content-Type 异常: $contentType"))
+            return InboxEvent(failure = IOException(texts.unexpectedAudioContentType(contentType)))
         }
         if (payload.isEmpty()) {
-            return InboxEvent(failure = IOException("EdgeTTS音频帧无数据"))
+            return InboxEvent(failure = IOException(texts.audioFrameEmpty()))
         }
         return InboxEvent(audio = payload)
     }
@@ -381,7 +385,11 @@ internal fun escapeXml(text: String): String = text
  * 按 UTF-8 字节数上限切分转义后的文本（communicate.py split_text_by_byte_length）：
  * 优先换行、其次空格，不得切断 UTF-8 多字节字符，不得切断 XML 实体（&amp; 等）。
  */
-internal fun splitTextByByteLength(text: String, byteLength: Int): List<String> {
+internal fun splitTextByByteLength(
+    text: String,
+    byteLength: Int,
+    texts: EdgeTtsTexts = EdgeTtsTexts.ZH,
+): List<String> {
     require(byteLength > 0) { "byteLength must be positive" }
     var rest = text.toByteArray(Charsets.UTF_8)
     val out = mutableListOf<String>()
@@ -390,9 +398,7 @@ internal fun splitTextByByteLength(text: String, byteLength: Int): List<String> 
         if (splitAt < 0) splitAt = safeUtf8SplitPoint(rest)
         splitAt = adjustSplitPointForXmlEntity(rest, splitAt)
         if (splitAt < 0) {
-            throw IllegalArgumentException(
-                "EdgeTTS：文本在实体/UTF-8 边界处无法按 $byteLength 字节切分",
-            )
+            throw IllegalArgumentException(texts.splitFailed(byteLength))
         }
         val advance = if (splitAt > 0) splitAt else 1
         rest.copyOfRange(0, splitAt).toString(Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }?.let { out += it }

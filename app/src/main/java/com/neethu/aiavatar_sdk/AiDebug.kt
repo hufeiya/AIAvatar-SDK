@@ -196,6 +196,8 @@ fun aiDebugHelp(): String = """
 |                           (continuous listening, VAD auto-segments and sends
 |                           each sentence) vs push-to-talk; works in voice and
 |                           video modes, barge-in interrupts the avatar
+|  set_language <arg>       Switch app language: system | zh | en (persisted; the
+|                           AI session rebuilds so the prompts follow the language)
 |  set_asr <arg>            Switch ASR engine: cloud (OpenAI-compatible, follows
 |                           LLM provider, needs that provider's key) | system
 |                           (built-in SpeechRecognizer, free no key — Google

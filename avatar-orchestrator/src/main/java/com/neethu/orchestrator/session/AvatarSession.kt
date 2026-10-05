@@ -18,6 +18,9 @@ import com.neethu.aiadapter.model.LlmUsage
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.Lang
+import com.neethu.orchestrator.i18n.PromptTexts
+import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
 import com.neethu.orchestrator.audio.PlaybackItem
 import com.neethu.orchestrator.audio.PlaybackQueue
@@ -97,7 +100,18 @@ class AvatarSession(
         val ttsMaxConcurrent: Int = 4,
         val chunkerOptions: SentenceChunker.Options = SentenceChunker.Options(),
         val enableFaceDriving: Boolean = true,
-        val assembler: SystemPromptAssembler = SystemPromptAssembler(),
+        /**
+         * 提示词语言（多语言支持）：身份前言/协议块/视角行全部随之切换。
+         * 默认 [Lang.ZH] 保持既有行为；集成方按应用语言显式传入（demo 见
+         * AiChatController.ensure）。语言变化 = 重建会话（上下文不变，身份块
+         * 按「未送达」自动重发一轮，协议块以新语言重钉）。
+         */
+        val lang: Lang = Lang.ZH,
+        /**
+         * 协议块拼装器；默认随 [lang] 取对应语言的文案目录。显式注入的
+         * assembler 自带语言（集成方自行负责）。
+         */
+        val assembler: SystemPromptAssembler = SystemPromptAssembler(promptTextsOf(lang)),
         /**
          * 每轮请求都携带的身份/任务/表达纪律前言（用户需求：模型要清楚自己是
          * 虚拟人、只说口语台词、持续遵循首轮提供的多模态协议）。人设全文与
@@ -105,9 +119,10 @@ class AvatarSession(
          * 历史里留着模型自己发的标签做自我示范；目录指纹变化（重载模型/换
          * 动作来源）或上一轮没送达（失败/被打断）时下一轮重发完整身份块。
          * 前言与人设/协议合并为**一条** system 消息（部分服务商拒绝多条
-         * system，A.1 第 34 条）。置空字符串可关闭前言。
+         * system，A.1 第 34 条）。null = 用 [lang] 对应的默认前言
+         * （见 PromptTexts）；置空字符串可关闭前言。
          */
-        val identityPreamble: String = DEFAULT_IDENTITY_PREAMBLE,
+        val identityPreamble: String? = null,
         /**
          * 是否在首轮注入多模态协议块（全量表情/动作/镜头目录）；关闭时身份
          * 前言里的「协议遵循」段一并省略。
@@ -215,8 +230,12 @@ class AvatarSession(
      */
     private var identitySentBlock: String? = null
     /** 每轮请求恒带的前言（身份/任务/纪律 + 协议遵循提醒），实例内逐字节稳定。 */
+    private val texts: PromptTexts = promptTextsOf(options.lang)
     private val missionText: String =
-        listOf(options.identityPreamble.trim(), if (options.protocolInstructions) PROTOCOL_REMINDER else "")
+        listOf(
+            (options.identityPreamble ?: texts.identityPreamble).trim(),
+            if (options.protocolInstructions) texts.protocolReminder else "",
+        )
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
     private var turnJob: Job? = null
@@ -635,8 +654,8 @@ class AvatarSession(
     private fun currentViewLine(): String? {
         val c = controller ?: return null
         val shot = c.getActiveCameraShot()
-        return if (shot != null) "【当前镜头视角】${shot.label}（${shot.name}），用户正以这个机位看着你。"
-        else "【当前镜头视角】自由视角（FREE），用户正手动控制镜头。"
+        return if (shot != null) texts.viewLine(shot.label(options.lang), shot.name)
+        else texts.viewLineFree
     }
 
     /** 一次组好的请求：消息序列 + 本轮携带的完整身份块文本（null=没有身份内容）。 */
@@ -786,9 +805,11 @@ class AvatarSession(
     }
 
     private fun currentCameraTags(): List<Pair<String, String>> =
-        if (options.enableLlmCamera && controller != null) SystemPromptAssembler.DEFAULT_CAMERA_TAGS
+        if (options.enableLlmCamera && controller != null) texts.cameraTags
         else emptyList()
 
+    // 分类名保持原始值；协议块内部按语言本地化（PromptTexts.actionCategory）。
+    // groupBy 保持目录的遭遇序（buildLlmActionCatalog 已按对话价值排好）
     private fun currentActionGroups(): List<Pair<String, List<String>>> =
         if (gestureDriver != null) actionCatalog.groupBy { it.category }
             .map { (category, entries) -> category to entries.map { it.tag } }
@@ -831,26 +852,22 @@ class AvatarSession(
 
         /**
          * 每轮请求恒带的身份/任务/表达纪律前言（[Options.identityPreamble]
-         * 默认值；用户需求 3/4：模型曾把人设里的旁白/心理描写当台词念出来，
+         * 缺省值；用户需求 3/4：模型曾把人设里的旁白/心理描写当台词念出来，
          * 且不清楚自己是虚拟人）。两段都极短——它们每轮都在请求里。
+         * 多语言后正本在 com.neethu.orchestrator.i18n.PromptTexts（这里保留
+         * 兼容引用，恒为中文版）。
          */
-        const val DEFAULT_IDENTITY_PREAMBLE =
-            "【身份与任务】你是一个 3D 虚拟人,正在与用户实时交流:你说出的每句话都会被语音合成" +
-                "朗读出来,用户看得到你虚拟形象的表情与动作;你的任务就是演好当前这个角色," +
-                "自然地陪用户聊天互动。\n" +
-                "【台词纪律】只说角色开口要说的话,像面对面聊天一样简短自然;不要念出小说式旁白、" +
-                "心理活动或场景描写,也不要用(括号)或*星号*描写动作神态——情绪与动作请用行内标签" +
-                "表达,让虚拟形象替你演出来。"
+        val DEFAULT_IDENTITY_PREAMBLE: String
+            get() = com.neethu.orchestrator.i18n.PromptTextsZh.identityPreamble
 
         /**
          * 协议遵循提醒（protocolInstructions=true 时拼在前言末尾；用户需求 5：
          * 目录词表只在首轮发送，之后每轮提醒模型继续遵循、只用历史里出现过的
-         * 标签名——防止看不到词表后改用括号动作或胡编标签名）。
+         * 标签名——防止看不到词表后改用括号动作或胡编标签名）。兼容引用，
+         * 正本见 PromptTexts。
          */
-        const val PROTOCOL_REMINDER =
-            "【协议遵循】完整的多模态标签词表(<emo:/<act:/<cam:>)只在对话开头的系统消息里提供过" +
-                "一次,后续请求不再重复;请继续遵循该协议:标签放在语义对应的位置," +
-                "只使用你历史回复中出现过的标签名,记不准就不要发标签。"
+        val PROTOCOL_REMINDER: String
+            get() = com.neethu.orchestrator.i18n.PromptTextsZh.protocolReminder
 
         /** 句子挂接表情的保持余量（clip 时长之上）：句尾留一段表情余韵再归零。 */
         private const val EMOTION_HOLD_MARGIN_MS = 1_200L

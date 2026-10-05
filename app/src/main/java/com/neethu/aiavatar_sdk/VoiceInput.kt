@@ -16,11 +16,11 @@ import java.io.File
  * 任何模式下都可用下拉框旁的显隐开关临时显示/隐藏按钮（进入打字/语音/
  * 视频模式时自动隐藏，切回手动点击自动显示）。
  */
-enum class InputMode(val label: String) {
-    MANUAL("手动点击"),
-    TEXT("打字输入"),
-    VOICE("语音模式"),
-    VIDEO("视频模式"),
+enum class InputMode {
+    MANUAL,
+    TEXT,
+    VOICE,
+    VIDEO,
 }
 
 /** 从文件扩展名推 ASR multipart 所需的 MIME（[VoiceRecorder] 产物是 m4a）。 */
@@ -45,6 +45,10 @@ fun mimeForFileName(name: String): String = when (File(name).extension.lowercase
  */
 class VoiceRecorder(private val context: Context) {
 
+    /** 用户可读文案表（多语言支持）：start 的异常消息语言，MainActivity 随语言更新。 */
+    var texts: com.neethu.aiavatar_sdk.i18n.Strings =
+        com.neethu.aiavatar_sdk.i18n.Strings(com.neethu.corelib.Lang.ZH)
+
     private val cacheDir = context.cacheDir
     private var recorder: MediaRecorder? = null
     private var outFile: File? = null
@@ -62,7 +66,7 @@ class VoiceRecorder(private val context: Context) {
      * APM 仅在真机实测仍有残留回声时再引入。
      */
     fun start(echoCancellation: Boolean = false): File {
-        check(recorder == null) { "录音已在进行中" }
+        check(recorder == null) { texts.recorderAlreadyRunning }
         val file = File(cacheDir, "voice_input_${System.currentTimeMillis()}.m4a")
         val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
@@ -86,7 +90,7 @@ class VoiceRecorder(private val context: Context) {
         } catch (t: Throwable) {
             r.release()
             file.delete()
-            throw IllegalStateException("录音启动失败：${t.message}", t)
+            throw IllegalStateException(texts.recorderStartFailed(t.message), t)
         }
         recorder = r
         outFile = file

@@ -1,5 +1,6 @@
 package com.neethu.aiavatar_sdk
 
+import com.neethu.corelib.Lang
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -197,15 +198,21 @@ object EdgeTtsCatalog {
     )
 
     const val DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+
+    /** 英文模式的默认音色（多语种女声，中英都能读）。 */
+    const val DEFAULT_VOICE_EN = "en-US-EmmaMultilingualNeural"
 }
 
 /**
  * Edge-TTS 音色解析 = 校验 + 默认（与 [resolveVoice] 同语义）：存储值不在
  * 目录（含从 OpenAI 兼容引擎切过来残留的 CosyVoice/火山音色引用）一律落默认。
+ * 默认音色按语言取（多语言支持）：英文模式落英文多语种音色（中文用户不受影响
+ * ——默认语言仍落晓晓）；用户显式选过的音色原样保留。
  */
-fun resolveEdgeVoice(configured: String): String {
+fun resolveEdgeVoice(configured: String, lang: Lang = Lang.ZH): String {
     val v = configured.trim()
-    return if (EdgeTtsCatalog.voices.any { it.first == v }) v else EdgeTtsCatalog.DEFAULT_VOICE
+    if (EdgeTtsCatalog.voices.any { it.first == v }) return v
+    return if (lang == Lang.EN) EdgeTtsCatalog.DEFAULT_VOICE_EN else EdgeTtsCatalog.DEFAULT_VOICE
 }
 
 /** 旧版 prefs 只有 baseUrl；按端点推断服务商（迁移用，纯函数可测）。 */

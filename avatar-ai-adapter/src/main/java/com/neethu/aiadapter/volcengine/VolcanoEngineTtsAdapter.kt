@@ -1,6 +1,7 @@
 package com.neethu.aiadapter.volcengine
 
 import com.neethu.aiadapter.api.TtsAdapter
+import com.neethu.aiadapter.text.VolcanoTtsTexts
 import com.neethu.aiadapter.model.TtsAudioFormat
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.model.TtsResult
@@ -47,6 +48,8 @@ class VolcanoEngineTtsAdapter(
     /** 端点可注入：单测里换成 MockWebServer 的 ws:// 地址。 */
     private val endpoint: String = ENDPOINT,
     client: OkHttpClient = OkHttpClient(),
+    /** 用户可读错误文案的语言（多语言支持）；缺省中文保持既有行为。 */
+    private val texts: VolcanoTtsTexts = VolcanoTtsTexts.ZH,
 ) : TtsAdapter {
 
     /** 独立配置：WebSocket 建连/读超时对长句要留余量，且不得污染调用方的 client。 */
@@ -81,12 +84,12 @@ class VolcanoEngineTtsAdapter(
                 }
 
                 override fun onMessage(ws: WebSocket, bytes: ByteString) {
-                    inbox.trySend(parseFrame(bytes.toByteArray()))
+                    inbox.trySend(parseFrame(bytes.toByteArray(), texts))
                 }
 
                 override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                     val hint = response?.let { " HTTP ${it.code}" }.orEmpty()
-                    inbox.trySend(InboxEvent(failure = IOException("火山TTS连接失败$hint: ${t.message}", t)))
+                    inbox.trySend(InboxEvent(failure = IOException(texts.connectFailed(hint, t.message), t)))
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
@@ -101,7 +104,7 @@ class VolcanoEngineTtsAdapter(
                 webSocket = wsClient.newWebSocket(request, listener)
 
                 // onOpen 里已发 StartConnection，这里等服务端确认
-                awaitFirstFrame(inbox, expectEvent = EVENT_CONNECTION_STARTED, label = "建连")
+                awaitFirstFrame(inbox, expectEvent = EVENT_CONNECTION_STARTED, label = texts.stepConnect())
 
                 val connIdBytes = connectionId.toByteArray(Charsets.UTF_8)
                 webSocket.send(
@@ -111,9 +114,9 @@ class VolcanoEngineTtsAdapter(
                         payload = startSessionPayload(speaker, sampleRate),
                     ).toByteString()
                 )
-                val sessionStarted = awaitFirstFrame(inbox, expectEvent = EVENT_SESSION_STARTED, label = "开会话")
+                val sessionStarted = awaitFirstFrame(inbox, expectEvent = EVENT_SESSION_STARTED, label = texts.stepSessionStart())
                 val sessionId = sessionStarted.sessionId
-                    ?: throw IOException("火山TTS会话启动响应缺少 sessionId")
+                    ?: throw IOException(texts.sessionStartMissingSessionId())
 
                 webSocket.send(
                     frame(
@@ -135,11 +138,11 @@ class VolcanoEngineTtsAdapter(
                         break
                     }
                     if (ev.closed) {
-                        throw IOException("火山TTS连接在合成完成前被关闭（未收到 SessionFinished）")
+                        throw IOException(texts.closedBeforeSessionFinished())
                     }
                 }
                 val bytes = audio.toByteArray()
-                if (bytes.isEmpty()) throw IOException("火山TTS返回了空音频（音色/参数可能不被支持）")
+                if (bytes.isEmpty()) throw IOException(texts.emptyAudio())
                 TtsResult(bytes, TtsAudioFormat.RAW_PCM_16LE, sampleRate)
             } finally {
                 // 正常完成走优雅关闭；异常/取消直接 cancel 防止连接悬挂
@@ -165,17 +168,14 @@ class VolcanoEngineTtsAdapter(
         receiveFrame(inbox).also { ev ->
             if (ev.failure != null) throw ev.failure
             if (ev.event != expectEvent) {
-                throw IOException(
-                    "火山TTS${label}失败：期望事件 $expectEvent 实得 ${ev.event}" +
-                        (ev.payloadPreview?.let { " $it" } ?: "")
-                )
+                throw IOException(texts.stepFailed(label, expectEvent, ev.event, ev.payloadPreview))
             }
         }
 
     private suspend fun receiveFrame(inbox: Channel<InboxEvent>): InboxEvent {
         // 每条消息 30s 看门狗：服务器停摆时不无限占用 SpeechPipeline 的合成槽
         val ev = withTimeoutOrNull(MESSAGE_TIMEOUT_MS) { inbox.receive() }
-        return ev ?: InboxEvent(failure = IOException("火山TTS等待服务器消息超时(${MESSAGE_TIMEOUT_MS}ms)"))
+        return ev ?: InboxEvent(failure = IOException(texts.messageTimeout(MESSAGE_TIMEOUT_MS)))
     }
 
     private fun startSessionPayload(speaker: String, sampleRate: Int): ByteArray {
@@ -265,7 +265,10 @@ class VolcanoEngineTtsAdapter(
         }
 
         /** 解析一帧服务端消息（对齐官方 parse_response）。 */
-        internal fun parseFrame(bytes: ByteArray): InboxEvent {
+        internal fun parseFrame(
+            bytes: ByteArray,
+            texts: VolcanoTtsTexts = VolcanoTtsTexts.ZH,
+        ): InboxEvent {
             val headerSize = bytes[0].toInt() and 0x0F
             val msgType = (bytes[1].toInt() and 0xFF) shr 4
             val flags = bytes[1].toInt() and 0x0F
@@ -292,7 +295,7 @@ class VolcanoEngineTtsAdapter(
             return when {
                 msgType == MSG_ERROR_SERVER || event == EVENT_CONNECTION_FAILED || event == EVENT_SESSION_FAILED -> {
                     val preview = payload.toString(Charsets.UTF_8).take(300)
-                    InboxEvent(event = event, sessionId = sessionId, failure = IOException("火山TTS服务端错误: $preview"))
+                    InboxEvent(event = event, sessionId = sessionId, failure = IOException(texts.serverError(preview)))
                 }
                 event == EVENT_SESSION_FINISHED -> InboxEvent(event = event, sessionId = sessionId, sessionFinished = true)
                 serialization == SER_NONE ->
