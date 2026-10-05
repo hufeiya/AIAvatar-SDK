@@ -17,12 +17,13 @@ import com.neethu.orchestrator.skill.SkillHost
 import kotlinx.coroutines.CoroutineScope
 
 /**
- * AI 对话配置（双服务商版）。除 API Key 外全部下拉框选择，模型/音色留空即用
- * 服务商默认（见 [resolveLlmModel]/[resolveTtsModel]/[resolveVoice]）。
+ * AI 对话配置（多服务商版：硅基流动/火山引擎/OpenRouter）。除 API Key 外全部
+ * 下拉框选择，模型/音色留空即用服务商默认（见 [resolveLlmModel]/[resolveTtsModel]/
+ * [resolveVoice]）。
  *
- * Key 按服务分存（硅基流动一把通用；**火山的语音与大模型是两把 key**：
- * [apiKeyVolcano]=方舟 Ark 大模型，[apiKeyVolcanoTts]=豆包语音合成，实测互不
- * 通用）；TTS 可独立选服务商（[ttsSameProvider]=false 时用 [ttsProvider]）。
+ * Key 按服务分存（硅基流动与 OpenRouter 一把通用；**火山的语音与大模型是两把
+ * key**：[apiKeyVolcano]=方舟 Ark 大模型，[apiKeyVolcanoTts]=豆包语音合成，实测
+ * 互不通用）；TTS 可独立选服务商（[ttsSameProvider]=false 时用 [ttsProvider]）。
  */
 data class AiChatPrefs(
     val provider: AiProvider = AiProvider.SILICONFLOW,
@@ -32,6 +33,8 @@ data class AiChatPrefs(
     val apiKeyVolcano: String = "",
     /** 豆包语音控制台 API Key——火山语音合成（seed-tts-2.0 WebSocket）链路。 */
     val apiKeyVolcanoTts: String = "",
+    /** OpenRouter API Key——大模型/TTS/ASR 一把通用（面向海外用户）。 */
+    val apiKeyOpenrouter: String = "",
     /** TTS 与大模型同服务商（默认勾选）。 */
     val ttsSameProvider: Boolean = true,
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
@@ -51,16 +54,18 @@ data class AiChatPrefs(
     val ttsProviderResolved: AiProvider
         get() = if (ttsSameProvider) provider else ttsProvider
 
-    /** 大模型服务的 API Key（硅基流动 / 火山方舟）。 */
+    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter）。 */
     fun apiKeyFor(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcano
+        AiProvider.OPENROUTER -> apiKeyOpenrouter
     }
 
-    /** 语音合成服务的 API Key（硅基流动共用一份；火山语音用豆包语音那把）。 */
+    /** 语音合成服务的 API Key（硅基流动/OpenRouter 共用一份；火山语音用豆包语音那把）。 */
     fun apiKeyForTts(): String = when (ttsProviderResolved) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcanoTts
+        AiProvider.OPENROUTER -> apiKeyOpenrouter
     }
 
     /** TTS 侧的就绪条件：Edge-TTS 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
@@ -81,6 +86,7 @@ private const val KEY_AI_API_KEY = "ai_apiKey" // 旧版遗留：等价于硅基
 private const val KEY_AI_API_KEY_SILICONFLOW = "ai_api_key_siliconflow"
 private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano" // 火山方舟（大模型）
 private const val KEY_AI_API_KEY_VOLCANO_TTS = "ai_api_key_volcano_tts" // 豆包语音（合成）
+private const val KEY_AI_API_KEY_OPENROUTER = "ai_api_key_openrouter"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
@@ -110,6 +116,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         apiKeySiliconflow = sfKey,
         apiKeyVolcano = volcArkKey,
         apiKeyVolcanoTts = getString(KEY_AI_API_KEY_VOLCANO_TTS, null) ?: volcTtsKey,
+        apiKeyOpenrouter = getString(KEY_AI_API_KEY_OPENROUTER, "").orEmpty(),
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
@@ -126,6 +133,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_API_KEY_SILICONFLOW, p.apiKeySiliconflow.trim())
         .putString(KEY_AI_API_KEY_VOLCANO, p.apiKeyVolcano.trim())
         .putString(KEY_AI_API_KEY_VOLCANO_TTS, p.apiKeyVolcanoTts.trim())
+        .putString(KEY_AI_API_KEY_OPENROUTER, p.apiKeyOpenrouter.trim())
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
@@ -136,13 +144,27 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
 }
 
 /**
- * 语音输入配置（任务 4）：ASR 模型 + 松手行为 + 说话方式。
+ * 语音识别（ASR）引擎：
+ *  - [CLOUD]：OpenAI 兼容云端识别（跟随大模型服务商，key 共用大模型那份，
+ *    见 [asrProviderFor]；OpenRouter 音频端点要求账户 ≥$0.50 余额）。
+ *  - [SYSTEM]：系统内置 `SpeechRecognizer`（免费无 Key，见 [SystemAsrController]）
+ *    ——GMS 设备走 Google 服务（海外用户主场景），国产 ROM 走厂商服务。
+ */
+enum class AsrEngine(val label: String) {
+    CLOUD("云端 ASR（按大模型服务商）"),
+    SYSTEM("系统识别（免费无 Key）"),
+}
+
+/**
+ * 语音输入配置（任务 4）：ASR 引擎 + 模型 + 松手行为 + 说话方式。
  * 刻意不放进 [AiChatPrefs]——会话身份 = AiChatPrefs + 上下文，改 ASR 配置
  * 不该触发会话重建（正在播的回复会被杀掉）。
  */
 data class VoicePrefs(
-    /** ASR 模型名；留空 = 按端点自动推断（见 [resolveAsrModel]）。 */
+    /** ASR 模型名；留空 = 按端点自动推断（见 [resolveAsrModel]）。仅 [AsrEngine.CLOUD]。 */
     val asrModel: String = "",
+    /** ASR 引擎（云端/系统内置，见 [AsrEngine]）。 */
+    val asrEngine: AsrEngine = AsrEngine.CLOUD,
     /** 松手识别成功后直接发送；关闭则识别文本填入输入框，由用户确认后发送。 */
     val autoSend: Boolean = true,
     /**
@@ -154,11 +176,13 @@ data class VoicePrefs(
 )
 
 private const val KEY_AI_ASR_MODEL = "ai_asr_model"
+private const val KEY_AI_ASR_ENGINE = "ai_asr_engine"
 private const val KEY_AI_VOICE_AUTO_SEND = "ai_voice_auto_send"
 private const val KEY_AI_VOICE_FREE_TALK = "ai_voice_free_talk"
 
 fun SharedPreferences.loadVoicePrefs(): VoicePrefs = VoicePrefs(
     asrModel = getString(KEY_AI_ASR_MODEL, "").orEmpty(),
+    asrEngine = prefsEnum<AsrEngine>(this, KEY_AI_ASR_ENGINE) ?: AsrEngine.CLOUD,
     autoSend = getBoolean(KEY_AI_VOICE_AUTO_SEND, true),
     freeTalk = getBoolean(KEY_AI_VOICE_FREE_TALK, false),
 )
@@ -166,6 +190,7 @@ fun SharedPreferences.loadVoicePrefs(): VoicePrefs = VoicePrefs(
 fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
     edit()
         .putString(KEY_AI_ASR_MODEL, p.asrModel.trim())
+        .putString(KEY_AI_ASR_ENGINE, p.asrEngine.name)
         .putBoolean(KEY_AI_VOICE_AUTO_SEND, p.autoSend)
         .putBoolean(KEY_AI_VOICE_FREE_TALK, p.freeTalk)
         .apply()
@@ -173,14 +198,16 @@ fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
 
 /**
  * ASR 模型留空时按端点推断：硅基流动 → `Qwen/Qwen3-ASR-1.7B`（其
- * /audio/transcriptions 端点的默认语音识别模型），其他 → OpenAI 的 `whisper-1`。
+ * /audio/transcriptions 端点的默认语音识别模型），OpenRouter →
+ * `openai/whisper-large-v3`（OpenRouter 文档示例模型，multipart 实测在册），
+ * 其他 → OpenAI 的 `whisper-1`。
  */
 fun resolveAsrModel(baseUrl: String, configured: String): String =
     configured.trim().ifBlank {
-        if (baseUrl.contains("siliconflow", ignoreCase = true)) {
-            "Qwen/Qwen3-ASR-1.7B"
-        } else {
-            "whisper-1"
+        when {
+            baseUrl.contains("siliconflow", ignoreCase = true) -> "Qwen/Qwen3-ASR-1.7B"
+            baseUrl.contains("openrouter.ai", ignoreCase = true) -> "openai/whisper-large-v3"
+            else -> "whisper-1"
         }
     }
 
@@ -254,6 +281,9 @@ class AiChatController(
                 // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
                 AiProvider.VOLCANO ->
                     VolcanoEngineTtsAdapter(prefs.apiKeyForTts())
+                // OpenRouter 同一 OpenAI 兼容 schema，适配器直接复用
+                AiProvider.OPENROUTER ->
+                    OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
             }
         }
         val session = AvatarSession(
@@ -290,15 +320,26 @@ class AiChatController(
                     voice = resolveEdgeVoice(prefs.voice),
                     responseFormat = "mp3",
                 )
-            TtsEngine.OPENAI_COMPATIBLE ->
-                TtsConfig(
-                    model = resolveTtsModel(ttsProvider, prefs.ttsModel),
-                    voice = resolveVoice(ttsProvider, prefs.voice),
-                    responseFormat = "wav",
-                    // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC
-                    // 前端的分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
-                    sampleRate = 16_000,
-                )
+            TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
+                AiProvider.OPENROUTER ->
+                    // OpenRouter /audio/speech 只认 mp3/pcm（wav 请求会 400）；
+                    // mp3 容器自带采样率（Voxtral 实测 22.05kHz），不传 sampleRate，
+                    // 解码与口型走 Edge-TTS 同款 MP3→MediaCodec 路径
+                    TtsConfig(
+                        model = resolveTtsModel(ttsProvider, prefs.ttsModel),
+                        voice = resolveVoice(ttsProvider, prefs.voice),
+                        responseFormat = "mp3",
+                    )
+                else ->
+                    TtsConfig(
+                        model = resolveTtsModel(ttsProvider, prefs.ttsModel),
+                        voice = resolveVoice(ttsProvider, prefs.voice),
+                        responseFormat = "wav",
+                        // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC
+                        // 前端的分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
+                        sampleRate = 16_000,
+                    )
+            }
         }
         if (ready) {
             session.startFaceDriving()

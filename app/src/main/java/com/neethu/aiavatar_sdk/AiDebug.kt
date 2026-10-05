@@ -162,11 +162,12 @@ fun aiDebugHelp(): String = """
 |                           P2 local-judging path (local throw + instant
 |                           spoken verdict) without a camera — the next
 |                           utterance becomes the atmosphere turn
-|Providers (dual-vendor: SiliconFlow + Volcano; LLM/TTS/ASR dropdowns in ⚙️):
-|  set_provider <arg>       Switch LLM provider: siliconflow | volcano
-|                           (model list follows; empty model = vendor default)
+|Providers (SiliconFlow + Volcano + OpenRouter; LLM/TTS/ASR dropdowns in ⚙️):
+|  set_provider <arg>       Switch LLM provider: siliconflow | volcano |
+|                           openrouter (model list follows; empty model =
+|                           vendor default)
 |  set_tts_provider <arg>   Switch TTS provider independently (unchecks
-|                           "same as LLM"): siliconflow | volcano
+|                           "same as LLM"): siliconflow | volcano | openrouter
 |  set_llm_model <arg>      Switch the LLM model within the current provider's
 |                           catalog (exact id, e.g. Qwen/Qwen3.8-27B)
 |Gaze (look-at; default = camera, the avatar watches the user):
@@ -195,6 +196,11 @@ fun aiDebugHelp(): String = """
 |                           (continuous listening, VAD auto-segments and sends
 |                           each sentence) vs push-to-talk; works in voice and
 |                           video modes, barge-in interrupts the avatar
+|  set_asr <arg>            Switch ASR engine: cloud (OpenAI-compatible, follows
+|                           LLM provider, needs that provider's key) | system
+|                           (built-in SpeechRecognizer, free no key — Google
+|                           on GMS devices, vendor service on CN ROMs; pauses
+|                           while the avatar speaks)
 |Modes:
     |  set_mode <arg>           Switch input mode: manual | text | voice | video
     |                           (video = camera call: needs a vision-capable LLM,

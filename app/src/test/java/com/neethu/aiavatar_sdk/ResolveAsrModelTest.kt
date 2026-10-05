@@ -32,6 +32,14 @@ class ResolveAsrModelTest {
     }
 
     @Test
+    fun `openrouter endpoint defaults to whisper-large-v3`() {
+        assertEquals(
+            "openai/whisper-large-v3",
+            resolveAsrModel("https://openrouter.ai/api/v1", ""),
+        )
+    }
+
+    @Test
     fun `explicitly configured model wins over the endpoint default`() {
         assertEquals(
             "FunAudioLLM/SenseVoiceSmall",

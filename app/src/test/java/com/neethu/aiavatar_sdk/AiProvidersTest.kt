@@ -321,3 +321,104 @@ class EdgeTtsCatalogTest {
         )
     }
 }
+
+// ── OpenRouter（面向海外用户的第三服务商，2026-10-05）────────────────────
+
+class OpenRouterProviderTest {
+
+    private val or = AiProvider.OPENROUTER
+
+    @Test
+    fun `openrouter catalog is verified and locked`() {
+        assertEquals("OpenRouter", or.label)
+        assertEquals("https://openrouter.ai/api/v1", or.baseUrl)
+        // 清单首位 = 默认模型（四款 host 实测：64px 红图逐个过=真视觉）
+        assertEquals(
+            listOf(
+                "google/gemini-3.8-flash",
+                "openai/gpt-6-luna",
+                "qwen/qwen3.7-flash",
+                "anthropic/claude-sonnet-4.6",
+            ),
+            or.llmModels,
+        )
+        assertEquals("google/gemini-3.8-flash", or.defaultLlmModel)
+        // 全部实测真视觉（视频模式开箱即用）
+        assertEquals(or.llmModels.toSet(), or.visionLlmModels.toSet())
+        // /audio/speech 只认 mp3/pcm：单 TTS 模型防音色跨模型泄漏（同火山模式）
+        assertEquals(listOf("mistralai/voxtral-mini-tts-2603"), or.ttsModels)
+        assertEquals("mistralai/voxtral-mini-tts-2603", or.defaultTtsModel)
+        assertEquals("en_paul_neutral", or.defaultVoice)
+        // 音色 = Voxtral supported_voices（API 在册）精选子集，无引用前缀
+        assertTrue(or.voicePrefix == null)
+        assertTrue(or.voices.isNotEmpty())
+        assertEquals(or.voices.size, or.voices.toSet().size)
+        assertTrue(or.defaultVoice in or.voices)
+    }
+
+    @Test
+    fun `openrouter voice resolution falls back to default on cross-engine residue`() {
+        assertEquals("en_paul_neutral", resolveVoice(or, ""))
+        assertEquals("gb_jane_curious", resolveVoice(or, "gb_jane_curious"))
+        // 硅基流动/火山的音色残留一律落默认（composeVoiceRef 无前缀原样返回→不在清单）
+        assertEquals("en_paul_neutral", resolveVoice(or, "FunAudioLLM/CosyVoice2-0.5B:anna"))
+        assertEquals("en_paul_neutral", resolveVoice(or, "zh_female_vv_uranus_bigtts"))
+    }
+
+    @Test
+    fun `openrouter base url infers provider for migration`() {
+        assertEquals(or, inferProviderFromBaseUrl("https://openrouter.ai/api/v1"))
+        assertEquals(or, inferProviderFromBaseUrl("https://OPENROUTER.AI/api/v1"))
+    }
+
+    @Test
+    fun `openrouter qwen models get unified reasoning disabled`() {
+        // qwen3.7-flash 混合推理默认开思考：OpenRouter 统一参数实测有效
+        // （一句话 235 思考 token → 2）
+        val body = llmExtraBody(or, "qwen/qwen3.7-flash")!!
+        val reasoning = body["reasoning"] as kotlinx.serialization.json.JsonObject
+        assertEquals("false", (reasoning["enabled"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // gemini-3.8-flash / gpt-5-nano 系 reasoning 强制开启，发关思考直接
+        // 400 "Reasoning is mandatory"（2026-10-05 实测）——绝不发参数；
+        // claude / gpt-6-luna 默认不思考，也不发
+        assertEquals(null, llmExtraBody(or, "google/gemini-3.8-flash"))
+        assertEquals(null, llmExtraBody(or, "openai/gpt-6-luna"))
+        assertEquals(null, llmExtraBody(or, "anthropic/claude-sonnet-4.6"))
+        assertEquals(null, llmExtraBody(or, ""))
+        // 关思考方言不跨服务商泄漏：OpenRouter 的 qwen 小写前缀不命中硅基流动
+        // 的 "Qwen/Qwen3" 分支，反之亦然
+        assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, "qwen/qwen3.7-flash"))
+        assertEquals(null, llmExtraBody(or, "Qwen/Qwen3.8-27B"))
+    }
+
+    @Test
+    fun `asr provider follows llm provider except volcano falls back to siliconflow`() {
+        assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.SILICONFLOW))
+        assertEquals(or, asrProviderFor(or))
+        assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.VOLCANO))
+    }
+
+    @Test
+    fun `asr explicit model options per provider`() {
+        assertEquals(listOf("Qwen/Qwen3-ASR-1.7B"), asrExplicitAsrModels(AiProvider.SILICONFLOW))
+        assertEquals(listOf("openai/whisper-large-v3"), asrExplicitAsrModels(or))
+        assertEquals(emptyList<String>(), asrExplicitAsrModels(AiProvider.VOLCANO))
+    }
+
+    @Test
+    fun `openrouter is configured with its single key`() {
+        val base = AiChatPrefs(provider = or)
+        assertFalse(base.isConfigured)
+        assertTrue(base.copy(apiKeyOpenrouter = "sk-or-v1-x").isConfigured)
+        // TTS 同服务商共用这把 key；key 路由互不串
+        assertEquals("sk-or-v1-x", base.copy(apiKeyOpenrouter = "sk-or-v1-x").apiKeyForTts())
+        assertEquals("sk-or-v1-x", base.copy(apiKeyOpenrouter = "sk-or-v1-x").apiKeyFor(or))
+    }
+
+    @Test
+    fun `openrouter key field labels follow the service`() {
+        assertEquals("OpenRouter API Key", or.llmKeyLabel)
+        assertEquals("sk-or-v1-...", or.llmKeyHint)
+        assertEquals("OpenRouter API Key（语音合成用）", or.ttsKeyLabel)
+    }
+}

@@ -696,8 +696,9 @@ internal class DemoUiState(context: Context) {
 private fun parseProviderArg(arg: String?): AiProvider = when (arg?.lowercase()) {
     "siliconflow", "sf", "silicon" -> AiProvider.SILICONFLOW
     "volcano", "volc", "ark", "bytedance" -> AiProvider.VOLCANO
+    "openrouter", "or", "openr" -> AiProvider.OPENROUTER
     else -> throw IllegalArgumentException(
-        "expects siliconflow|volcano, got '$arg'"
+        "expects siliconflow|volcano|openrouter, got '$arg'"
     )
 }
 
@@ -1059,18 +1060,20 @@ private fun DemoScreen(
 
     /**
      * 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。
-     * ASR 目前仅硅基流动提供（OpenAI 兼容 /audio/transcriptions），key 固定
-     * 复用硅基流动那份——大模型选火山时这里也要有硅基流动 key。
+     * ASR 跟随大模型服务商（OpenAI 兼容 /audio/transcriptions，硅基流动与
+     * OpenRouter 同构，key 各自共用大模型那份）；火山无该形态端点，回落
+     * 硅基流动（见 [asrProviderFor]）。
      */
     fun asrFor(): OpenAiCompatibleAsrAdapter {
-        val sfKey = uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW)
-        check(sfKey.isNotBlank()) { "语音识别走硅基流动：请先在 ⚙️ 设置里填硅基流动 API Key" }
-        return OpenAiCompatibleAsrAdapter(AiProvider.SILICONFLOW.baseUrl, sfKey)
+        val p = asrProviderFor(uiState.aiPrefs.provider)
+        val key = uiState.aiPrefs.apiKeyFor(p)
+        check(key.isNotBlank()) { "语音识别走${p.label}：请先在 ⚙️ 设置里填${p.label} API Key" }
+        return OpenAiCompatibleAsrAdapter(p.baseUrl, key)
     }
 
-    /** ASR 模型解析：端点恒为硅基流动（显式配置过的用显式值）。 */
+    /** ASR 模型解析：端点随大模型服务商（显式配置过的用显式值）。 */
     fun asrConfig(): AsrConfig = AsrConfig(
-        model = resolveAsrModel(AiProvider.SILICONFLOW.baseUrl, uiState.voicePrefs.asrModel),
+        model = resolveAsrModel(asrProviderFor(uiState.aiPrefs.provider).baseUrl, uiState.voicePrefs.asrModel),
     )
 
     // ── 自由说话（连续聆听 + VAD 自动断句，按住/自由按钮切换）─────────────
@@ -1090,6 +1093,51 @@ private fun DemoScreen(
     var freeHearing by remember { mutableStateOf(false) }
     // 并发句串行:上一句还在 ASR 时新一句排队,防止识别结果乱序发送
     val freeAsrChain = remember { kotlinx.coroutines.sync.Mutex() }
+
+    // ── 系统内置语音识别（免费无 Key，海外用户主场景；SystemAsr.kt）────────
+    // 与 freeSpeech（云端链路采音+VAD）互斥运行：freeTalk 引擎=SYSTEM 时用它
+    val systemAsr = remember { SystemAsrController(context) }
+    systemAsr.onPartial = { text -> freeHearing = text.isNotEmpty() }
+    systemAsr.onError = { msg -> scope.launch { chatError = "系统语音识别：$msg" } }
+    systemAsr.onConsentNeeded = {
+        scope.launch {
+            chatError = "系统语音识别等待授权：请在屏幕弹窗中点「允许」，授权后自动继续"
+        }
+    }
+    systemAsr.onFinal = { text, singleShot ->
+        scope.launch {
+            if (singleShot) {
+                // 按住说话（系统识别版）：终稿或错误直接落同一条发送链
+                voiceRecognizing = false
+                if (text.isEmpty()) {
+                    chatError = "未识别到语音内容，请靠近一点重试"
+                    return@launch
+                }
+                if (uiState.voicePrefs.autoSend) {
+                    pushUserLine(text)
+                    val consumed = session?.skills?.onUtterance(text) ?: false
+                    if (!consumed) session?.send(text, videoSnapshotImages())
+                } else {
+                    voicePrefill = text
+                }
+            } else {
+                // 自由说话（系统识别版）：与云端同一条发送缝；空终稿=服务端
+                // 噪声断句，静默忽略（同云端空识别语义，但不报错）
+                freeAsrChain.withLock {
+                    voiceRecognizing = true
+                    if (text.isNotEmpty()) {
+                        pushUserLine(text)
+                        // 技能快路径：系统识别没有 WAV 可测时长，用文本量估——
+                        // 短句（≤2.5s）仍是猜拳出拳信号，然后文本即裁判回合输入
+                        session?.skills?.onVadUtterance(estimateSpeechMs(text))
+                        val consumed = session?.skills?.onUtterance(text) ?: false
+                        if (!consumed) session?.send(text, videoSnapshotImages())
+                    }
+                    voiceRecognizing = false
+                }
+            }
+        }
+    }
 
     // 回调在采音线程触发,统一 post 回主协程操作 UI/会话
     freeSpeech.onBargeIn = { scope.launch { session?.interrupt() } }
@@ -1145,22 +1193,45 @@ private fun DemoScreen(
         uiState.updateVoicePrefs(uiState.voicePrefs.copy(freeTalk = new))
         when {
             new && !micGranted -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
-            new && uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isBlank() ->
-                chatError = "自由说话需要硅基流动 API Key（语音识别用），先在 ⚙️ 设置里配置"
-            new -> chatError = "自由说话已开启：直接开口，说完一句自动发送；虚拟人说话时大声即可打断"
+            new && uiState.voicePrefs.asrEngine == AsrEngine.CLOUD &&
+                uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isBlank() ->
+                chatError = "自由说话（云端识别）需要硅基流动 API Key，先在 ⚙️ 设置里配置或改用系统识别"
+            new && uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM && !systemAsr.isAvailable() ->
+                chatError = "本机没有系统语音识别服务，请改用云端识别"
+            new -> chatError = "自由说话已开启（${uiState.voicePrefs.asrEngine.label}）：直接开口，说完一句自动发送；系统识别在虚拟人说话期间暂停聆听"
         }
     }
 
-    // 自由说话生命周期：语音/视频模式 + 开关开 + 麦克风权限 + 有 ASR Key 才跑
-    LaunchedEffect(uiState.inputMode, uiState.voicePrefs.freeTalk, micGranted) {
+    // 自由说话生命周期：语音/视频模式 + 开关开 + 麦克风权限 + 识别来源就绪
+    // （云端=有硅基流动 Key；系统=平台识别服务可用）。两引擎互斥运行。
+    LaunchedEffect(
+        uiState.inputMode, uiState.voicePrefs.freeTalk, micGranted, uiState.voicePrefs.asrEngine,
+    ) {
+        val system = uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM
         val want = micGranted && uiState.voicePrefs.freeTalk &&
             (uiState.inputMode == InputMode.VOICE || uiState.inputMode == InputMode.VIDEO) &&
-            uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isNotBlank()
-        if (want) {
+            if (system) systemAsr.isAvailable()
+            else uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isNotBlank()
+        if (want && system) {
+            freeSpeech.stop()
+            runCatching { systemAsr.startContinuous() }
+                .onFailure { chatError = "自由说话启动失败：${it.message}" }
+        } else if (want) {
+            systemAsr.stop()
             runCatching { freeSpeech.start(echoCancellation = uiState.inputMode == InputMode.VIDEO) }
                 .onFailure { chatError = "自由说话启动失败：${it.message}" }
         } else {
             freeSpeech.stop()
+            systemAsr.stop()
+        }
+    }
+
+    // 系统识别的半双工：虚拟人 SPEAKING 期暂停聆听（防 TTS 自回声进识别器），
+    // 回合结束/打断后带 600ms 宽限恢复；云端引擎保持 VAD barge-in 不受影响
+    LaunchedEffect(uiState.voicePrefs.asrEngine) {
+        if (uiState.voicePrefs.asrEngine != AsrEngine.SYSTEM) return@LaunchedEffect
+        snapshotFlow { chatPhase }.collect { phase ->
+            systemAsr.setPaused(phase == ConversationPhase.SPEAKING)
         }
     }
 
@@ -1170,6 +1241,17 @@ private fun DemoScreen(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED ->
                 micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM -> {
+                // 半双工同云端：按下先打断正在播的回复；系统识别单发监听，
+                // 松手取终稿（onFinal singleShot=true 回调落发送链）
+                if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
+                try {
+                    systemAsr.startSingleShot()
+                    voiceRecording = true
+                } catch (e: IllegalStateException) {
+                    chatError = e.message ?: "系统语音识别启动失败"
+                }
+            }
             else -> {
                 // 半双工（对齐 AIRI 说话时抑制聆听）：按下的瞬间打断正在播的回复
                 if (chatPhase == ConversationPhase.SPEAKING) session?.interrupt()
@@ -1185,7 +1267,12 @@ private fun DemoScreen(
         }
     }
     val onHoldEnd: () -> Unit = {
-        if (voiceRecorder.isRecording) {
+        if (systemAsr.singleShot) {
+            // 系统识别：松手=句尾，终稿异步到达（onFinal），期间亮"识别中"
+            voiceRecording = false
+            voiceRecognizing = true
+            systemAsr.stopListening()
+        } else if (voiceRecorder.isRecording) {
             voiceRecording = false
             val file = voiceRecorder.stop()
             if (file == null) {
@@ -1228,6 +1315,7 @@ private fun DemoScreen(
             // 录音中离开组合（切模式/退出）不能留下一个占着麦克风的 MediaRecorder
             voiceRecorder.cancel()
             freeSpeech.stop()
+            systemAsr.stop()
         }
     }
 
@@ -1327,8 +1415,16 @@ private fun DemoScreen(
                     if (uiState.inputMode == InputMode.VIDEO) append(" video=[${videoTracker.debugStatus()}]")
                     if (uiState.inputMode == InputMode.VOICE || uiState.inputMode == InputMode.VIDEO) {
                         append(" freeTalk=${uiState.voicePrefs.freeTalk}")
-                        if (freeSpeech.running) append("(listening" + (if (freeHearing) ",hearing)" else ")"))
-                        else append("(off)")
+                        append(" asrEngine=${uiState.voicePrefs.asrEngine.name.lowercase()}")
+                        if (uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM) {
+                            append("(avail=${systemAsr.isAvailable()}")
+                            if (systemAsr.running) append(",listening" + (if (freeHearing) ",hearing" else ""))
+                            append(")")
+                        } else if (freeSpeech.running) {
+                            append("(listening" + (if (freeHearing) ",hearing)" else ")"))
+                        } else {
+                            append("(off)")
+                        }
                     }
                 }
             },
@@ -1573,6 +1669,19 @@ private fun DemoScreen(
                 uiState.updateVoicePrefs(uiState.voicePrefs.copy(freeTalk = new))
                 "freeTalk=$new (mode=${uiState.inputMode.name.lowercase()}, " +
                     "listening=${freeSpeech.running})"
+            },
+            // ai_cmd set_asr cloud|system：切语音识别引擎（freeTalk 开着也会即时切换，
+            // 生命周期 LaunchedEffect 的 asrEngine key 驱动两个控制器互斥启停）
+            setAsrEngine = { arg ->
+                val engine = when (arg?.lowercase()) {
+                    "cloud", "cloud_asr", "sf", "openai" -> AsrEngine.CLOUD
+                    "system", "google", "device" -> AsrEngine.SYSTEM
+                    null -> throw IllegalArgumentException("set_asr expects cloud|system, got null")
+                    else -> throw IllegalArgumentException("set_asr expects cloud|system, got '$arg'")
+                }
+                uiState.updateVoicePrefs(uiState.voicePrefs.copy(asrEngine = engine))
+                "asrEngine=${engine.name.lowercase()} " +
+                    if (engine == AsrEngine.SYSTEM) "(avail=${systemAsr.isAvailable()})" else "(cloud chain follows LLM provider)"
             },
             // ai_cmd set_expression：走 FaceDriver 手动表情通道（缓动进场、保持不归零）
             manualExpression = { name, weight ->

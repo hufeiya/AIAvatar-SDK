@@ -7,7 +7,8 @@ import kotlinx.serialization.json.put
 /**
  * AI 服务商目录：端点、可选模型、音色清单与默认值全部收口在这一个枚举——
  * 设置页除 API Key 外的所有 AI 配置都是下拉框选择，杜绝手输模型名（2026-10
- * 双厂商打通：硅基流动 + 火山引擎）。
+ * 多厂商：硅基流动 + 火山引擎 + OpenRouter〔面向海外用户，一把 key 通吃
+ * 大模型/TTS/ASR〕）。
  *
  * 模型/音色清单均经真实接口核验（LLM 三项在 /v1/models 在册；硅基流动 TTS
  * 两模型音色引用互认，火山 seed-tts-2.0 六音色实测可合成），默认值按需求指定。
@@ -107,6 +108,52 @@ enum class AiProvider(
         ttsKeyLabel = "豆包语音 API Key（语音合成用）",
         ttsKeyHint = "粘贴豆包语音控制台 Key",
     ),
+    OPENROUTER(
+        label = "OpenRouter",
+        baseUrl = "https://openrouter.ai/api/v1",
+        // 2026-10-05 host 实测核验（64px 红图逐个过=真视觉；gemini-3.8/gpt-5-nano
+        // 系 reasoning 强制开启、请求关思考 400，好在 flash 系自适应思考很快，
+        // 不发参数即可；qwen3.7-flash 关思考有效、claude 默认不思考）
+        llmModels = listOf(
+            "google/gemini-3.8-flash",
+            "openai/gpt-6-luna",
+            "qwen/qwen3.7-flash",
+            "anthropic/claude-sonnet-4.6",
+        ),
+        visionLlmModels = listOf(
+            "google/gemini-3.8-flash",
+            "openai/gpt-6-luna",
+            "qwen/qwen3.7-flash",
+            "anthropic/claude-sonnet-4.6",
+        ),
+        // OpenRouter /audio/speech 只认 mp3/pcm（wav 请求体不认）；TTS 模型
+        // 各有独立音色表，只收一个默认模型防音色跨模型泄漏（同火山单模型模式）
+        ttsModels = listOf("mistralai/voxtral-mini-tts-2603"),
+        defaultTtsModel = "mistralai/voxtral-mini-tts-2603",
+        voicePrefix = null,
+        // Voxtral 30 音色的精选子集（API supported_voices 实测在册）：语言_说话人_情绪；
+        // 零余额账户实测可合成（en/gb/fr 三说话人 × 核心情绪）
+        voices = listOf(
+            "en_paul_neutral",
+            "en_paul_happy",
+            "en_paul_excited",
+            "en_paul_sad",
+            "en_paul_confident",
+            "gb_oliver_neutral",
+            "gb_oliver_cheerful",
+            "gb_oliver_excited",
+            "gb_jane_neutral",
+            "gb_jane_curious",
+            "gb_jane_sarcasm",
+            "fr_marie_neutral",
+        ),
+        defaultVoice = "en_paul_neutral",
+        // 一把 key 通吃 大模型/TTS/ASR（同硅基流动模式）
+        llmKeyLabel = "OpenRouter API Key",
+        llmKeyHint = "sk-or-v1-...",
+        ttsKeyLabel = "OpenRouter API Key（语音合成用）",
+        ttsKeyHint = "sk-or-v1-...",
+    ),
     ;
 
     /** TTS 模型展示名：剥掉组织前缀（fnlp/MOSS-TTSD-v0.5 → MOSS-TTSD-v0.5）。 */
@@ -162,9 +209,11 @@ fun resolveEdgeVoice(configured: String): String {
 }
 
 /** 旧版 prefs 只有 baseUrl；按端点推断服务商（迁移用，纯函数可测）。 */
-fun inferProviderFromBaseUrl(baseUrl: String): AiProvider =
-    if (baseUrl.contains("volces.com", ignoreCase = true)) AiProvider.VOLCANO
-    else AiProvider.SILICONFLOW
+fun inferProviderFromBaseUrl(baseUrl: String): AiProvider = when {
+    baseUrl.contains("volces.com", ignoreCase = true) -> AiProvider.VOLCANO
+    baseUrl.contains("openrouter.ai", ignoreCase = true) -> AiProvider.OPENROUTER
+    else -> AiProvider.SILICONFLOW
+}
 
 /**
  * 旧版只有一个「火山引擎 API Key」字段（单字段时代两把 key 填过哪把算哪把）；
@@ -219,6 +268,11 @@ fun resolveTtsModel(provider: AiProvider, configured: String): String {
  *   Qwen3 系混合推理模型**默认开思考**，不显式传 false 就会思考——同样的
  *   `reasoning_content` 隐形等待（2026-10-04 用户实测千问慢的根因）。
  *   Qwen3-VL-Instruct 本身非思考模型，该参数对其是无害 no-op 一并带上。
+ * - OpenRouter Qwen 系：统一参数 `reasoning: {"enabled": false}`（实测有效，
+ *   一句话 235 思考 token → 2）。⚠ 只对 Qwen 发：OpenRouter 部分模型
+ *   （gemini-3.8-flash / gpt-5-nano 系）reasoning **强制开启**，收到关思考
+ *   请求直接 400 "Reasoning is mandatory"（2026-10-05 实测）；gemini flash
+ *   自适应思考很快、claude/gpt-6-luna 默认不思考，都不发参数。
  *
  * 其余模型（deepseek 系等）不认识这些参数，返回 null 不发，避免严格端点 400。
  */
@@ -229,8 +283,28 @@ fun llmExtraBody(provider: AiProvider, model: String): JsonObject? {
             buildJsonObject { put("thinking", buildJsonObject { put("type", "disabled") }) }
         provider == AiProvider.SILICONFLOW && m.startsWith("Qwen/Qwen3") ->
             buildJsonObject { put("enable_thinking", false) }
+        provider == AiProvider.OPENROUTER && m.startsWith("qwen/") ->
+            buildJsonObject {
+                put("reasoning", buildJsonObject { put("enabled", false) })
+            }
         else -> null
     }
+}
+
+/**
+ * 语音识别（ASR）实际生效的服务商：OpenRouter 的 /audio/transcriptions 与
+ * 硅基流动同构（OpenAI 兼容 multipart），跟随大模型服务商共用那把 key；
+ * 火山不提供该形态的 ASR 端点，回落硅基流动（既有行为：火山大模型用户
+ * 需另填硅基流动 Key 做语音识别）。
+ */
+fun asrProviderFor(llmProvider: AiProvider): AiProvider =
+    if (llmProvider == AiProvider.VOLCANO) AiProvider.SILICONFLOW else llmProvider
+
+/** ASR 模型下拉的显式候选（「自动」之外）；留空时按端点推断见 [resolveAsrModel]。 */
+fun asrExplicitAsrModels(provider: AiProvider): List<String> = when (provider) {
+    AiProvider.SILICONFLOW -> listOf("Qwen/Qwen3-ASR-1.7B")
+    AiProvider.OPENROUTER -> listOf("openai/whisper-large-v3")
+    AiProvider.VOLCANO -> emptyList()
 }
 
 /**

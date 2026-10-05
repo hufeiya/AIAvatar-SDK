@@ -52,9 +52,9 @@ internal class AiChatDebugHooks(
     val setInputMode: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd show_buttons on|off（无参=翻转）：显隐所有悬浮按钮（切换输入模式外的话题）。 */
     val showButtons: (String?) -> String = { _ -> "AI chat not wired in this screen" },
-    /** ai_cmd set_provider siliconflow|volcano：切大模型服务商（模型清单随之切换）。 */
+    /** ai_cmd set_provider siliconflow|volcano|openrouter：切大模型服务商（模型清单随之切换）。 */
     val setProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
-    /** ai_cmd set_tts_provider siliconflow|volcano：TTS 独立服务商切换（自动取消同服务商勾选）。 */
+    /** ai_cmd set_tts_provider siliconflow|volcano|openrouter：TTS 独立服务商切换（自动取消同服务商勾选）。 */
     val setTtsProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_llm_model <清单id>：当前服务商下的大模型切换（清单校验，视频模式验证用）。 */
     val setLlmModel: (String?) -> String = { _ -> "AI chat not wired in this screen" },
@@ -70,6 +70,8 @@ internal class AiChatDebugHooks(
     val videoStatusLine: () -> String? = { null },
     /** ai_cmd voice_free on|off（无参=翻转）：按住说话 ⇄ 自由说话切换。 */
     val setVoiceFree: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd set_asr cloud|system：切语音识别引擎（云端=跟随大模型服务商；系统=平台 SpeechRecognizer）。 */
+    val setAsrEngine: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /**
      * ai_cmd set_expression <名字> [强度]：走 FaceDriver 手动表情通道（缓动
      * 进场、不自动归零）；null = 无会话，executor 直写控制器（即时，一帧）。
@@ -288,6 +290,10 @@ internal suspend fun executeAiCommand(
             "voice_free" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setVoiceFree(command.arg)
+            }
+            "set_asr" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setAsrEngine(command.arg)
             }
             "skill_status" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")

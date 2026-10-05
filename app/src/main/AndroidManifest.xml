@@ -8,6 +8,18 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
+    <!-- 系统语音识别（SystemAsr.kt）：Android 11+ 包可见性过滤——不声明
+         <queries> 时 RecognitionService/RECOGNIZE_SPEECH 的解析一律为空，
+         isRecognitionAvailable 与自建的可用性兜底都看不到识别服务 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

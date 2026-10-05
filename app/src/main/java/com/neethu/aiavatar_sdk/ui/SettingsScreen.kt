@@ -72,8 +72,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.neethu.aiadapter.openai.SiliconFlowVoiceCatalog
 import com.neethu.aiadapter.openai.TtsVoiceOption
+import com.neethu.aiavatar_sdk.AsrEngine
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.AiProvider
 import com.neethu.aiavatar_sdk.ConversationContextSummary
@@ -81,6 +83,9 @@ import com.neethu.aiavatar_sdk.EdgeTtsCatalog
 import com.neethu.aiavatar_sdk.FreeSpeechSettings
 import com.neethu.aiavatar_sdk.TtsEngine
 import com.neethu.aiavatar_sdk.VoicePrefs
+import com.neethu.aiavatar_sdk.asrExplicitAsrModels
+import com.neethu.aiavatar_sdk.isSystemAsrAvailable
+import com.neethu.aiavatar_sdk.asrProviderFor
 import com.neethu.aiavatar_sdk.composeVoiceRef
 import com.neethu.aiavatar_sdk.resolveEdgeVoice
 import com.neethu.aiavatar_sdk.resolveLlmModel
@@ -117,6 +122,7 @@ private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): A
     when (provider) {
         AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcano = key)
+        AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
     }
 
 /** 写语音合成服务的 API Key（火山写豆包语音那把，与大模型 key 互不通用）。 */
@@ -124,6 +130,7 @@ private fun withTtsApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String)
     when (provider) {
         AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcanoTts = key)
+        AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
     }
 
 /**
@@ -197,6 +204,7 @@ internal fun SettingsScreen(
     onDeleteContext: (ConversationContextSummary) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     // ── 半屏 ⇄ 全屏：拖动标题连续调整，松手按阈值吸附 ──────────────────────
     var heightFraction by remember { mutableStateOf(SHEET_HALF_FRACTION) }
     val animatable = remember { Animatable(SHEET_HALF_FRACTION) }
@@ -423,10 +431,18 @@ internal fun SettingsScreen(
                             }
 
                             // ── 语音识别（ASR）─────────────────────────────
-                            SettingsGroupLabel("语音输入（按住说话 · ASR 仅硅基流动）")
-                            // 硅基流动 Key 在上面没露过面（LLM 与 TTS 都不走硅基流动）时，
-                            // ASR 需要单独填一份
-                            if (aiPrefs.provider != AiProvider.SILICONFLOW && ttsProvider != AiProvider.SILICONFLOW) {
+                            // ASR 跟随大模型服务商（硅基流动/OpenRouter 同构端点），
+                            // 火山回落硅基流动——硅基流动 Key 在上面没露过面
+                            // （LLM 不走硅基流动、TTS 也不走硅基流动）时单独填一份
+                            val asrProvider = asrProviderFor(aiPrefs.provider)
+                            SettingsGroupLabel(
+                                "语音输入（按住说话 · ASR 走${asrProvider.label}${if (aiPrefs.provider == AiProvider.VOLCANO) "（火山回落）" else ""}）"
+                            )
+                            if (asrProvider == AiProvider.SILICONFLOW &&
+                                aiPrefs.provider != AiProvider.SILICONFLOW &&
+                                ttsProvider != AiProvider.SILICONFLOW &&
+                                voicePrefs.asrEngine == AsrEngine.CLOUD
+                            ) {
                                 SettingsTextFieldRow(
                                     title = "硅基流动 API Key（语音识别用）",
                                     value = aiPrefs.apiKeySiliconflow,
@@ -434,14 +450,31 @@ internal fun SettingsScreen(
                                     password = true
                                 ) { onAiPrefsChange(withApiKey(aiPrefs, AiProvider.SILICONFLOW, it)) }
                             }
+                            // ── 识别引擎：云端（跟随大模型服务商）或系统内置（免费）──
+                            SettingsDropdownRow(
+                                title = "识别引擎",
+                                options = AsrEngine.entries.map { DropdownOption(it.name, it.label) },
+                                selectedValue = voicePrefs.asrEngine.name,
+                            ) { value ->
+                                onVoicePrefsChange(voicePrefs.copy(asrEngine = AsrEngine.valueOf(value)))
+                            }
+                            if (voicePrefs.asrEngine == AsrEngine.SYSTEM) {
+                                // 系统识别：平台 SpeechRecognizer（GMS=Google，国产 ROM=厂商服务）
+                                val systemAsrReady = remember { isSystemAsrAvailable(context) }
+                                SettingsGroupLabel(
+                                    if (systemAsrReady) "本机可用：系统语音识别服务已就绪（免费、无 Key、不消耗云端额度）；虚拟人说话期间自动暂停聆听"
+                                    else "本机不可用：未检测到系统语音识别服务（无 Google 服务/厂商服务），请改用云端识别"
+                                )
+                            } else {
                             SettingsDropdownRow(
                                 title = "ASR 模型",
-                                options = listOf(
-                                    DropdownOption("", "自动（推荐）"),
-                                    DropdownOption("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"),
-                                ),
+                                options = listOf(DropdownOption("", "自动（推荐）")) +
+                                    asrExplicitAsrModels(asrProvider).map {
+                                        DropdownOption(it, it)
+                                    },
                                 selectedValue = voicePrefs.asrModel,
                             ) { onVoicePrefsChange(voicePrefs.copy(asrModel = it)) }
+                            }
                             SettingsSwitchRow(
                                 title = "语音直接发送",
                                 subtitle = "松手识别成功即发送；关闭则识别文本先填入输入框，确认后再发",
@@ -644,6 +677,11 @@ internal fun SettingsScreen(
                             expanded = SECTION_FREE_SPEECH in expandedSections,
                             onToggle = { toggleSection(SECTION_FREE_SPEECH) }
                         ) {
+                            if (voicePrefs.asrEngine == AsrEngine.SYSTEM) {
+                                SettingsGroupLabel(
+                                    "当前识别引擎为系统识别：断句由系统服务决定，以下灵敏度参数仅对云端识别生效"
+                                )
+                            }
                             SettingsGroupLabel("语音端点检测参数；改动实时生效并持久化，门限越低越灵敏")
                             SettingsActionRow(
                                 title = "恢复默认",
