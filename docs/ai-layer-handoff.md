@@ -29,6 +29,7 @@
 | `api/TtsAdapter.kt` | `suspend synthesize(text, config): TtsResult`（V1 句级整段返回） |
 | `volcengine/VolcanoEngineTtsAdapter.kt` | 火山「豆包语音合成大模型 2.0」适配（双服务商改造）：V3 双向流式 WebSocket（`wss://openspeech.bytedance.com/api/v3/tts/bidirection`）对外仍是句级整段语义——每次合成开一条连接跑完 StartConnection→StartSession→TaskRequest(整句)→FinishSession→收音频→SessionFinished；鉴权 `X-Api-Key`（豆包语音控制台的 API Key）+ `X-Api-Resource-Id: seed-tts-2.0`；输出恒 PCM 16bit LE（`audio_params.format=pcm`，采样率取 TtsConfig.sampleRate 默认 16k），口型管线免解码直喂；二进制帧 4 字节头 `[ver<<4|hsize, type<<4|flags, ser<<4|comp, 0]` + event(i32) + 可选 conn/session id(u32len+bytes) + payload(u32len)，编解码对齐火山官方 arkitect Python SDK；`endpoint` 参数可注入（MockWebServer ws 测试）；每条消息 30s 看门狗防管道悬挂 |
 | `api/AsrAdapter.kt` + `openai/OpenAiCompatibleAsrAdapter.kt` | 语音输入（任务 4）：`suspend transcribe(audio, mime, config): String`；OpenAI 兼容 `POST {base}/audio/transcriptions`（multipart `model`+`file`，文件名/Content-Type 由 mime 推导，m4a→`audio/mp4`）；language/prompt 缺省不发送（硅基流动只收 file+model，多余字段有 400 风险）；非 2xx 与 200 非 JSON 都带响应预览抛 IOException（A.1 第 11 条同源教训） |
+| `edge/EdgeTtsAdapter.kt` | **Edge-TTS 免费适配器（任务 6，开源友好，无需 baseUrl/Key）**：微软 Edge「大声朗读」WSS 端点（`speech.platform.bing.com/.../edge/v1`），协议逐字对齐开源 edge-tts(python)——`Sec-MS-GEC` 鉴权参数=Windows file time（+11644473600 秒）向下取整 300s ×10⁷ 拼 TrustedClientToken 求 SHA-256 大写（`EdgeTtsDrm`，403 时按服务端 Date 头校时钟偏移重试一次）；文本消息 speech.config→ssml 两连发（XML 转义/控制字符清洗/4096 字节按词界+UTF-8+实体边界切分，上游语义：无空格不硬截断）；服务端 BINARY 前 2 字节大端头长+`Path:audio` 分片顺序拼接，`Path:turn.end` 终结；输出恒 **MP3 24kHz**（`audio-24khz-48kbitrate-mono-mp3`，实测端点**只认这一种** outputFormat），PcmDecoder MediaCodec 路径直解；每条消息 30s 看门狗；空文本/空音频/提前断连/未知 Path 全部带上下文抛 IOException（无 SLA，错误事件必须明确） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
 | `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
@@ -261,6 +262,15 @@
   - **观测**：REQUEST 头行与 `prompt:` 行改 `sys=full|brief persona=Nch|omitted protocol=Nch|off|omitted`（off=protocolInstructions 关/目录空）；**`REQUEST system` 分段日志每轮整条落完整 system 消息**（full=前言+人设+协议目录，brief=只有前言；2026-10-05 深夜按用户要求从 persona/protocol 各自转储改为整条转储——身份前言此前从未落日志，精简轮 system 完全不可见，grep `[InfoStreamDectect]` 配合 REQUEST user 行即可逐轮审计模型实际收到的全部内容）；设置页「协议提示词」只读展示不变。
   - **单测**：`AvatarSessionProtocolPinTest` 再重写 +2（首轮 full 形态断言前言在最前/后续只带前言且逐字节稳定/**失败不提交→重发→成功后恢复**/**挂起被打断同上**〔HangFirstLlm flow+awaitCancellation〕/目录变更重发/同 store 双实例重建自愈/clearHistory 重发/人设变更重发无残留/开关关闭省目录与提醒段）；`AvatarSessionTagsTest` 相机关闭断言改 `<cam:机位>`——前言的协议遵循提醒合法含 `<cam:` 家族写法，旧断言 `<cam:` 会误中（测试坑：**提醒文本与被测内容共用 token 字面量时断言要用更长的专属串**）。
 
+- **任务 6 已完成（2026-10-05，真机 62fabe84；Edge-TTS 免费适配器，开源友好）**：
+  - **adapter**：`edge/EdgeTtsAdapter.kt`（见 2.1 表）。实现前先抓取 edge-tts(python) master 源码逐行对齐（drm.py/constants.py/communicate.py），**Sec-MS-GEC 算法不凭记忆写**；host 端 Python 实测三件事：①端点连通+默认 mp3 可合成；②**outputFormat 只认 `audio-24khz-48kbitrate-mono-mp3`**——riff-24khz/16khz-pcm、audio-16khz-32kbitrate-mp3 全部不出声（服务端静默，无 turn.end），wav 免解码直喂口型管线的路走不通；③**7200 字节无空格中文整段 SSML 端点接受**（上游 split_text_by_byte_length 的"无空格不硬截断"语义安全，锁进单测防顺手"修正"）。音色目录 11 个候选逐个实测（4 个不存在的名字剔除后收录，`EdgeTtsCatalog`）。
+  - **app 接线**：`TtsEngine` 枚举（OpenAI 兼容/Edge-TTS）+ prefs `ai_tts_engine`；设置页 TTS 区块首行「TTS 引擎」下拉，选 Edge-TTS 时「同服务商」勾选框/TTS 服务商/Key/模型四行全部旁路，音色下拉用 Edge 目录（`resolveEdgeVoice` 校验+默认，跨引擎残留值如 CosyVoice 引用落默认晓晓）；`isConfigured` 拆出 `ttsReady`（EDGE 恒 true=**不填任何 TTS Key 即就绪**，OpenAI 兼容仍要求 Key）；`AiChatController.ensure` 按引擎装配 `EdgeTtsAdapter()` + `TtsConfig(responseFormat="mp3")`（mp3 容器自带采样率，sampleRate 不传）；`chat_state` 快照加 `ttsEngine=`；会话身份含 ttsEngine（切换即重建会话），`llmIdentitySignature` 不含（不轮换上下文）。
+  - **单测 +20（全量 366 全绿：app96/corelib44/adapter71/orchestrator155 debug 变体）**：adapter +17（Sec-MS-GEC 已知答案×2——python hashlib 独立算出向量；5 分钟桶稳定性；happy path 断言握手 URL 鉴权参数/User-Agent/Origin/Cookie 与 speech.config→ssml 消息序/X-Timestamp 尾 Z；SSML XML 转义；speed→rate 映射；空音色兜底；turn.end 无音频/提前断连/未知 Path/空文本四类错误路径；403+服务端 Date 校偏重试一次且第二次请求 token=按服务端时间算的值；文本预处理纯函数——控制字符/转义/按空格切分不超限/无空格整段/实体不切断）；app +3（resolveEdgeVoice 校验+默认+跨引擎防泄漏；目录唯一性+默认在册；`ttsReady` EDGE 无 Key 就绪 & OpenAI 兼容需 Key & 不影响 LLM 侧判定）。
+  - **测试基建坑（A.1 第 39 条）**：MockWebServer 剧本服务端回完终态必须 `webSocket.close(1000, null)`（否则 shutdown 等连接排空超时，症状是 tearDown 挂 30s 全用例连坐——火山测试同款写法）；**OkHttp 服务端先关闭时只有 `onClosing` 回调，`onClosed` 仅在客户端自己已 enqueue close 后才触发**——适配器只覆盖 onClosed 的话"无 turn.end 直接断连"会挂满 30s 看门狗，修法=onClosing 里折算 closed 事件并回 close 完成握手。
+  - **真机验证（62fabe84，HyperOS；run-as 注入 `ai_tts_engine=EDGE`，设备原有 CosyVoice 音色引用残留=跨引擎回落实测场）**：`chat_state` → `ttsEngine=edge voice=zh-CN-XiaoxiaoNeural`（残留引用正确落默认）；`send_chat` 两轮全链路——首轮 4 句 SentenceQueued→Started→Ended（句长 2.1/3.9/4.5/3.7s=真实音频时长）、`TurnCompleted subtitleLen=59` 零 TurnFailed，二轮 6 句同样全通；FaceDriver viseme 跟随 Edge 音频（volume 峰值 0.72，24kHz MP3 解码→分数降采样路径工作）；字幕零标签泄漏（截图存档 /tmp/edge_tts_e2e.png，会话产物未入库）；全程零 FATAL。验完设备 prefs 已还原（移除注入键）。
+  - **已知取舍**：①24kHz 解码后走 wLipSync 分数降采样路径，口型匹配质量略降（免费引擎可接受，wav 格式实测被端点拒绝无解）；②接口无 SLA 且协议常变（Chromium 版本号/U-A 需跟随 edge-tts 上游更新，`EdgeTtsDrm.CHROMIUM_FULL_VERSION` 处注释了回来对齐的锚点），403 长期出现先校对齐常量；③错误路径（无 SLA 的一部分）单测覆盖+真实失败走 TurnFailed 错误条（与火山适配器同一条管线），未真机人为断网复验。
+
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
@@ -289,7 +299,7 @@
   - **火山引擎**：LLM=方舟 Ark `https://ark.cn-beijing.volces.com/api/v3`（OpenAI 兼容 chat/completions；6 个模型 chat 实测 5 通——doubao-seed-2-0-mini(默认)/2-1-turbo/2-1-pro/deepseek-v4-flash-ga/seed-character 均回包，**seedream-5-0-pro 是图像模型 chat 报 RPM 限额**）；TTS=豆包语音 seed-tts-2.0（V3 WebSocket，`X-Api-Key` + `X-Api-Resource-Id: seed-tts-2.0`，音色 zh_female_vv_uranus_bigtts 默认等 6 个）；两把 key 分字段存储见 2.4 双服务商条目
   - 密钥明文：仓库根 `secrets.properties`（已 gitignore）：SILICONFLOW_API_KEY / VOLCANO_TTS_API_KEY / VOLCANO_ARK_API_KEY(待补)；设备侧经 run-as 写入 demo_settings（`ai_api_key_siliconflow`/`ai_api_key_volcano`）
 - 填写入口：App ⚙️ 设置 →「AI 配置」→ 选服务商 + 填 Key 即可对话（模型/音色留空=默认）。
-- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（2026-10-05 起 app 84 / corelib 44 / adapter 54 / orchestrator 138，debug 变体全绿，视频模式起 app 也有纯 JVM 单测）
+- 单测：`./gradlew :avatar-ai-adapter:test :avatar-orchestrator:testDebugUnitTest :app:testDebugUnitTest :corelib:testDebugUnitTest`（2026-10-05 起 app 96 / corelib 44 / adapter 71 / orchestrator 155，debug 变体全绿，视频模式起 app 也有纯 JVM 单测）
 - 构建/安装：`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - 设备：`2c3769db`（本次双厂商验证机，adb input 可用）与 `62fabe84`（小米14/HyperOS，禁 shell input）；日志关注 `adb logcat -d -s AIDebug`（调试命令与事件）与 `adb logcat -d -s AndroidRuntime:E`（崩溃）与 UI 错误条（TurnFailed）。
 
@@ -393,7 +403,7 @@ API Key: <在这里贴上Key>
 提交代码,附真机截图。
 ```
 
-### 任务 6：Edge-TTS 免费适配器（开源友好）
+### 任务 6：Edge-TTS 免费适配器（开源友好）（✅ 已完成，2026-10-05，见第二章 2.4 末条）
 
 ```
 继续 AIAvatar-SDK 的 AI 层工作。先读 docs/ai-layer-handoff.md 第二章。
@@ -630,6 +640,8 @@ LLM SSE delta
 37. **"mesh 消失"先查视锥剔除，再查变换写坏（2026-10-04 眼球丢失根因，排查顺序的教训）**：用户报「多轮对话后眼球丢失、透过眼窝看到后脑勺内壁、表情/动作/视角后易现」——完全可恢复（换机位即回），这一条就排除"变换被写坏"（坏值不会自己好）。真正的坑在渲染层：**gltfio 给蒙皮 mesh 的 culling 包围盒=绑定姿态静态盒，违反 Filament Builder 合同（蒙皮/morph 须包住所有可能顶点位置）**。剔除只看「静态盒×相机视锥」，与骨骼姿态无关——特写/宏距（0.45~0.8m）视锥极窄，运镜 steering 追头部枢轴+注视转头让相机在目标位姿附近摆动，某些位姿静态盒（钉在模型根空间的前向眼窝位置）整体出锥，整个 renderable 被剔除；眼球是最小蒙皮 mesh（盒 ~2.5cm、离枢轴又远）最先中招，眉/睫/鼻在别的更大盒里所以周围完好；眼珠顶点跟着头走、静态盒留在原位，用户看到的就是「空眼窝+能看进头骨内壁（MAT_SUN_EYES doubleSided）」。修法=角色 renderable 全部 `setCulling(false)`（常驻视野的小模型没有代价；`ai_cmd culling` 可 A/B）。**方法论沉淀：①"可恢复的 mesh 消失"=剔除类问题（culling/near-plane），"不可恢复"=变换/资源类问题——先问用户能不能自己好；②静态分析穷尽写入路径仍找不到根源时，直接上"运行时开关 A/B"（本次 `culling on/off` 同会话同态切换，两帧对比定案）比继续读代码快得多；③混合压测脚本（ai_cmd 序列化复刻用户操作面）是复现"不好复现"类 bug 的唯一手段——原复现需要 9 轮预热状态+video/macro 组合才中招，手点大概率错过；④同类风险：morph 大位移的小 mesh 也会顶出静态盒，症状相同同修法。**
 
 38. **呼吸上线后「头部抽搐」四轮攻坚（2026-10-04~05，检测方法学+反馈环放大的完整案例）**：呼吸（脊椎链 ±4.6° 平滑正弦、15 次/分）上线后用户持续报告「头部抽搐、无过渡、身体平滑」。**真根因（两层）**：①`GazeMath.matToQuat` 对含 transformToUnitCube 根缩放（0.699）的世界矩阵直接 Shepperd 提取，偏差随真实姿态非线性变化（θ=30° 实测差 ~4°，见「顺带发现」条）——呼吸让头世界姿态连续变化 → 提取偏差随之摆动 → **视线引擎把带偏差的测量当真实朝向，追逐幻影误差写头颈补偿 → 真实头部以呼吸节奏抽搐**；②`quatAngle` 的 acos 实现带 `dot≥1−1e-6→0` 保护形成 0.16° 测量死区，strip 单信号推断在死区内失灵。无呼吸时头姿态恒定→偏差恒定→补偿恒定→从不抽搐——这就是抽搐恰随呼吸出现的原因。**修**：matToQuat 三列基向量归一化后再提取（任意缩放精确）+ quatAngle 改 2·atan2（无死区）+ strip 换 BreathBaseResolver 双信号（动画分支前快照）+ WRITE_EPS→1e-5（eps 跳写的 0.1° 台阶是发骨弹簧的抖动激励）+ saccade jitter→0。修复后逐帧验证：头世界姿态 30s 零跳变，逐帧变化 0.081°/帧与理论 0.075° 吻合。**方法论沉淀（检测器设计）**：①骨骼微动归因的终极仪器=「每帧骨骼世界姿态日志」（logcat 直读渲染状态，无死区）——摄像头/像素差分有三重盲区（编码丢帧抓不到单帧瞬态、块均值稀释局部微动、阈值误判），单轴角度代理有轴向盲区（旋转轴与骨骼 +Z 近平行时读数趋零）；②四骨（spine/chest/uc/neck+head）同步对比一跳定写入者——跳变沿链放大到哪根骨、哪对骨同步（neck+head=lookAt 的 0.35/0.65 增益对），写入者即现形；③测量函数自身的「保护性返回」（如近 1 归零）就是检测死区，新检测器先审自己的边界；④瞬时抽搐的特征=孤立尖峰（前后帧静、单帧大），别把平滑快运动的峰值帧误判成尖峰。**方法论沉淀（反馈环原理）**：⑤「数值提取函数的精度偏差」经反馈环会变成「执行器抖动」——精度问题不只是精度问题；偏差恒定时（静态）不可见，持续运动系统（呼吸）让偏差摆动后立即显形；⑥文档在案的「精度nit」在新增持续运动系统时必须重新评估其系统性影响。**方法论沉淀（调试过程）**：⑦四轮误诊（幅度→呈现率→saccade→对冲）每轮都改了多变量且测量不可靠——结论自然站不住；隔离实验（单骨 90° 折叠、25° 方波、恒定 vs 正弦）是二分利器，但必须确保「实验条件」跨构建一致（fold/square 从满角度起步、strip 永不触发，对正弦的小角度爬升是假阴性——本次最大的弯路）；⑧用户的定性观察（「99%静止」「无过渡」「不随头」「和背景画质无关」）四轮全部被逐帧数据证实，比仪器结论可靠——仪器与用户观察冲突时先怀疑仪器与测量方法；⑨用户提议的「先 Python 仿真」一轮定位了纯算法问题（strip 吸收态）——先仿真后真机的顺序是对的；⑩写入端逐帧验证（tgt=written）+ 世界端逐帧读取两端夹逼，可把断裂点钉死到具体环节。另：「SK_Sun 弹簧=0」旧结论错误（实为 8 链 25 关节，6 Hair+2 Bust）——文档结论要注明验证方式，防止以讹传讹。
+
+39. **OkHttp WebSocket 的关闭回调语义（任务 6 MockWebServer 测试全连挂 30s 的根因）**：服务端先发 close 帧时 OkHttp（4.12 RealWebSocket.onReadClose）**只回调 `onClosing`，`onClosed` 仅在客户端自己已 enqueue close 之后才触发**——适配器监听器只覆盖 onClosed 的话，"服务端无终态直接断连"这类失败会静默挂到看门狗超时（30s/条，SpeechPipeline 句级并发槽被白白占用）。修法=`onClosing` 里立即折算成 closed 事件并回 `close(1000)` 完成握手（OkHttp 文档的 well-behaved client 语义）。**测试侧同坑**：MockWebServer 的剧本服务端回完终态必须自己 `webSocket.close(1000, null)`（真实服务端终态后即断连），否则 `MockWebServer.shutdown` 等连接排空超时——症状是 synthesize 断言全过、tearDown 全用例连坐挂 30s（火山适配器测试同款写法，抄测试别抄漏这一行）。
 
 ### A.2 调参速查表
 

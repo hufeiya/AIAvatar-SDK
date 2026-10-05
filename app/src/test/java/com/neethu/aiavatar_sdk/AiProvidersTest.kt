@@ -269,3 +269,55 @@ class AiProvidersTest {
         assertEquals(null, llmExtraBody(AiProvider.SILICONFLOW, ""))
     }
 }
+
+// ── TTS 引擎与 Edge-TTS 目录（任务 6）────────────────────────────────────
+
+class EdgeTtsCatalogTest {
+
+    @Test
+    fun `edge voice resolution validates against catalog and falls back to default`() {
+        assertEquals("zh-CN-XiaoxiaoNeural", resolveEdgeVoice(""))
+        assertEquals("zh-CN-XiaoxiaoNeural", resolveEdgeVoice("  "))
+        // 目录内音色原样放行
+        assertEquals("zh-CN-YunxiNeural", resolveEdgeVoice("zh-CN-YunxiNeural"))
+        // OpenAI 兼容引擎残留的音色引用不在目录 → 落默认（跨引擎防泄漏）
+        assertEquals(
+            "zh-CN-XiaoxiaoNeural",
+            resolveEdgeVoice("FunAudioLLM/CosyVoice2-0.5B:anna"),
+        )
+        assertEquals("zh-CN-XiaoxiaoNeural", resolveEdgeVoice("zh_female_vv_uranus_bigtts"))
+    }
+
+    @Test
+    fun `edge catalog is verified and unique`() {
+        assertTrue("音色目录不应为空", EdgeTtsCatalog.voices.isNotEmpty())
+        assertEquals(
+            "voice id 有重复",
+            EdgeTtsCatalog.voices.size,
+            EdgeTtsCatalog.voices.map { it.first }.toSet().size,
+        )
+        // 默认音色必须在目录里（isConfigured 与合成可用性的前提）
+        assertTrue(
+            "默认音色必须在目录里",
+            EdgeTtsCatalog.voices.any { it.first == EdgeTtsCatalog.DEFAULT_VOICE },
+        )
+    }
+
+    @Test
+    fun `edge tts engine needs no key and provider engine does`() {
+        // Edge-TTS：不填任何 Key 也算 TTS 就绪（开源友好，任务 6 验收前提）
+        val edge = AiChatPrefs(ttsEngine = TtsEngine.EDGE)
+        assertTrue(edge.ttsReady)
+
+        // OpenAI 兼容引擎：无 Key 不就绪；填了 Key 就绪
+        val openAi = AiChatPrefs(ttsEngine = TtsEngine.OPENAI_COMPATIBLE)
+        assertFalse(openAi.ttsReady)
+        assertTrue(openAi.copy(apiKeySiliconflow = "sk-x").ttsReady)
+
+        // TTS 引擎不影响大模型侧的 Key 判定
+        assertFalse(edge.isConfigured) // 只有 TTS 就绪，LLM 还没 Key
+        assertTrue(
+            edge.copy(apiKeyVolcano = "ark-x", provider = AiProvider.VOLCANO).isConfigured,
+        )
+    }
+}

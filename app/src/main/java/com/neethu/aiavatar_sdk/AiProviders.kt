@@ -119,6 +119,48 @@ enum class AiProvider(
     val defaultLlmModel: String get() = llmModels.first()
 }
 
+/**
+ * 语音合成引擎（任务 6，开源友好）：OpenAI 兼容（跟随下方 TTS 服务商配置，
+ * 需要 Key）或 Edge-TTS（微软 Edge「大声朗读」接口，免费、无需 baseUrl/Key；
+ * 接口无 SLA，失败由错误条给出明确提示）。
+ */
+enum class TtsEngine(val label: String) {
+    OPENAI_COMPATIBLE("OpenAI 兼容"),
+    EDGE("Edge-TTS（免费无 Key）"),
+}
+
+/**
+ * Edge-TTS 音色目录：**逐个实测可合成**（2026-10-05 host 端点探测，4 个候选
+ * 名不存在被剔除），显示名与存储值一致（voice id 原样，不再加引用前缀）。
+ */
+object EdgeTtsCatalog {
+    /** (voice id, 显示名)。 */
+    val voices: List<Pair<String, String>> = listOf(
+        "zh-CN-XiaoxiaoNeural" to "zh-CN-XiaoxiaoNeural（女·晓晓）",
+        "zh-CN-XiaoyiNeural" to "zh-CN-XiaoyiNeural（女·晓伊）",
+        "zh-CN-XiaoxuanNeural" to "zh-CN-XiaoxuanNeural（女·晓萱）",
+        "zh-CN-YunxiNeural" to "zh-CN-YunxiNeural（男·云希）",
+        "zh-CN-YunyangNeural" to "zh-CN-YunyangNeural（男·云扬）",
+        "zh-CN-YunjianNeural" to "zh-CN-YunjianNeural（男·云健）",
+        "zh-CN-YunxiaNeural" to "zh-CN-YunxiaNeural（男·云夏）",
+        "zh-CN-liaoning-XiaobeiNeural" to "zh-CN-liaoning-XiaobeiNeural（女·东北）",
+        "zh-CN-shaanxi-XiaoniNeural" to "zh-CN-shaanxi-XiaoniNeural（女·陕西）",
+        "en-US-EmmaMultilingualNeural" to "en-US-EmmaMultilingualNeural（女·多语种）",
+        "en-US-AndrewMultilingualNeural" to "en-US-AndrewMultilingualNeural（男·多语种）",
+    )
+
+    const val DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+}
+
+/**
+ * Edge-TTS 音色解析 = 校验 + 默认（与 [resolveVoice] 同语义）：存储值不在
+ * 目录（含从 OpenAI 兼容引擎切过来残留的 CosyVoice/火山音色引用）一律落默认。
+ */
+fun resolveEdgeVoice(configured: String): String {
+    val v = configured.trim()
+    return if (EdgeTtsCatalog.voices.any { it.first == v }) v else EdgeTtsCatalog.DEFAULT_VOICE
+}
+
 /** 旧版 prefs 只有 baseUrl；按端点推断服务商（迁移用，纯函数可测）。 */
 fun inferProviderFromBaseUrl(baseUrl: String): AiProvider =
     if (baseUrl.contains("volces.com", ignoreCase = true)) AiProvider.VOLCANO

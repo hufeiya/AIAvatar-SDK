@@ -77,9 +77,12 @@ import com.neethu.aiadapter.openai.TtsVoiceOption
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.AiProvider
 import com.neethu.aiavatar_sdk.ConversationContextSummary
+import com.neethu.aiavatar_sdk.EdgeTtsCatalog
 import com.neethu.aiavatar_sdk.FreeSpeechSettings
+import com.neethu.aiavatar_sdk.TtsEngine
 import com.neethu.aiavatar_sdk.VoicePrefs
 import com.neethu.aiavatar_sdk.composeVoiceRef
+import com.neethu.aiavatar_sdk.resolveEdgeVoice
 import com.neethu.aiavatar_sdk.resolveLlmModel
 import com.neethu.aiavatar_sdk.resolveTtsModel
 import com.neethu.aiavatar_sdk.resolveVoice
@@ -209,15 +212,17 @@ internal fun SettingsScreen(
 
     val toggleSection: (String) -> Unit = onToggleSection
 
-    // ── 音色清单接口拉取（尽力而为）：硅基流动 TTS 时拉 /audio/voice/list，
-    //    失败/为空由 voiceOptionsWithFetched 落回静态清单；火山无公开接口用静态。
+    // ── 音色清单接口拉取（尽力而为）：OpenAI 兼容引擎且硅基流动 TTS 时拉
+    //    /audio/voice/list，失败/为空由 voiceOptionsWithFetched 落回静态清单；
+    //    火山无公开接口用静态；Edge-TTS 引擎有自己的静态目录不拉取。
     val voiceCatalog = remember { SiliconFlowVoiceCatalog() }
     var fetchedVoices by remember { mutableStateOf<List<TtsVoiceOption>>(emptyList()) }
     val fetchProvider = aiPrefs.ttsProviderResolved
     val fetchKey = aiPrefs.apiKeyFor(fetchProvider)
-    LaunchedEffect(fetchProvider, fetchKey) {
+    val fetchEnabled = aiPrefs.ttsEngine == TtsEngine.OPENAI_COMPATIBLE
+    LaunchedEffect(fetchEnabled, fetchProvider, fetchKey) {
         fetchedVoices =
-            if (fetchProvider == AiProvider.SILICONFLOW && fetchKey.isNotBlank()) {
+            if (fetchEnabled && fetchProvider == AiProvider.SILICONFLOW && fetchKey.isNotBlank()) {
                 voiceCatalog.fetch(fetchProvider.baseUrl, fetchKey)
             } else {
                 emptyList()
@@ -330,7 +335,11 @@ internal fun SettingsScreen(
                             onToggle = { toggleSection(SECTION_AI) }
                         ) {
                             SettingsGroupLabel(
-                                if (aiPrefs.isConfigured) "已配置，保存后立即生效" else "选择服务商、填 API Key 即可对话"
+                                when {
+                                    aiPrefs.isConfigured -> "已配置，保存后立即生效"
+                                    aiPrefs.ttsEngine == TtsEngine.EDGE -> "填大模型 API Key 即可对话（Edge-TTS 免 Key）"
+                                    else -> "选择服务商、填 API Key 即可对话"
+                                }
                             )
                             // ── 大模型 ────────────────────────────────────
                             SettingsDropdownRow(
@@ -354,6 +363,24 @@ internal fun SettingsScreen(
                             ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
 
                             // ── 语音合成（TTS）─────────────────────────────
+                            // 下文 ASR 区块也引用（硅基流动 Key 显隐判定），提在引擎分支外
+                            val ttsProvider = aiPrefs.ttsProviderResolved
+                            SettingsDropdownRow(
+                                title = "TTS 引擎",
+                                options = TtsEngine.entries.map { DropdownOption(it.name, it.label) },
+                                selectedValue = aiPrefs.ttsEngine.name,
+                            ) { value ->
+                                onAiPrefsChange(aiPrefs.copy(ttsEngine = TtsEngine.valueOf(value)))
+                            }
+                            if (aiPrefs.ttsEngine == TtsEngine.EDGE) {
+                                // Edge-TTS（任务 6）：免费无 Key，服务商/Key/模型全旁路
+                                SettingsGroupLabel("Edge-TTS：微软朗读接口，免费、无需 Key（接口无 SLA，失败会提示）")
+                                SettingsDropdownRow(
+                                    title = "音色 Voice",
+                                    options = EdgeTtsCatalog.voices.map { DropdownOption(it.first, it.second) },
+                                    selectedValue = resolveEdgeVoice(aiPrefs.voice),
+                                ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
+                            } else {
                             SettingsCheckRow(
                                 title = "语音合成与 大模型 同服务商",
                                 subtitle = "勾选时 TTS 直接使用上面的大模型服务商；取消可为 TTS 单独选服务商（必要时单独填 Key）",
@@ -363,7 +390,6 @@ internal fun SettingsScreen(
                                 // 当前生效值，用户再显式改
                                 aiPrefs.copy(ttsSameProvider = it, ttsProvider = aiPrefs.ttsProviderResolved)
                             ) }
-                            val ttsProvider = aiPrefs.ttsProviderResolved
                             if (!aiPrefs.ttsSameProvider) {
                                 SettingsDropdownRow(
                                     title = "TTS 服务商",
@@ -394,6 +420,7 @@ internal fun SettingsScreen(
                                 options = voiceOptionsWithFetched(ttsProvider, fetchedVoices, resolveVoice(ttsProvider, aiPrefs.voice)),
                                 selectedValue = resolveVoice(ttsProvider, aiPrefs.voice),
                             ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
+                            }
 
                             // ── 语音识别（ASR）─────────────────────────────
                             SettingsGroupLabel("语音输入（按住说话 · ASR 仅硅基流动）")

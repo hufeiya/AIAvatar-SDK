@@ -3,6 +3,7 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.mutableStateOf
+import com.neethu.aiadapter.edge.EdgeTtsAdapter
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
@@ -36,6 +37,11 @@ data class AiChatPrefs(
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
     val ttsProvider: AiProvider = AiProvider.SILICONFLOW,
     val ttsModel: String = "",
+    /**
+     * TTS 引擎（任务 6）：默认 OpenAI 兼容（走上面的服务商配置）；选 Edge-TTS
+     * 时免费、无需 Key，模型/服务商/Key 三行配置全部旁路。
+     */
+    val ttsEngine: TtsEngine = TtsEngine.OPENAI_COMPATIBLE,
     /** 存储值为完整引用或服务商短名（解析见 [resolveVoice]），留空=默认音色。 */
     val voice: String = "",
     /** 允许模型用 <cam:…> 标签切换视角；关闭后镜头主权归用户。 */
@@ -57,11 +63,16 @@ data class AiChatPrefs(
         AiProvider.VOLCANO -> apiKeyVolcanoTts
     }
 
+    /** TTS 侧的就绪条件：Edge-TTS 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
+    val ttsReady: Boolean
+        get() = when (ttsEngine) {
+            TtsEngine.EDGE -> true
+            TtsEngine.OPENAI_COMPATIBLE -> apiKeyForTts().isNotBlank()
+        }
+
     val isConfigured: Boolean
-        get() = apiKeyFor(provider).isNotBlank() && apiKeyForTts().isNotBlank() &&
-            resolveLlmModel(provider, llmModel).isNotBlank() &&
-            resolveTtsModel(ttsProviderResolved, ttsModel).isNotBlank() &&
-            resolveVoice(ttsProviderResolved, voice).isNotBlank()
+        get() = apiKeyFor(provider).isNotBlank() && ttsReady &&
+            resolveLlmModel(provider, llmModel).isNotBlank()
 }
 
 private const val KEY_AI_PROVIDER = "ai_provider"
@@ -74,6 +85,7 @@ private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
 private const val KEY_AI_TTS_MODEL = "ai_ttsModel"
+private const val KEY_AI_TTS_ENGINE = "ai_tts_engine"
 private const val KEY_AI_VOICE = "ai_voice"
 private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
 
@@ -101,6 +113,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
+        ttsEngine = prefsEnum<TtsEngine>(this, KEY_AI_TTS_ENGINE) ?: TtsEngine.OPENAI_COMPATIBLE,
         voice = getString(KEY_AI_VOICE, "").orEmpty(),
         llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
     )
@@ -116,6 +129,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
+        .putString(KEY_AI_TTS_ENGINE, p.ttsEngine.name)
         .putString(KEY_AI_VOICE, p.voice.trim())
         .putBoolean(KEY_AI_LLM_CAMERA, p.llmCamera)
         .apply()
@@ -228,14 +242,19 @@ class AiChatController(
 
         val llm = OpenAiCompatibleLlmAdapter(prefs.provider.baseUrl, prefs.apiKeyFor(prefs.provider))
         val ttsProvider = prefs.ttsProviderResolved
-        val tts = when (ttsProvider) {
-            // 硅基流动走 OpenAI 兼容 /audio/speech（wav 16k，两 TTS 模型实测可用）
-            AiProvider.SILICONFLOW ->
-                OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
-            // 火山 seed-tts-2.0 只提供 V3 双向流式 WebSocket；适配器对外仍是
-            // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
-            AiProvider.VOLCANO ->
-                VolcanoEngineTtsAdapter(prefs.apiKeyForTts())
+        val tts = when (prefs.ttsEngine) {
+            // Edge-TTS（任务 6）：微软朗读接口免费无 Key；输出恒 MP3 24kHz，
+            // orchestrator 的 PcmDecoder MediaCodec 路径直接可解
+            TtsEngine.EDGE -> EdgeTtsAdapter()
+            TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
+                // 硅基流动走 OpenAI 兼容 /audio/speech（wav 16k，两 TTS 模型实测可用）
+                AiProvider.SILICONFLOW ->
+                    OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
+                // 火山 seed-tts-2.0 只提供 V3 双向流式 WebSocket；适配器对外仍是
+                // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
+                AiProvider.VOLCANO ->
+                    VolcanoEngineTtsAdapter(prefs.apiKeyForTts())
+            }
         }
         val session = AvatarSession(
             scope, llm, tts, avatarController,
@@ -263,14 +282,24 @@ class AiChatController(
             // 其他模型无额外参数
             extraBody = llmExtraBody(prefs.provider, model),
         )
-        session.ttsConfig = TtsConfig(
-            model = resolveTtsModel(ttsProvider, prefs.ttsModel),
-            voice = resolveVoice(ttsProvider, prefs.voice),
-            responseFormat = "wav",
-            // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC 前端的
-            // 分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
-            sampleRate = 16_000,
-        )
+        session.ttsConfig = when (prefs.ttsEngine) {
+            TtsEngine.EDGE ->
+                // mp3 容器自带采样率（24kHz），无需指定；voice 不在目录即落默认
+                TtsConfig(
+                    model = "edge-readaloud",
+                    voice = resolveEdgeVoice(prefs.voice),
+                    responseFormat = "mp3",
+                )
+            TtsEngine.OPENAI_COMPATIBLE ->
+                TtsConfig(
+                    model = resolveTtsModel(ttsProvider, prefs.ttsModel),
+                    voice = resolveVoice(ttsProvider, prefs.voice),
+                    responseFormat = "wav",
+                    // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC
+                    // 前端的分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
+                    sampleRate = 16_000,
+                )
+        }
         if (ready) {
             session.startFaceDriving()
             faceDrivingStarted = true

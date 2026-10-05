@@ -1314,9 +1314,16 @@ private fun DemoScreen(
                 buildString {
                     append("phase=$chatPhase subtitleLen=${chatLines.lastOrNull { it.role == ChatRole.AVATAR }?.text?.length ?: 0} error=${chatError ?: "none"} ")
                     append("llmProvider=${p.provider.name.lowercase()} llmModel=${resolveLlmModel(p.provider, p.llmModel)} ")
+                    append("ttsEngine=${p.ttsEngine.name.lowercase()} ")
                     append("ttsProvider=${p.ttsProviderResolved.name.lowercase()}(same=${p.ttsSameProvider}) ")
                     append("ttsModel=${resolveTtsModel(p.ttsProviderResolved, p.ttsModel)} ")
-                    append("voice=${resolveVoice(p.ttsProviderResolved, p.voice)} vision=${isVisionLlm(p.provider, p.llmModel)}")
+                    append(
+                        "voice=" + when (p.ttsEngine) {
+                            TtsEngine.EDGE -> resolveEdgeVoice(p.voice)
+                            TtsEngine.OPENAI_COMPATIBLE -> resolveVoice(p.ttsProviderResolved, p.voice)
+                        } + " "
+                    )
+                    append("vision=${isVisionLlm(p.provider, p.llmModel)}")
                     if (uiState.inputMode == InputMode.VIDEO) append(" video=[${videoTracker.debugStatus()}]")
                     if (uiState.inputMode == InputMode.VOICE || uiState.inputMode == InputMode.VIDEO) {
                         append(" freeTalk=${uiState.voicePrefs.freeTalk}")
