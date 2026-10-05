@@ -118,14 +118,19 @@ class FaceDriver(
 
     fun onPlaybackStarted(item: PlaybackItem, playback: ActivePlayback) {
         activePlayback = playback
+        // 呼吸说话调制（corelib 呼吸叠加层）：说话时呼吸变浅变快。开播/收播
+        // 一次性置位即可（幅度系数在 corelib 侧一阶趋近，无逐帧调用、无突跳）。
+        controller.setBreathSpeaking(true)
     }
 
     fun onPlaybackEnded() {
         activePlayback = null
+        controller.setBreathSpeaking(false)
     }
 
     fun onPlaybackInterrupted() {
         activePlayback = null
+        controller.setBreathSpeaking(false)
     }
 
     /** Notify the driver when the processor's phoneme layout is known. */
@@ -136,6 +141,26 @@ class FaceDriver(
     /** Switch what the avatar looks at (see [GazeMode]). */
     fun setGazeMode(mode: GazeMode) {
         gazeMode = mode
+    }
+
+    /** 视线微动（saccade）开关：关闭=注视点锁定基准，无抖动无换点。 */
+    fun setSaccadeEnabled(enabled: Boolean) {
+        saccade.isEnabled = enabled
+    }
+
+    /** 视线抖动幅度（世界单位），实时生效。 */
+    fun setSaccadeJitter(amplitude: Float) {
+        saccade.jitterAmplitude = amplitude.coerceIn(0f, 1f)
+    }
+
+    /** 眨眼开关：关闭立即结束当前眨眼。 */
+    fun setBlinkEnabled(enabled: Boolean) {
+        microMotion.setBlinkEnabled(enabled)
+    }
+
+    /** 眨眼平均间隔（秒），实时生效。 */
+    fun setBlinkIntervalMean(meanS: Float) {
+        microMotion.setBlinkIntervalMean(meanS.coerceIn(0.5f, 12f))
     }
 
     /**

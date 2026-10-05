@@ -13,7 +13,7 @@ import kotlin.random.Random
  */
 class SaccadeEngineTest {
 
-    /** 恒 0 的随机源：jitter 恒 = -0.25（rand 区间起点），间隔恒 = 首档 800ms。 */
+    /** 恒 0 的随机源：jitter 恒 = -幅度（rand 区间起点），间隔恒 = 首档 800ms。 */
     private val zeroRandom = object : Random() {
         override fun nextBits(bitCount: Int) = 0
     }
@@ -21,11 +21,12 @@ class SaccadeEngineTest {
     @Test
     fun `first tick fixates immediately (AIRI nextSaccadeAfter = -1)`() {
         val e = SaccadeEngine(random = zeroRandom)
-        // 全 0 随机：jitter = -0.25（rand(-0.25,0.25) 起点），间隔 = 首档 800ms
+        // 全 0 随机：jitter = -幅度（rand(-amp,amp) 起点），间隔 = 首档 800ms
+        val amp = SaccadeEngine.DEFAULT_JITTER_AMPLITUDE
         val refreshed = e.tick(0.016f, 10f, 20f, 30f)
         assertTrue(refreshed)
-        assertEquals(10f - 0.25f, e.fixation[0], 1e-4f)
-        assertEquals(20f - 0.25f, e.fixation[1], 1e-4f)
+        assertEquals(10f - amp, e.fixation[0], 1e-4f)
+        assertEquals(20f - amp, e.fixation[1], 1e-4f)
         assertEquals(30f, e.fixation[2], 1e-4f) // z 恒等于基准（上游 updateFixationTarget）
     }
 
@@ -81,6 +82,7 @@ class SaccadeEngineTest {
 
     @Test
     fun `jitter stays within the configured amplitude`() {
+        val amp = SaccadeEngine.DEFAULT_JITTER_AMPLITUDE
         val e = SaccadeEngine(random = Random(7))
         var time = 0f
         val seen = mutableListOf<Pair<Float, Float>>()
@@ -90,8 +92,8 @@ class SaccadeEngineTest {
         }
         assertTrue(seen.isNotEmpty())
         for ((dx, dy) in seen) {
-            assertTrue(abs(dx) <= 0.25f + 1e-4f)
-            assertTrue(abs(dy) <= 0.25f + 1e-4f)
+            assertTrue(abs(dx) <= amp + 1e-4f)
+            assertTrue(abs(dy) <= amp + 1e-4f)
         }
     }
 }

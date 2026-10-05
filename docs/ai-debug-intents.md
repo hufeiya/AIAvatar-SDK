@@ -46,6 +46,9 @@
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
 | `open_panel` | `ai_arg`= none \| models \| animations \| expressions \| scenes \| cards \| settings | 打开/关闭对应底部面板（MIUI 禁止 shell 注入点击，用此命令驱动 UI 面板） |
 | `spring_debug` | `ai_arg`=on \| off | 弹簧骨骼诊断：on 时每秒向 logcat（tag `SpringBone`）输出各弹簧链根/梢关节的骨长 len=当前/静止 与方向 dir，用于真机物理排查 |
+| `spring` | `ai_arg`=on \| off | 弹簧物理开关（头发/胸部的 sway 总闸）：off 时发骨冻结在当前姿势。用于排查「头发抽搐」类问题——off 后消失=抽搐源在弹簧响应；配合呼吸开关可区分激励源 |
+| `culling` | `ai_arg`=on \| off | 角色视锥剔除开关（默认 off=修复态）：gltfio 给蒙皮 mesh 的剔除盒是绑定姿态静态盒，特写+转头时眼球这类小 mesh 会被错误剔除（眼球丢失 bug）；on=旧行为（bug 兼容，A/B 复现用），off=蒙皮 mesh 永远绘制 |
+| `breath` | `ai_arg`=on \| off（省略=查状态） | 程序化呼吸叠加（脊柱俯仰 ~2.6°+双肩微耸，静息 15 次/分；说话时自动变浅变快，默认开）。省略 `ai_arg` 输出 enabled/speaking/bpm/amp/phase/绑定骨数；`off` 作为真机 A/B 的「无呼吸基线」（截图差分看肩胸区 ~4s 周期像素起伏） |
 | `screenshot` | — | 渲染一张 PNG 到应用外部目录，绝对路径打印到 logcat（可直接 `adb pull`） |
 | `send_chat` | `ai_arg`=消息文本 | 发送一条用户消息（等价于聊天条发送），走 LLM 流式→断句→TTS→口型全链路；断句/情绪/回合事件时序打印到 `AIDebug`（`chat:` 前缀） |
 | `interrupt_chat` | — | 打断当前 AI 回合（等价于聊天条 ✕），立即静音并回到 IDLE |

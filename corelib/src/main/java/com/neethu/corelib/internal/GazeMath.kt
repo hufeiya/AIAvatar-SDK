@@ -1,6 +1,7 @@
 package com.neethu.corelib.internal
 
 import kotlin.math.atan2
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -40,24 +41,38 @@ internal object GazeMath {
     }
 
     /** Quaternion [x,y,z,w] from a column-major 4x4 rotation matrix (Shepperd's method). */
+    /**
+     * Quaternion [x,y,z,w] from a column-major 4x4 rotation matrix (Shepperd's method).
+     *
+     * **先剥离缩放**：世界矩阵常含 transformToUnitCube 的根缩放（SK_Sun≈0.699），
+     * 缩放会进入 Shepperd 的 `sqrt(trace+1)` 使提取角随真实角非线性偏移
+     * （实测 θ=30° 差 ~4°）——该偏差曾经视线反馈环把呼吸的平滑小幅摆动放大成
+     * 可见的头部抽搐。三列基向量各自归一化后再提取，对任意缩放精确。
+     */
     fun matToQuat(m: FloatArray): FloatArray {
-        val m00 = m[0]; val m01 = m[4]; val m02 = m[8]
-        val m10 = m[1]; val m11 = m[5]; val m12 = m[9]
-        val m20 = m[2]; val m21 = m[6]; val m22 = m[10]
-        val trace = m00 + m11 + m22
+        val c0 = sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+        val c1 = sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6])
+        val c2 = sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10])
+        if (c0 < 1e-9f || c1 < 1e-9f || c2 < 1e-9f) {
+            return floatArrayOf(0f, 0f, 0f, 1f) // 退化矩阵（不应出现），返回单位旋转
+        }
+        val r00 = m[0] / c0; val r10 = m[1] / c0; val r20 = m[2] / c0
+        val r01 = m[4] / c1; val r11 = m[5] / c1; val r21 = m[6] / c1
+        val r02 = m[8] / c2; val r12 = m[9] / c2; val r22 = m[10] / c2
+        val trace = r00 + r11 + r22
         val q = FloatArray(4)
         if (trace > 0f) {
             val s = sqrt((trace + 1f).toDouble()).toFloat() * 2f
-            q[3] = s * 0.25f; q[0] = (m21 - m12) / s; q[1] = (m02 - m20) / s; q[2] = (m10 - m01) / s
-        } else if (m00 > m11 && m00 > m22) {
-            val s = sqrt((1f + m00 - m11 - m22).toDouble()).toFloat() * 2f
-            q[3] = (m21 - m12) / s; q[0] = s * 0.25f; q[1] = (m01 + m10) / s; q[2] = (m02 + m20) / s
-        } else if (m11 > m22) {
-            val s = sqrt((1f + m11 - m00 - m22).toDouble()).toFloat() * 2f
-            q[3] = (m02 - m20) / s; q[0] = (m01 + m10) / s; q[1] = s * 0.25f; q[2] = (m12 + m21) / s
+            q[3] = s * 0.25f; q[0] = (r21 - r12) / s; q[1] = (r02 - r20) / s; q[2] = (r10 - r01) / s
+        } else if (r00 > r11 && r00 > r22) {
+            val s = sqrt((1f + r00 - r11 - r22).toDouble()).toFloat() * 2f
+            q[3] = (r21 - r12) / s; q[0] = s * 0.25f; q[1] = (r01 + r10) / s; q[2] = (r02 + r20) / s
+        } else if (r11 > r22) {
+            val s = sqrt((1f + r11 - r00 - r22).toDouble()).toFloat() * 2f
+            q[3] = (r02 - r20) / s; q[0] = (r01 + r10) / s; q[1] = s * 0.25f; q[2] = (r12 + r21) / s
         } else {
-            val s = sqrt((1f + m22 - m00 - m11).toDouble()).toFloat() * 2f
-            q[3] = (m10 - m01) / s; q[0] = (m02 + m20) / s; q[1] = (m12 + m21) / s; q[2] = s * 0.25f
+            val s = sqrt((1f + r22 - r00 - r11).toDouble()).toFloat() * 2f
+            q[3] = (r10 - r01) / s; q[0] = (r02 + r20) / s; q[1] = (r12 + r21) / s; q[2] = s * 0.25f
         }
         val len = sqrt((q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).toDouble()).toFloat()
         if (len > 0f) { q[0] /= len; q[1] /= len; q[2] /= len; q[3] /= len }
@@ -139,11 +154,35 @@ internal object GazeMath {
 
     private fun asinSafe(x: Float): Float = kotlin.math.asin(x.coerceIn(-1f, 1f))
 
-    /** Rotation angle between two unit quaternions (rad, in [0, π]; q and −q are equal). */
+    /**
+     * Rotation part of [q] written into column-major [mat]; indices 12..14
+     * (translation) are left untouched, [15] set to 1 — callers pass the
+     * bone's current local matrix to swap only the rotation.
+     */
+    fun quatToMat(q: FloatArray, mat: FloatArray) {
+        val x = q[0]; val y = q[1]; val z = q[2]; val w = q[3]
+        val x2 = x + x; val y2 = y + y; val z2 = z + z
+        val xx = x * x2; val xy = x * y2; val xz = x * z2
+        val yy = y * y2; val yz = y * z2; val zz = z * z2
+        val wx = w * x2; val wy = w * y2; val wz = w * z2
+        mat[0] = 1f - (yy + zz); mat[1] = xy + wz; mat[2] = xz - wy; mat[3] = 0f
+        mat[4] = xy - wz; mat[5] = 1f - (xx + zz); mat[6] = yz + wx; mat[7] = 0f
+        mat[8] = xz + wy; mat[9] = yz - wx; mat[10] = 1f - (xx + yy); mat[11] = 0f
+        mat[15] = 1f
+    }
+
+    /**
+     * Rotation angle between two unit quaternions (rad, in [0, π]; q and −q are equal).
+     *
+     * 实现 = 相对四元数 r = a⁻¹·b 的 θ = 2·atan2(‖r.vec‖, |r.w|)：atan2 全域
+     * 数值稳定，小角度可精确解析。旧 acos 实现带 `dot ≥ 1−1e-6 → 返回 0`
+     * 保护（acos 近 1 对 float32 噪声敏感），形成 **≈0.16° 测量死区**——
+     * 呼吸层的 strip/动画重写快照判定全依赖小角度解析，死区内判定失灵使
+     * 叠加层锁死+周期性突跳（顿挫），见 BreathBaseResolver 注释。
+     */
     fun quatAngle(a: FloatArray, b: FloatArray): Float {
-        val d = kotlin.math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
-        // acos 在 1 附近对浮点噪声极敏感（dot=1-2.4e-7 → 6.9e-4），近 1 直接归零
-        if (d >= 1f - 1e-6f) return 0f
-        return 2f * kotlin.math.acos(d.coerceIn(0f, 1f))
+        val r = quatMultiply(quatInverse(a), b)
+        val v = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2])
+        return 2f * atan2(v, abs(r[3]))
     }
 }

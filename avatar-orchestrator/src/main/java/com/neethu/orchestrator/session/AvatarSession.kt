@@ -273,6 +273,28 @@ class AvatarSession(
         faceDriver?.stop()
     }
 
+    /**
+     * 应用拟人感设置（呼吸/视线/眨眼的开关与参数）。全部实时生效、不重建
+     * 会话；会话（重）建后由调用方重放，使设置跨会话存续。
+     */
+    fun applyLivenessSettings(
+        breathEnabled: Boolean,
+        breathAmplitude: Float,
+        breathRateBpm: Float,
+        saccadeEnabled: Boolean,
+        saccadeJitter: Float,
+        blinkEnabled: Boolean,
+        blinkIntervalS: Float,
+    ) {
+        controller?.setBreathEnabled(breathEnabled)
+        controller?.setBreathAmplitudeScale(breathAmplitude)
+        controller?.setBreathRateBpm(breathRateBpm)
+        faceDriver?.setSaccadeEnabled(saccadeEnabled)
+        faceDriver?.setSaccadeJitter(saccadeJitter)
+        faceDriver?.setBlinkEnabled(blinkEnabled)
+        faceDriver?.setBlinkIntervalMean(blinkIntervalS)
+    }
+
     /** Clear dialog history (a fresh conversation). */
     fun clearHistory() {
         store.clear()

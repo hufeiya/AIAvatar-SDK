@@ -29,6 +29,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -78,6 +80,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleOwner
 import com.neethu.aiadapter.model.AsrConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleAsrAdapter
+import com.neethu.aiavatar_sdk.ui.SECTION_AI
+import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
+import com.neethu.aiavatar_sdk.ui.SECTION_CARD
+import com.neethu.aiavatar_sdk.ui.SECTION_CONTEXT
+import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
+import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.aiavatar_sdk.video.UserCameraTracker
@@ -172,6 +180,8 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, C
 
 internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
+/** 场景选择持久化（空串 = 无场景，纯色背景）。 */
+private const val KEY_SELECTED_SCENE = "selected_scene"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
 /** 当前上下文创建时的大模型身份签名（[llmIdentitySignature]）；换模型即轮换上下文。 */
 private const val KEY_AI_CONTEXT_LLM_SIG = "ai_context_llm_sig"
@@ -285,10 +295,38 @@ internal class DemoUiState(context: Context) {
      */
     var idleAnimation by mutableStateOf<String?>(prefs.getString(KEY_IDLE_ANIMATION, null))
 
+    /**
+     * 拟人感设置（呼吸/视线/眨眼的开关与参数）。持久化；变更经会话实时生效
+     * （见下方 applyLivenessEffect），不重建会话。
+     */
+    var motionSettings by mutableStateOf(prefs.loadMotionSettings())
+        private set
+
+    fun updateMotionSettings(m: MotionSettings) {
+        motionSettings = m
+        prefs.saveMotionSettings(m)
+    }
+
     var selectedModel by mutableStateOf("SK_Sun_PERFORMANCE_jacket_off_1024.vrm")
     var selectedAnimation by mutableStateOf<String?>(null)
     var selectedExpression by mutableStateOf<String?>(null)
-    var selectedScene: String? by mutableStateOf(sceneFiles.firstOrNull())
+    /**
+     * 场景选择：null = 无场景（纯色背景）。持久化（空串存档=null），面板「无」
+     * 选项或 `ai_cmd load_scene none` 切换，写入口统一走 [setScene]。
+     * 判定用 [SharedPreferences.contains] 区分「无存档」（升级首启→默认第一个
+     * 场景）与「存档=无场景」（空串）——Elvis 兜底会把后者吞回第一个场景。
+     */
+    var selectedScene: String? by mutableStateOf(
+        if (prefs.contains(KEY_SELECTED_SCENE)) prefs.getString(KEY_SELECTED_SCENE, null)?.ifEmpty { null }
+        else sceneFiles.firstOrNull()
+    )
+        private set
+
+    /** 切换场景（null = 无场景）；持久化，[LaunchedEffect] 据此加载/移除场景。 */
+    fun setScene(name: String?) {
+        selectedScene = name
+        prefs.edit().putString(KEY_SELECTED_SCENE, name ?: "").apply()
+    }
     var activePanel by mutableStateOf(PanelType.NONE)
     var isDragMode by mutableStateOf(false)
 
@@ -704,11 +742,10 @@ private fun DemoScreen(
         )
     }
 
-    // Load the selected scene whenever it changes
+    // Load the selected scene whenever it changes (null = 无场景，移除当前场景)
     LaunchedEffect(uiState.selectedScene) {
-        uiState.selectedScene?.let { scene ->
-            controller.loadScene("scene/$scene")
-        }
+        val scene = uiState.selectedScene
+        if (scene != null) controller.loadScene("scene/$scene") else controller.removeScene()
     }
 
     // AI debug interface: the executor loop lives below, after the AI chat
@@ -743,6 +780,15 @@ private fun DemoScreen(
     LaunchedEffect(uiState.activePanel) {
         if (uiState.activePanel == PanelType.SETTINGS) contextListVersion++
     }
+
+    // 设置面板的滚动位置与分类展开状态：Activity 级持有，面板关开不丢失
+    val settingsExpandedSections = rememberSaveable {
+        mutableStateOf(setOf(
+            SECTION_AI, SECTION_CARD, SECTION_CONTEXT,
+            SECTION_ANIMATIONS, SECTION_QUALITY, SECTION_LIVENESS,
+        ))
+    }
+    val settingsListState = rememberLazyListState()
 
     // 会话身份 = AI 配置 + 上下文 id：任一变化（含新建/切换上下文）即重建
     val session by produceState<AvatarSession?>(
@@ -784,6 +830,20 @@ private fun DemoScreen(
     LaunchedEffect(uiState.contextId) {
         chatLines.clear()
         chatError = null
+    }
+
+    // 拟人感设置（呼吸/视线/眨眼）→ 会话实时生效；会话重建后自动重放
+    LaunchedEffect(session, uiState.motionSettings) {
+        val m = uiState.motionSettings
+        session?.applyLivenessSettings(
+            breathEnabled = m.breathEnabled,
+            breathAmplitude = m.breathAmplitude,
+            breathRateBpm = m.breathRateBpm,
+            saccadeEnabled = m.saccadeEnabled,
+            saccadeJitter = m.saccadeJitter,
+            blinkEnabled = m.blinkEnabled,
+            blinkIntervalS = m.blinkIntervalS,
+        )
     }
 
     LaunchedEffect(session) {
@@ -1854,11 +1914,11 @@ private fun DemoScreen(
         ) {
             ListPanel(
                 title = "Scenes",
-                items = uiState.sceneFiles,
-                selectedItem = uiState.selectedScene,
-                displayName = { it.removeSuffix(".glb").replace("_", " ") },
+                items = listOf("") + uiState.sceneFiles,
+                selectedItem = uiState.selectedScene ?: "",
+                displayName = { if (it.isEmpty()) "无（纯色背景）" else it.removeSuffix(".glb").replace("_", " ") },
                 onItemClick = { fileName ->
-                    uiState.selectedScene = fileName
+                    uiState.setScene(fileName.ifEmpty { null })
                     uiState.activePanel = PanelType.NONE
                 }
             )
@@ -1902,6 +1962,14 @@ private fun DemoScreen(
             val cardPromptOverride = uiState.activeCardFile?.let { uiState.cardPromptOverride(it) }
             SettingsScreen(
                 settings = uiState.renderSettings,
+                motionSettings = uiState.motionSettings,
+                expandedSections = settingsExpandedSections.value,
+                onToggleSection = { key ->
+                    settingsExpandedSections.value =
+                        if (key in settingsExpandedSections.value) settingsExpandedSections.value - key
+                        else settingsExpandedSections.value + key
+                },
+                listState = settingsListState,
                 useExternalAnimations = uiState.useExternalAnimations,
                 externalRootPath = uiState.externalAnimationsRoot(context)?.absolutePath,
                 aiPrefs = uiState.aiPrefs,
@@ -1935,6 +2003,7 @@ private fun DemoScreen(
                     }
                 },
                 onAnimationSourceChange = { uiState.setAnimationSource(context, it) },
+                onMotionSettingsChange = { uiState.updateMotionSettings(it) },
                 onSettingsChange = applyRenderSettings,
                 onAiPrefsChange = { uiState.updateAiPrefs(it) },
                 onVoicePrefsChange = { uiState.updateVoicePrefs(it) },

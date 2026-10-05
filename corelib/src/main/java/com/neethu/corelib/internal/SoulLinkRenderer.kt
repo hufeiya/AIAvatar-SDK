@@ -40,6 +40,7 @@ import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarRenderSettings
+import com.neethu.corelib.BreathInfo
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.LookAtInfo
@@ -111,6 +112,14 @@ internal class SoulLinkRenderer(
     // Gaze (look-at) bone overlay support
     private var lookAtEngine: VrmLookAtEngine? = null
 
+    // Breath (chest/shoulder) bone overlay support（方案一呼吸）。开关与说话
+    // 标志跨模型重载保留——引擎随模型重建时把两者重新套用。
+    private var breathEngine: VrmBreathEngine? = null
+    private var breathEnabled = true
+    private var breathSpeaking = false
+    private var breathAmplitudeScale = 1f
+    private var breathRateBpm = -1f  // <0 = 引擎默认
+
     // Spring bone physics support
     internal var springBoneManager: VrmSpringBoneManager? = null
     private var lastFrameTimeNanos: Long = 0L
@@ -137,6 +146,8 @@ internal class SoulLinkRenderer(
     // (0 = unresolved → proportional fallback).
     private var headEntity: Int = 0
     private var chestEntity: Int = 0
+    private var spineEntity: Int = 0
+    private var neckEntity: Int = 0
 
     // Camera-shot framing. `activeShot` stays set until cleared or replaced —
     // switching models re-frames the new character to the same shot.
@@ -271,6 +282,11 @@ internal class SoulLinkRenderer(
             // 拖拽位移的覆写检测基线：本帧动画分支若改写 hips 平移，写入值与
             // 之不同（基线里还带着上一帧叠加的拖拽位移）
             val hipsBefore = captureHipsTranslation()
+            // 呼吸层双信号判定的快照：必须在动画分支之前拍（BreathBaseResolver
+            // 用「动画前 vs 动画后」判定动画是否重写过，防 strip 误判锁死）
+            breathEngine?.capturePreAnimation()
+            // 视线层同款快照（头/颈被动画重写→全量写防顿挫；眼骨保留 strip）
+            lookAtEngine?.capturePreAnimation()
             // VRMA animation takes priority over built-in animations
             val vrma = vrmaEngine
             if (vrma != null && vrma.isActive()) {
@@ -300,15 +316,30 @@ internal class SoulLinkRenderer(
             // [applyHipsDragOffset].
             applyHipsDragOffset(hipsBefore)
 
+            val gazeDt = if (lastFrameTimeNanos == 0L) 0.016f
+            else ((frameTimeNanos - lastFrameTimeNanos).coerceAtLeast(0L)) / 1_000_000_000.0f
+
+            // Breath overlay（呼吸）: spine/shoulder micro-rotation rides on
+            // the animated pose — runs after the animation wrote bone locals
+            // (its strip-and-overlay bookkeeping re-anchors on the fresh pose)
+            // and before the gaze overlay reads the head world pose, so the
+            // gaze follows the breath lift naturally. All bone-programmatic
+            // layers must land before updateBoneMatrices() propagates skin
+            // matrices.
+            breathEngine?.update(gazeDt.coerceIn(0.001f, 0.05f))
+
             // Gaze overlay: rides on top of the animated pose — reads the
             // post-animation head world transform and adds clamped head/neck/
             // eye rotation toward the look-at target — so it must run after
             // the animation has written bone locals and before skin matrices
             // propagate. (The single updateBoneMatrices below covers both
             // animation branches; the spring-bone block re-runs it later.)
-            val gazeDt = if (lastFrameTimeNanos == 0L) 0.016f
-            else ((frameTimeNanos - lastFrameTimeNanos).coerceAtLeast(0L)) / 1_000_000_000.0f
             lookAtEngine?.update(gazeDt.coerceIn(0.001f, 0.05f))
+            // 显式提交本帧全部局部变换写入（idle/呼吸/视线）：TransformManager
+            // 惰性求值，commit 前所有 getWorldTransform/蒙皮都读旧世界变换。
+            // gti 依赖 lookAt 内部的 commit——gaze off（target=null 提前 return）
+            // 时无人提交，本帧呼吸写入全部丢失（头部方波抽搐根因）。
+            modelViewer.engine.transformManager.commitLocalTransformTransaction()
             animator?.updateBoneMatrices()
 
             // Update expression morph weights each frame (with smooth transitions)
@@ -768,6 +799,7 @@ internal class SoulLinkRenderer(
             idleSource = null
             expressionManager = null
             lookAtEngine = null
+            breathEngine = null
             springBoneManager = null
             animator = null
 
@@ -846,6 +878,8 @@ internal class SoulLinkRenderer(
                 // (chest falls back spine → upperChest is tried first).
                 headEntity = resolveHumanoidEntity(asset, bytes, "head")
                 chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
+                spineEntity = resolveHumanoidEntity(asset, bytes, "spine")
+                neckEntity = resolveHumanoidEntity(asset, bytes, "neck")
 
                 // Gaze overlay engine — bound after the VRM 0.x root flip so the
                 // captured rest orientation already faces the camera (+Z).
@@ -856,6 +890,24 @@ internal class SoulLinkRenderer(
                         resolveHumanoidEntity(asset, bytes, "leftEye"),
                         resolveHumanoidEntity(asset, bytes, "rightEye"),
                     )
+                }
+
+                // Breath overlay engine — spine/shoulder chain on the same
+                // strip-then-overlay paradigm, bound after the VRM 0.x root
+                // flip like the gaze engine (world-axis offsets assume the
+                // model faces +Z).
+                breathEngine = VrmBreathEngine(modelViewer.engine).also { breath ->
+                    breath.bind(
+                        resolveHumanoidEntity(asset, bytes, "spine"),
+                        resolveHumanoidEntity(asset, bytes, "chest"),
+                        resolveHumanoidEntity(asset, bytes, "upperChest"),
+                        resolveHumanoidEntity(asset, bytes, "leftShoulder"),
+                        resolveHumanoidEntity(asset, bytes, "rightShoulder"),
+                    )
+                    breath.setEnabled(breathEnabled)
+                    breath.setSpeaking(breathSpeaking)
+                    breath.setAmplitudeScale(breathAmplitudeScale)
+                    if (breathRateBpm > 0) breath.setRateHz(breathRateBpm / 60f)
                 }
 
                 // A pending shot re-frames the freshly loaded character to the
@@ -1040,6 +1092,44 @@ internal class SoulLinkRenderer(
 
     /** Last-frame gaze state for diagnostics. */
     fun lookAtInfo(): LookAtInfo? = lookAtEngine?.info()
+
+    // ── Breath API ───────────────────────────────────────────────────────
+
+    /**
+     * Toggle the procedural breath overlay (chest/shoulder motion on top of
+     * whatever animation plays). Default on; the setting survives model
+     * switches.
+     */
+    fun setBreathEnabled(enabled: Boolean) {
+        breathEnabled = enabled
+        breathEngine?.setEnabled(enabled)
+    }
+
+    /**
+     * Mark the avatar as speaking — breath turns shallower and faster while
+     * talking (one-shot flags, no per-frame calls needed; the amplitude eases
+     * over ~0.5 s). The session's FaceDriver feeds this automatically on
+     * playback start/end.
+     */
+    fun setBreathSpeaking(speaking: Boolean) {
+        breathSpeaking = speaking
+        breathEngine?.setSpeaking(speaking)
+    }
+
+    /** 呼吸幅度倍率（0~3，1 = 设计幅度）；跨模型重载保留。 */
+    fun setBreathAmplitudeScale(scale: Float) {
+        breathAmplitudeScale = scale
+        breathEngine?.setAmplitudeScale(scale)
+    }
+
+    /** 呼吸频率（次/分）；≤0 = 引擎默认；跨模型重载保留。 */
+    fun setBreathRateBpm(bpm: Float) {
+        breathRateBpm = bpm
+        breathEngine?.setRateHz(bpm / 60f)
+    }
+
+    /** Last-frame breath state for diagnostics. */
+    fun breathInfo(): BreathInfo? = breathEngine?.info()
 
     /**
      * @return the number of animations in the current model, or 0 if no model is loaded.

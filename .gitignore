@@ -35,3 +35,4 @@ google-services.json
 
 # Local secrets (API keys) — never commit
 secrets.properties
+__pycache__/

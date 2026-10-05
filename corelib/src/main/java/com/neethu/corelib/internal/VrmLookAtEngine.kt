@@ -96,10 +96,17 @@ internal class VrmLookAtEngine(private val engine: Engine) {
      * 累积（真机元凶：眼珠转过头只剩眼白）。所以每个骨骼记下最后一次写入
      * 的局部四元数与偏移：本帧读到的局部若仍等于它（=没被动画重写），先
      * 剥掉旧偏移得到干净基座，再叠加新偏移。
+     *
+     * ⚠ 剥离判定用 [BreathBaseResolver] 双信号（动画分支前快照 vs 当前）：
+     * 单信号「当前≈上次写入」在偏移小于 STRIP_EPS 时会把动画新写的基座误判
+     * 成自己的写入，渲染只剩帧间增量——呼吸层曾因此锁死；视线层的头/颈被
+     * 呼吸推着让 |offset| 在阈值两侧穿越时同样产生周期性跳变（头部顿挫）。
+     * 头/颈被动画重写→base=当前全量写；眼骨不被动画重写→保留 strip 语义。
      */
     private class BoneRef(val entity: Int, val restLocalMat: FloatArray) {
         var lastWritten: FloatArray? = null
         var lastOffset: FloatArray? = null
+        var preAnimLocal: FloatArray? = null
     }
 
     private var head: BoneRef? = null
@@ -146,6 +153,26 @@ internal class VrmLookAtEngine(private val engine: Engine) {
                 "eyes=${leftEyeEntity != 0 && rightEyeEntity != 0} " +
                 "faceLocal=${faceLocalDir.joinToString { "%.2f".format(it) }}",
         )
+    }
+
+    /**
+     * 渲染循环在动画分支**之前**调用：快照头/颈/眼局部旋转，供
+     * [BreathBaseResolver] 双信号判定（与 VrmBreathEngine.capturePreAnimation
+     * 同款挂点）。
+     */
+    fun capturePreAnimation() {
+        val tm = engine.transformManager
+        for (bone in listOf(head, neck, leftEye, rightEye)) {
+            val b = bone ?: continue
+            val inst = tm.getInstance(b.entity)
+            if (inst == 0) {
+                b.preAnimLocal = null
+                continue
+            }
+            val mat = FloatArray(16)
+            tm.getTransform(inst, mat)
+            b.preAnimLocal = GazeMath.matToQuat(mat)
+        }
     }
 
     /** Track the world-space point [x,y,z] (typically the camera eye — where the user's face is). */
@@ -215,6 +242,7 @@ internal class VrmLookAtEngine(private val engine: Engine) {
         val eyePitch = (pitch - smoothPitch).coerceIn(-EYE_MAX_RAD, EYE_MAX_RAD)
         applyOffset(leftEye, eyeYaw, eyePitch, forward)
         applyOffset(rightEye, eyeYaw, eyePitch, forward)
+
     }
 
     /**
@@ -237,7 +265,11 @@ internal class VrmLookAtEngine(private val engine: Engine) {
         tm.getTransform(inst, mat)
         val lCurrent = GazeMath.matToQuat(mat)
 
-        val strip = stripPreviousWrite(lCurrent, bone.lastWritten, bone.lastOffset)
+        // 双信号基座判定（BreathBaseResolver）：动画重写过→以动画新姿势为基座
+        // 全量写（防 strip 误判的头部顿挫）；眼骨未被动画重写→strip 剥旧偏移。
+        val strip = BreathBaseResolver.resolve(
+            lCurrent, bone.preAnimLocal, bone.lastWritten, bone.lastOffset,
+        )
         val base = strip.first
         bone.lastWritten = null
         bone.lastOffset = null
@@ -289,7 +321,20 @@ internal class VrmLookAtEngine(private val engine: Engine) {
         for (bone in listOf(head, neck, leftEye, rightEye)) {
             val b = bone ?: continue
             val inst = tm.getInstance(b.entity)
-            if (inst != 0) tm.setTransform(inst, b.restLocalMat)
+            if (inst != 0) {
+                val mat = FloatArray(16)
+                tm.getTransform(inst, mat)
+                // 双信号：动画重写过的骨骼（头/颈）已是干净姿势不写；眼骨未被
+                // 动画重写→剥掉我的偏移。直接写 bind 时 rest 会在动作播放中
+                // 闪一帧 rest pose。
+                val (base, stripped) = BreathBaseResolver.resolve(
+                    GazeMath.matToQuat(mat), b.preAnimLocal, b.lastWritten, b.lastOffset,
+                )
+                if (stripped) {
+                    GazeMath.quatToMat(base, mat)
+                    tm.setTransform(inst, mat)
+                }
+            }
             b.lastWritten = null
             b.lastOffset = null
         }

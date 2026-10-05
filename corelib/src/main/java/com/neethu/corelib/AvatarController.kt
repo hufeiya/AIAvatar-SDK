@@ -312,6 +312,49 @@ class AvatarController {
         return renderer?.lookAtInfo()
     }
 
+    // ── Public API: Breath ───────────────────────────────────────────────
+
+    /**
+     * Enable or disable the procedural breath overlay — a subtle chest rise
+     * + shoulder shrug driven on the spine/shoulder bones on top of whatever
+     * animation plays (the default idle is a static single-frame pose, so
+     * this is what keeps the avatar from looking frozen). On by default; the
+     * setting survives model switches.
+     */
+    fun setBreathEnabled(enabled: Boolean) {
+        renderer?.setBreathEnabled(enabled)
+    }
+
+    /** 呼吸幅度倍率（0~3，1 = 设计幅度），实时生效、跨模型重载保留。 */
+    fun setBreathAmplitudeScale(scale: Float) {
+        renderer?.setBreathAmplitudeScale(scale)
+    }
+
+    /** 呼吸频率（次/分），实时生效、跨模型重载保留；≤0 恢复引擎默认。 */
+    fun setBreathRateBpm(bpm: Float) {
+        renderer?.setBreathRateBpm(bpm)
+    }
+
+    /**
+     * Tell the breath system whether the avatar is currently speaking: while
+     * talking, breath turns shallower (×0.6 amplitude) and slightly faster
+     * (×1.15 rate), easing over ~0.5 s. One-shot flags — call on playback
+     * start/end, not per frame. The session's FaceDriver feeds this
+     * automatically; SDK integrators only need this when driving playback
+     * themselves.
+     */
+    fun setBreathSpeaking(speaking: Boolean) {
+        renderer?.setBreathSpeaking(speaking)
+    }
+
+    /**
+     * Last-frame breath state (rate/amplitude/phase, bound bones), or `null`
+     * when no view is attached. Diagnostics surface.
+     */
+    fun getBreathInfo(): BreathInfo? {
+        return renderer?.breathInfo()
+    }
+
     // ── Public API: Spring Bone ──────────────────────────────────────────
 
     /**

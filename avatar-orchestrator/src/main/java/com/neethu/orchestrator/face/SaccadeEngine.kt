@@ -22,9 +22,16 @@ import kotlin.random.Random
  */
 class SaccadeEngine(
     private val random: Random = Random,
-    /** 注视点抖动幅度（世界单位，x/y 各自独立 ±）。 */
-    private val jitterAmplitude: Float = 0.25f,
 ) {
+
+    /**
+     * 注视点抖动幅度（世界单位，x/y 各自独立 ±）。运行时可调（设置面板），
+     * 0 = 抖动关闭（换点退化为精确贴住基准）。
+     */
+    var jitterAmplitude: Float = DEFAULT_JITTER_AMPLITUDE
+
+    /** saccade 开关：关闭时注视点逐帧精确锁定基准（无抖动、无换点）。 */
+    var isEnabled: Boolean = true
 
     /** 当前注视点（世界坐标，含抖动）。[tick]/[snap] 原地更新，读同一数组零分配。 */
     val fixation = FloatArray(3)
@@ -39,6 +46,12 @@ class SaccadeEngine(
      * [snap]）。
      */
     fun tick(deltaSeconds: Float, baseX: Float, baseY: Float, baseZ: Float): Boolean {
+        if (!isEnabled) {
+            // 关闭态：注视点逐帧精确锁定基准（无抖动），换点计时停走
+            fixation[0] = baseX; fixation[1] = baseY; fixation[2] = baseZ
+            timeSinceSaccade = 0f
+            return false
+        }
         var refreshed = false
         if (timeSinceSaccade >= nextSaccadeIn) {
             fixation[0] = baseX + rand(-jitterAmplitude, jitterAmplitude)
@@ -73,6 +86,16 @@ class SaccadeEngine(
 
     companion object {
         private const val STEP_MS = 400f
+
+        /**
+         * 注视点抖动幅度定档（2026-10-04 真机屏幕录制分析）：AIRI 的 0.25 沿用
+         * 其场景标定，本项目典型机位（头部距相机 1~2m）换算 ±7~9°，且眼骨余量
+         * 零平滑（换点瞬移一帧到位）——真机 30fps 录制逐帧差分=头/眼区每
+         * 0.8~2.4s 一次 1~3 帧甩动（用户感知「头部抽搐」）。回调 0.05：典型
+         * 机位 ≈±1.4°（微距 ~±4.4°）。0.25/0.08 档位在真机上眼跳一帧到位，
+         * 被感知为「头部抽搐」。距离自适应留调参期。
+         */
+        const val DEFAULT_JITTER_AMPLITUDE = 0.08f
 
         // eye-motions.ts EYE_SACCADE_INT_P：逐档累加后的概率上沿与档位下沿(ms)。
         // r ≤ 0.075 → 800ms 档、≤ 0.185 → 1200ms 档 …… ≤ 1.0 → 4400ms 档。

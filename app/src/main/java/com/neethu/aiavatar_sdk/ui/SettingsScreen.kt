@@ -84,18 +84,21 @@ import com.neethu.aiavatar_sdk.resolveTtsModel
 import com.neethu.aiavatar_sdk.resolveVoice
 import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
+import com.neethu.aiavatar_sdk.MotionSettings
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.QualityPreset
 import com.neethu.corelib.ToneMappingMode
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** 折叠类别的稳定 key。 */
-private const val SECTION_AI = "ai"
-private const val SECTION_CARD = "card"
-private const val SECTION_CONTEXT = "context"
-private const val SECTION_ANIMATIONS = "animations"
-private const val SECTION_QUALITY = "quality"
+internal const val SECTION_AI = "ai"
+internal const val SECTION_CARD = "card"
+internal const val SECTION_CONTEXT = "context"
+internal const val SECTION_ANIMATIONS = "animations"
+internal const val SECTION_QUALITY = "quality"
+internal const val SECTION_LIVENESS = "liveness"
 
 /** 下拉框的一个选项：[value] 为存进 prefs 的值，[label] 为显示名。 */
 internal data class DropdownOption(val value: String, val label: String)
@@ -158,8 +161,14 @@ private const val SHEET_SNAP_THRESHOLD = 0.8f
 @Composable
 internal fun SettingsScreen(
     settings: AvatarRenderSettings,
+    motionSettings: MotionSettings,
     useExternalAnimations: Boolean,
     externalRootPath: String?,
+    /** 折叠类别集合：由调用方持有，面板关开不丢失。 */
+    expandedSections: Set<String>,
+    onToggleSection: (String) -> Unit,
+    /** 列表滚动状态：由调用方持有，面板关开不丢失。 */
+    listState: androidx.compose.foundation.lazy.LazyListState,
     aiPrefs: AiChatPrefs,
     voicePrefs: VoicePrefs,
     contexts: List<ConversationContextSummary>,
@@ -172,6 +181,7 @@ internal fun SettingsScreen(
     onSaveCardPrompt: (String) -> Unit = {},
     onResetCardPrompt: () -> Unit = {},
     onAnimationSourceChange: (Boolean) -> Unit,
+    onMotionSettingsChange: (MotionSettings) -> Unit,
     onSettingsChange: (AvatarRenderSettings) -> Unit,
     onAiPrefsChange: (AiChatPrefs) -> Unit,
     onVoicePrefsChange: (VoicePrefs) -> Unit,
@@ -192,14 +202,8 @@ internal fun SettingsScreen(
     val currentShownFraction by rememberUpdatedState(shownFraction)
     var sheetHeightPx by remember { mutableStateOf(1f) }
 
-    // ── 折叠类别：默认全部展开 ────────────────────────────────────────────
-    var expandedSections by remember {
-        mutableStateOf(setOf(SECTION_AI, SECTION_CARD, SECTION_CONTEXT, SECTION_ANIMATIONS, SECTION_QUALITY))
-    }
-    val toggleSection: (String) -> Unit = { key ->
-        expandedSections =
-            if (key in expandedSections) expandedSections - key else expandedSections + key
-    }
+
+    val toggleSection: (String) -> Unit = onToggleSection
 
     // ── 音色清单接口拉取（尽力而为）：硅基流动 TTS 时拉 /audio/voice/list，
     //    失败/为空由 voiceOptionsWithFetched 落回静态清单；火山无公开接口用静态。
@@ -309,6 +313,7 @@ internal fun SettingsScreen(
                 HorizontalDivider()
 
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -510,8 +515,179 @@ internal fun SettingsScreen(
                             QualityPresetContent(settings, onSettingsChange)
                         }
                     }
+
+                    // ── 拟人感（呼吸/视线/眨眼） ─────────────────────────
+                    item {
+                        CollapsibleSection(
+                            title = "拟人感 (呼吸 / 视线 / 眨眼)",
+                            expanded = SECTION_LIVENESS in expandedSections,
+                            onToggle = { toggleSection(SECTION_LIVENESS) }
+                        ) {
+                            SettingsGroupLabel("自主微动作；改动立即生效并持久化")
+                            SettingsActionRow(
+                                title = "恢复默认",
+                                subtitle = "呼吸/视线/眨眼全部回到默认参数"
+                            ) {
+                                onMotionSettingsChange(MotionSettings())
+                            }
+                            SettingsSwitchRow(
+                                title = "呼吸",
+                                subtitle = "胸肩起伏与头部微动（自然呼吸）",
+                                checked = motionSettings.breathEnabled,
+                                onCheckedChange = { v ->
+                                    onMotionSettingsChange(motionSettings.copy(breathEnabled = v))
+                                }
+                            )
+                            if (motionSettings.breathEnabled) {
+                                SliderTextFieldRow(
+                                    title = "呼吸幅度",
+                                    value = motionSettings.breathAmplitude,
+                                    valueRange = 0f..2f,
+                                    format = "%.2f",
+                                    unit = "×",
+                                    onCommit = { v ->
+                                        onMotionSettingsChange(motionSettings.copy(breathAmplitude = v))
+                                    }
+                                )
+                                SliderTextFieldRow(
+                                    title = "呼吸频率",
+                                    value = motionSettings.breathRateBpm,
+                                    valueRange = 8f..30f,
+                                    format = "%.1f",
+                                    unit = "次/分",
+                                    decimalCount = 1,
+                                    onCommit = { v ->
+                                        onMotionSettingsChange(motionSettings.copy(breathRateBpm = v))
+                                    }
+                                )
+                            }
+                            SettingsSwitchRow(
+                                title = "视线微动 (Saccade)",
+                                subtitle = "注视点自然游移（模拟人视线不锁定一点）",
+                                checked = motionSettings.saccadeEnabled,
+                                onCheckedChange = { v ->
+                                    onMotionSettingsChange(motionSettings.copy(saccadeEnabled = v))
+                                }
+                            )
+                            if (motionSettings.saccadeEnabled) {
+                                SliderTextFieldRow(
+                                    title = "视线幅度",
+                                    value = motionSettings.saccadeJitter,
+                                    valueRange = 0f..0.25f,
+                                    format = "%.3f",
+                                    unit = "",
+                                    decimalCount = 3,
+                                    onCommit = { v ->
+                                        onMotionSettingsChange(motionSettings.copy(saccadeJitter = v))
+                                    }
+                                )
+                            }
+                            SettingsSwitchRow(
+                                title = "眨眼",
+                                subtitle = "自动眨眼（间隔随机）",
+                                checked = motionSettings.blinkEnabled,
+                                onCheckedChange = { v ->
+                                    onMotionSettingsChange(motionSettings.copy(blinkEnabled = v))
+                                }
+                            )
+                            if (motionSettings.blinkEnabled) {
+                                SliderTextFieldRow(
+                                    title = "眨眼平均间隔",
+                                    value = motionSettings.blinkIntervalS,
+                                    valueRange = 1f..8f,
+                                    format = "%.1f",
+                                    unit = "秒",
+                                    decimalCount = 1,
+                                    onCommit = { v ->
+                                        onMotionSettingsChange(motionSettings.copy(blinkIntervalS = v))
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 滑条 + 数值输入框二合一的参数行：拖滑条或直接键入数值均可，双向同步。
+ * 文本输入允许任意中间态（如 "0."），可解析即提交；滑条拖动时反向刷新文本。
+ */
+@Composable
+private fun SliderTextFieldRow(
+    title: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    format: String,
+    unit: String,
+    decimalCount: Int = 2,
+    onCommit: (Float) -> Unit,
+) {
+    var text by remember { mutableStateOf(String.format(format, value)) }
+    var lastEmitted by remember { mutableStateOf(value) }
+
+    // 滑杆/外部改了 value → 同步文本；文本自身提交的值不回填（不打断输入）
+    LaunchedEffect(value) {
+        val parsed = text.toFloatOrNull()
+        if (parsed == null || abs(parsed - value) > 1e-4) {
+            text = String.format(format, value)
+            lastEmitted = value
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            if (unit.isNotEmpty()) {
+                Text(
+                    text = unit,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Slider(
+                value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+                onValueChange = { v ->
+                    onCommit(v.coerceIn(valueRange.start, valueRange.endInclusive))
+                },
+                valueRange = valueRange,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = text,
+                onValueChange = { new ->
+                    text = new
+                    new.toFloatOrNull()?.let { v ->
+                        val clamped = v.coerceIn(valueRange.start, valueRange.endInclusive)
+                        lastEmitted = clamped
+                        onCommit(clamped)
+                    }
+                },
+                modifier = Modifier.width(88.dp),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(
+                    fontSize = 13.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            )
         }
     }
 }

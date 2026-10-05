@@ -147,6 +147,17 @@ internal suspend fun executeAiCommand(
                 if (enabled) "spring bone debug log enabled (logcat tag SpringBone, 1 Hz)"
                 else "spring bone debug log disabled"
             }
+            "spring" -> {
+                val enabled = when (command.arg?.lowercase()) {
+                    "on", "true", "1" -> true
+                    "off", "false", "0" -> false
+                    null -> throw IllegalArgumentException("spring expects 'on' or 'off' (hair/bust spring physics toggle)")
+                    else -> throw IllegalArgumentException("spring expects 'on' or 'off', got '${command.arg}'")
+                }
+                controller.setSpringBoneEnabled(enabled)
+                if (enabled) "spring bone physics ON (hair/bust sway active)"
+                else "spring bone physics OFF (hair/bust frozen at rest pose)"
+            }
             "culling" -> {
                 val enabled = when (command.arg?.lowercase()) {
                     "on", "true", "1" -> true
@@ -156,6 +167,22 @@ internal suspend fun executeAiCommand(
                 controller.setAvatarCulling(enabled)
                 if (enabled) "avatar frustum culling ON (bug-compatible: eyeballs can vanish at close range when the head turns)"
                 else "avatar frustum culling OFF (fix: skinned meshes always draw)"
+            }
+            "breath" -> when (command.arg?.lowercase()) {
+                "on", "true", "1" -> {
+                    controller.setBreathEnabled(true)
+                    "breath overlay ON"
+                }
+                "off", "false", "0" -> {
+                    controller.setBreathEnabled(false)
+                    "breath overlay OFF (chest/shoulder micro-motion removed)"
+                }
+                null, "status", "state" ->
+                    controller.getBreathInfo()?.let { "breath: $it" }
+                        ?: "breath: no avatar loaded (engine not bound)"
+                else -> throw IllegalArgumentException(
+                    "breath expects 'on', 'off', or no ai_arg (= status)"
+                )
             }
             "screenshot" -> screenshotCommand(context, controller)
             "send_chat" -> {
@@ -353,13 +380,12 @@ private fun loadSceneCommand(
     arg: String?,
 ): String {
     if (arg == null || arg.lowercase() in setOf("none", "off", "remove", "clear")) {
-        controller.removeScene()
-        uiState.selectedScene = null
+        uiState.setScene(null)
         return "scene removed"
     }
     val name = resolveAssetFile(arg, uiState.sceneFiles, "scenes", listOf(".glb"))
     if (name == uiState.selectedScene) return "scene '$name' is already active"
-    uiState.selectedScene = name
+    uiState.setScene(name)
     return "loading scene/$name"
 }
 

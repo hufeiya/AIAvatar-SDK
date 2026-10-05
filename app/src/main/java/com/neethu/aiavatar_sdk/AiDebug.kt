@@ -134,6 +134,11 @@ fun aiDebugHelp(): String = """
     |                           disappearing-eyeballs bug: gltfio uses static bind-pose
     |                           culling boxes, so skinned meshes can be wrongly culled
     |                           at close range once the head turns). ON = old behavior.
+    |  breath <arg>            on | off (omit ai_arg = status): procedural breath
+    |                           overlay (chest rise + shoulder shrug on the spine/
+    |                           shoulder bones, ~15/min). Default ON; speaking
+    |                           automatically turns it shallower/faster. A/B use:
+    |                           breath off = pre-breath baseline
     |Chat (requires the AI service configured in ⚙️ settings):
     |  send_chat <arg>          Send ai_arg as the user's chat message; the reply
     |                           streams into the subtitle + AIDebug event logs
