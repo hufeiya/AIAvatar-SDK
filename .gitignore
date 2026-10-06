@@ -36,3 +36,8 @@ google-services.json
 # Local secrets (API keys) — never commit
 secrets.properties
 __pycache__/
+
+.zcode
+
+# 版权受限模型：仅本地保留，严禁入库
+app/src/main/assets/vrms/SK_Sun_PERFORMANCE_jacket_off_1024.vrm

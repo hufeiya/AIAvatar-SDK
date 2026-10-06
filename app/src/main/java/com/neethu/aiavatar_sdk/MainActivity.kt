@@ -204,7 +204,7 @@ private const val KEY_SELECTED_SCENE = "selected_scene"
 /** 选中模型持久化（内置或导入，均按文件名）。 */
 private const val KEY_SELECTED_MODEL = "selected_model"
 /** 无持久化存档时的默认模型（assets/vrms 内置）。 */
-private const val DEFAULT_MODEL = "SK_Sun_PERFORMANCE_jacket_off_1024.vrm"
+private const val DEFAULT_MODEL = "FreeTestCharacterAsuna_1024.vrm"
 private const val KEY_APP_LANGUAGE = "app_language"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
 /** 当前上下文创建时的大模型身份签名（[llmIdentitySignature]）；换模型即轮换上下文。 */
