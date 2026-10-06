@@ -45,7 +45,7 @@
 | `camera_shot` | `ai_arg`= closeup \| medium \| full \| long \| over \| off | 平滑运镜到预设机位：closeup 面部特写、medium 中景半身、full 全景全身、long 远景（大动作舞蹈用）、over 反应侧景；`off` 释放回自由相机 |
 | `look_at` | `ai_arg`= camera \| off，或 `ai_x` `ai_y` `ai_z`；省略 `ai_arg` = 查状态 | 视线控制（任务 5）：默认 camera（注视镜头=注视用户，由 FaceDriver 的 SaccadeEngine 每帧加注视抖动）；`ai_x/ai_y/ai_z`=世界坐标注视点（切 POINT 模式，未来人脸追踪同入口，**无 AI 会话也可用**——直接驱动 corelib 视线叠加）；`off`=关闭（头颈眼回动画自身姿态）；无参数=输出当前状态（目标/已施加 yaw/pitch/骨骼绑定），验证明看 yaw 是否非零 |
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
-| `open_panel` | `ai_arg`= none \| models \| animations \| expressions \| scenes \| cards \| settings | 打开/关闭对应底部面板（MIUI 禁止 shell 注入点击，用此命令驱动 UI 面板） |
+| `open_panel` | `ai_arg`= none \| models \| animations \| expressions \| scenes \| cards \| settings \| guide \| guide_cn \| guide_intl | 打开/关闭对应底部面板（MIUI 禁止 shell 注入点击，用此命令驱动 UI 面板）；`guide` = 新手引导半屏面板（未配 Key 时自动弹出的那个，受众按界面语言自动：中文→硅基流动版、其余→OpenRouter 版），`guide_cn`/`guide_intl` 强制指定受众做 A/B |
 | `spring_debug` | `ai_arg`=on \| off | 弹簧骨骼诊断：on 时每秒向 logcat（tag `SpringBone`）输出各弹簧链根/梢关节的骨长 len=当前/静止 与方向 dir，用于真机物理排查 |
 | `spring` | `ai_arg`=on \| off | 弹簧物理开关（头发/胸部的 sway 总闸）：off 时发骨冻结在当前姿势。用于排查「头发抽搐」类问题——off 后消失=抽搐源在弹簧响应；配合呼吸开关可区分激励源 |
 | `culling` | `ai_arg`=on \| off | 角色视锥剔除开关（默认 off=修复态）：gltfio 给蒙皮 mesh 的剔除盒是绑定姿态静态盒，特写+转头时眼球这类小 mesh 会被错误剔除（眼球丢失 bug）；on=旧行为（bug 兼容，A/B 复现用），off=蒙皮 mesh 永远绘制 |

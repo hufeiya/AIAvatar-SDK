@@ -133,7 +133,12 @@ fun aiDebugHelp(): String = """
     |                           on entry and returns to it after each turn
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
 |  open_panel <arg>         Open a bottom panel: none | models | animations |
-|                           expressions | scenes | cards | settings
+|                           expressions | scenes | cards | settings | guide |
+|                           guide_cn | guide_intl (guide = the onboarding
+|                           sheet shown while no API key is configured; the
+|                           variant follows the app language — Chinese ->
+|                           SiliconFlow, else -> OpenRouter — and guide_cn /
+|                           guide_intl force one for A/B)
     |  spring_debug <arg>       on/off: 1 Hz spring bone dump to logcat (tag SpringBone)
     |  culling <arg>           on/off: avatar frustum culling. Default OFF (fix for the
     |                           disappearing-eyeballs bug: gltfio uses static bind-pose

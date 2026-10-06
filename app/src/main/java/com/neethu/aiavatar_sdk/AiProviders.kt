@@ -120,12 +120,18 @@ enum class AiProvider(
             "openai/gpt-6-luna",
             "qwen/qwen3.7-flash",
             "anthropic/claude-sonnet-4.6",
+            // 免费路由 slug（2026-10-06 实测 64px 红/蓝图逐个过=真视觉，红 4.3s/蓝
+            // 10.1s）：自动路由到当前可用的免费模型，海外新手引导的默认落点（服务
+            // 商默认仍是首位，存量用户不受影响）。同日候选核验失败记录：gemma-4
+            // free 系 429 限流、inkling 系 403 不可用、dots-3 一次答空
+            "openrouter/free",
         ),
         visionLlmModels = listOf(
             "google/gemini-3.8-flash",
             "openai/gpt-6-luna",
             "qwen/qwen3.7-flash",
             "anthropic/claude-sonnet-4.6",
+            "openrouter/free",
         ),
         // OpenRouter /audio/speech 只认 mp3/pcm（wav 请求体不认）；TTS 模型
         // 各有独立音色表，只收一个默认模型防音色跨模型泄漏（同火山单模型模式）

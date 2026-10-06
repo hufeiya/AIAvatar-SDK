@@ -28,6 +28,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -90,7 +91,12 @@ import com.neethu.aiavatar_sdk.ui.SECTION_FREE_SPEECH
 import com.neethu.aiavatar_sdk.ui.SECTION_LANGUAGE
 import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
 import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
+import com.neethu.aiavatar_sdk.ui.OnboardingGuideSheet
+import com.neethu.aiavatar_sdk.ui.GuideVariant
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
+import com.neethu.aiavatar_sdk.ui.onboardingGuideVariant
+import com.neethu.aiavatar_sdk.ui.withOnboardingAsr
+import com.neethu.aiavatar_sdk.ui.withOnboardingKey
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.aiavatar_sdk.video.UserCameraTracker
 import com.neethu.aiavatar_sdk.video.PoseMimicMath
@@ -461,6 +467,19 @@ internal class DemoUiState(context: Context) {
     }
     var activePanel by mutableStateOf(PanelType.NONE)
     var isDragMode by mutableStateOf(false)
+
+    /**
+     * 新手引导面板显隐（ui/OnboardingGuide.kt）。触发判定（未配 Key：中文→国内
+     * 版硅基流动，其余→海外版 OpenRouter）在 DemoScreen；这里只是显隐位——
+     * adb `open_panel guide` 也走它强制打开。
+     */
+    var guideVisible by mutableStateOf(false)
+
+    /**
+     * adb `open_panel guide_cn|guide_intl` 强制指定的受众；null=按界面语言自动
+     * （DemoScreen 计算）。仅影响面板展示，不改变触发判定。
+     */
+    var guideVariantOverride by mutableStateOf<GuideVariant?>(null)
 
     /**
      * 对话输入三模式（任务 4，互斥）：手动点击=完整 UI（全部按钮可见），
@@ -1121,6 +1140,27 @@ private fun DemoScreen(
         if (chatError != null) {
             delay(6000)
             chatError = null
+        }
+    }
+
+    // ── 新手引导（ui/OnboardingGuide.kt）：AI 还没配好 → 未配 Key 期间每次
+    // 冷启动都弹（中文系统=国内版硅基流动，其余语言=海外版 OpenRouter）；
+    // 用户可关闭，点输入框/语音框会再弹（见 AiChatBar 的 onTapWhenDisabled）。
+    // Key 配置好后 guideVariant 恒 null。
+    val guideVariant = onboardingGuideVariant(uiState.lang, uiState.aiPrefs.isConfigured)
+    LaunchedEffect(Unit) { if (guideVariant != null) uiState.guideVisible = true }
+
+    val onGuideConfirm: (String) -> Unit = { key ->
+        guideVariant?.let { v ->
+            // 一键配置：大模型选免费+带视觉的落点（国内 Qwen3.8-27B 多模态 /
+            // 海外 openrouter/free）；海外 TTS=Edge-TTS（避开 OpenRouter 音频端点
+            // 的 ≥$0.5 余额门槛）、ASR=系统内置（免费）；国内 TTS/ASR 走硅基流动
+            // 默认。签名变化 → updateAiPrefs 轮换一次上下文（新用户无感）
+            uiState.updateAiPrefs(withOnboardingKey(uiState.aiPrefs, key, v))
+            uiState.updateVoicePrefs(withOnboardingAsr(uiState.voicePrefs, v))
+            uiState.guideVisible = false
+            chatError = null
+            Toast.makeText(context, strings.guideConfiguredToast(v.provider), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -2186,6 +2226,8 @@ private fun DemoScreen(
             onVoicePrefillConsumed = { voicePrefill = null },
             onHoldStart = onHoldStart,
             onHoldEnd = onHoldEnd,
+            // 未配置 AI 服务时点输入框/语音框 → 重新拉起新手引导（国内/海外按语言）
+            onTapWhenDisabled = { if (guideVariant != null) uiState.guideVisible = true },
             onSend = { text ->
                 pushUserLine(text)
                 // 技能先看文本（激活/退出/裁判），消费=技能已自行发起回合
@@ -2630,6 +2672,24 @@ private fun DemoScreen(
                 onDismiss = { uiState.activePanel = PanelType.NONE }
             )
         }
+
+        // 新手引导（国内/海外双版本）：Box 最上层，盖过包括设置在内的全部面板
+        AnimatedVisibility(
+            visible = uiState.guideVisible,
+            enter = fadeIn() + slideInVertically { it },
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            OnboardingGuideSheet(
+                // adb guide_cn/guide_intl 强制指定；否则按界面语言自动
+                variant = uiState.guideVariantOverride ?: guideVariant ?: GuideVariant.CN,
+                onDismiss = {
+                    uiState.guideVariantOverride = null
+                    uiState.guideVisible = false
+                },
+                onConfirm = onGuideConfirm,
+            )
+        }
     }
     }
 }
@@ -2683,6 +2743,11 @@ private fun AiChatBar(
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 未配置 AI 服务（[enabled]=false）时点输入框/语音输入区的兜底：新手引导
+     * 借它把用户带回配置流程（ui/OnboardingGuide.kt）。已配置时调用方自行忽略。
+     */
+    onTapWhenDisabled: () -> Unit = {},
 ) {
     var input by remember { mutableStateOf("") }
     val s = LocalStrings.current
@@ -2783,6 +2848,7 @@ private fun AiChatBar(
                             recognizing = recognizing,
                             hearing = freeHearing,
                             enabled = enabled,
+                            onTapWhenDisabled = onTapWhenDisabled,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(44.dp)
@@ -2795,6 +2861,7 @@ private fun AiChatBar(
                             enabled = enabled,
                             onPressStart = onHoldStart,
                             onPressEnd = onHoldEnd,
+                            onTapWhenDisabled = onTapWhenDisabled,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(44.dp)
@@ -2815,43 +2882,59 @@ private fun AiChatBar(
                             enabled = enabled,
                             onPressStart = onHoldStart,
                             onPressEnd = onHoldEnd,
+                            onTapWhenDisabled = onTapWhenDisabled,
                             compact = true,
                             modifier = Modifier.size(40.dp),
                         )
                     }
-                    TextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        placeholder = {
-                            Text(
-                                text = when {
-                                    !enabled -> s.placeholderNotConfigured
-                                    inputMode == InputMode.VIDEO -> s.placeholderVideo
-                                    inputMode == InputMode.VOICE -> s.placeholderVoiceConfirm
-                                    else -> s.placeholderType
-                                },
-                                fontSize = 13.sp
+                    // 未配置（enabled=false）时输入框不接受输入，点击由透明层
+                    // 接走 → 拉起新手引导（onTapWhenDisabled）
+                    Box(modifier = Modifier.weight(1f)) {
+                        TextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            placeholder = {
+                                Text(
+                                    text = when {
+                                        !enabled -> s.placeholderNotConfigured
+                                        inputMode == InputMode.VIDEO -> s.placeholderVideo
+                                        inputMode == InputMode.VOICE -> s.placeholderVoiceConfirm
+                                        else -> s.placeholderType
+                                    },
+                                    fontSize = 13.sp
+                                )
+                            },
+                            singleLine = true,
+                            enabled = enabled,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent,
+                            ),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = {
+                                if (enabled && input.isNotBlank()) {
+                                    onSend(input)
+                                    input = ""
+                                }
+                            }),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (!enabled) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = onTapWhenDisabled,
+                                    )
                             )
-                        },
-                        singleLine = true,
-                        enabled = enabled,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent,
-                        ),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = {
-                            if (enabled && input.isNotBlank()) {
-                                onSend(input)
-                                input = ""
-                            }
-                        }),
-                        modifier = Modifier.weight(1f)
-                    )
+                        }
+                    }
                     IconButton(
                         onClick = {
                             onSend(input)
@@ -2895,6 +2978,7 @@ private fun HoldToTalk(
     onPressEnd: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    onTapWhenDisabled: () -> Unit = {},
 ) {
     val bgColor = when {
         recording -> MaterialTheme.colorScheme.errorContainer
@@ -2924,7 +3008,10 @@ private fun HoldToTalk(
                         )
                     }
                 } else {
-                    Modifier
+                    // 未配置：点击不再是无响应，交给新手引导重新拉起配置流程
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(onTap = { onTapWhenDisabled() })
+                    }
                 }
             ),
         contentAlignment = Alignment.Center,
@@ -2990,6 +3077,7 @@ private fun FreeListenIndicator(
     hearing: Boolean,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    onTapWhenDisabled: () -> Unit = {},
 ) {
     val bgColor by animateColorAsState(
         targetValue = when {
@@ -3009,7 +3097,15 @@ private fun FreeListenIndicator(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(22.dp))
-            .background(bgColor),
+            .background(bgColor)
+            .then(
+                if (enabled) Modifier
+                else Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onTapWhenDisabled,
+                )
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

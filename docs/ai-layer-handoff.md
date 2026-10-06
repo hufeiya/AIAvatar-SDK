@@ -345,6 +345,15 @@
   - **一次性迁移（关键）**：demo 的 `loadRenderSettings` 把全部字段随存档持久化，老设备存档里固化的是旧默认 5000，只改代码默认值对已有安装无效——`loadRenderSettings` 首启检测 `render_ibl_migrated_13000` 标记，无则把 `render_iblIntensity` 强制刷成新默认（其余字段不动），此后用户手调值照常持久化不被再刷。
   - **同需求的「默认视角改远景」半途已按用户要求退回**（SoulLinkRenderer 的 Manipulator `orbitHomePosition` 实验后还原为 camutils 默认 (0,0,1)，距 MODEL_CENTER 5 单位）——别当丢失的改动重新补上；需要远景取景用 `CameraShot.LONG_SHOT`。
 
+- **新手引导（2026-10-06，用户需求「中文用户+未填大模型 Key 打开应用自动弹半屏引导；可关闭但点输入框/语音框重弹；确认后自动配置大模型/TTS/ASR，1 分钟内直接玩」+「用同样方式做非中文用户引导」；单测 +5 全量 534 全绿 app164/corelib56/adapter74/orchestrator240 debug 变体；APK 组装+真机 62fabe84 首启自动弹/guide_intl 强制拉起截图验证；交互由用户本人真机自测）**：
+  - **触发判定 `onboardingGuideVariant(lang, aiConfigured)`**（ui/OnboardingGuide.kt 纯函数）：`!aiPrefs.isConfigured` 才弹；系统中文（简繁一律归 Lang.ZH）→ **CN 国内版（硅基流动）**，其余全部语言 → **INTL 海外版（OpenRouter）**。DemoScreen `LaunchedEffect(Unit)` 满足即 `uiState.guideVisible = true`——没配 Key 期间每次冷启动都会弹；配置好恒 null 不再打扰。
+  - **面板 `ui/OnboardingGuide.kt`**：与 SettingsScreen 同款半屏 bottom sheet（62% 高，遮罩点击关闭），受众由 `GuideVariant`（CN/INTL，各带 provider+registerUrl）参数化——HorizontalPager 四页：3 张步骤截图（assets/guide/ 国内 step1_register|step2_realname|step3_apikey + 海外 intl_step1_getkey|intl_step2_signin|intl_step3_copy，均 ASCII 改名入库 ~1MB）+ 第 4 页无图（注册链接按钮 ACTION_VIEW 跳外部浏览器 + Key 输入 + 确认）。国内第 2 页叠「手机浏览器切电脑版网页」提示（实名页手机版网页点不动）；海外流程截图本就是手机网页，无此提示。
+  - **点输入框/语音框重弹**：AiChatBar 新增 `onTapWhenDisabled`——未配置（enabled=false）时 TextField 上叠透明点击层、HoldToTalk/FreeListenIndicator 禁用态点击均回调；MainActivity 里 `if (guideVariant != null) guideVisible = true`（已配置用户保持旧行为）。
+  - **确认一键配置 `withOnboardingKey`/`withOnboardingAsr`**（纯函数单测直测），大模型两版都选**免费+带视觉**：国内 llmModel=硅基流动 visionLlmModels.first()=Qwen/Qwen3.8-27B（用户点名，视频模式开箱即用）；海外=目录里名字含 "free" 的首个（动态规则用户点名；当前即 openrouter/free）——**海外 TTS=Edge-TTS（OpenRouter 音频端点要求账户 ≥$0.5 余额，新号不可用）、ASR=系统内置识别（同因），国内 TTS/ASR=硅基流动 OpenAI 兼容默认**；旧火山 Key 原样保留。签名变化 → updateAiPrefs 轮换一次上下文（新用户无感）。
+  - **openrouter/free 目录条目**（2026-10-06 核验）：OpenRouter 官方免费路由 slug，64px 红/蓝图实测真视觉（红 4.3s/蓝 10.1s）；同日候选失败记录：gemma-4 free 系 429 限流、inkling 系 403、dots-3 一次答空。**刻意不放 llmModels 首位**——服务商默认（gemini-3.8-flash）维持不变，它只作引导落点；OpenRouterProviderTest 目录锁同步。
+  - **adb**：`open_panel guide`（按界面语言自动）/ `open_panel guide_cn|guide_intl`（强制受众，guideVariantOverride 字段）；pager 翻页无 ai_cmd，验证轮播靠真机手滑。
+  - **坑**：Compose `var x by remember { mutableStateOf(...) }` 忘 import `setValue`/`mutableStateOf` 报「no method setValue delegate」；BOM 2024.09 的 HorizontalPager 在 `androidx.compose.foundation.pager`（count 用 lambda 重载）；改 AiProvider 目录会碰 AiProvidersTest 里的目录锁测试（OpenRouterProviderTest），加模型记得同步。
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。

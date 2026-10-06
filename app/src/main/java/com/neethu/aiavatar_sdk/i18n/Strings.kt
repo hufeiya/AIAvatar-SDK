@@ -433,6 +433,77 @@ class Strings(val lang: Lang) {
     val freeSpeechMinBufferFailed: String get() = zh("AudioRecord 最小缓冲获取失败", "Failed to get the AudioRecord minimum buffer")
     val micUnavailable: String get() = zh("麦克风不可用（可能被其他应用占用）", "Microphone unavailable (possibly held by another app)")
 
+    // ── 新手引导（未配大模型 Key 自动弹出；中文系统=硅基流动版，其余=OpenRouter 版）
+    val guideTitle: String get() = zh("1 分钟开始玩", "Get started in 1 minute")
+
+    /** 顶部推荐语（[target] = 引导落地的服务商：硅基流动=国内版，OpenRouter=海外版）。 */
+    fun guideIntro(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh(
+            "推荐注册硅基流动账号：注册非常快（约 1 分钟），新用户可领 16 元代金券，能免费玩好久。",
+            "We recommend a SiliconFlow account: sign-up takes about 1 minute, and new users get a ¥16 voucher — free play for a long time.",
+        )
+        else -> zh(
+            "推荐注册 OpenRouter 账号：注册约 1 分钟，大量模型带免费额度，一把 API Key 即可聊天，开箱免费玩。",
+            "We recommend a free OpenRouter account: sign-up takes about a minute, many models have a free tier, and one API key powers the chat — play for free.",
+        )
+    }
+    val guideSwipeHint: String get() = zh("左右滑动查看步骤", "Swipe for the steps")
+
+    /** 步骤页标题（[stepIndex] 0-2，与轮播截图一一对应）。 */
+    fun guideStepCaption(target: AiProvider, stepIndex: Int): String = when (target) {
+        AiProvider.SILICONFLOW -> when (stepIndex) {
+            0 -> zh("第 1 步 · 注册账号（手机号 + 验证码）", "Step 1 · Sign up (phone number + code)")
+            1 -> zh("第 2 步 · 实名认证（领代金券需要）", "Step 2 · Identity verification (needed for the voucher)")
+            else -> zh("第 3 步 · 新建 API 密钥并复制", "Step 3 · Create an API key and copy it")
+        }
+        else -> when (stepIndex) {
+            0 -> zh("第 1 步 · 打开 openrouter.ai，点「Get API Key」", "Step 1 · Open openrouter.ai and tap Get API Key")
+            1 -> zh("第 2 步 · 用 Google / GitHub 或邮箱登录", "Step 2 · Sign in with Google / GitHub or email")
+            else -> zh("第 3 步 · 点 Key 右侧按钮复制", "Step 3 · Tap the copy button next to your key")
+        }
+    }
+
+    /** 国内版实名页的手机浏览器提示（海外流程截图本就是手机网页，不需要）。 */
+    val guideStep2Hint: String get() = zh("⚠ 手机浏览器请先切换到「电脑版网页」再操作", "⚠ On a phone browser, switch to \"Desktop site\" first")
+    fun guideLastTitle(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh("最后一步 · 注册领券，粘贴 Key", "Last step · Register for the voucher, paste your key")
+        else -> zh("最后一步 · 粘贴 API Key", "Last step · Paste your API key")
+    }
+    fun guideOpenRegister(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh("打开注册页（跳转浏览器）", "Open the sign-up page (external browser)")
+        else -> zh("打开 OpenRouter（跳转浏览器）", "Open openrouter.ai (external browser)")
+    }
+    fun guideKeyPlaceholder(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh("粘贴 API Key（sk-…）", "Paste your API key (sk-…)")
+        else -> zh("粘贴 API Key（sk-or-v1-…）", "Paste your API key (sk-or-v1-…)")
+    }
+    val guideConfirm: String get() = zh("确认，开始聊", "Confirm & start chatting")
+
+    /** 确认键上方的自动配置说明（如实描述两套默认值，见 OnboardingGuide.kt）。 */
+    fun guideAutoNote(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh(
+            "点确认自动配置：大模型 / 语音合成 / 语音识别（都用默认模型）",
+            "Confirming auto-configures the LLM / TTS / speech recognition (default models)",
+        )
+        else -> zh(
+            "点确认自动配置：大模型（免费视觉模型）/ 语音合成（Edge-TTS 免费）/ 语音识别（系统内置免费）",
+            "Confirming auto-configures: LLM (free vision model) / TTS (free Edge-TTS) / speech recognition (built-in, free)",
+        )
+    }
+    val guideKeyEmpty: String get() = zh("请先粘贴 API Key", "Paste your API key first")
+    fun guideConfiguredToast(target: AiProvider): String = when (target) {
+        AiProvider.SILICONFLOW -> zh(
+            "已自动配置大模型 / 语音合成 / 语音识别（默认模型），开聊吧！",
+            "LLM / TTS / speech recognition configured with default models — start chatting!",
+        )
+        else -> zh(
+            "已自动配置：大模型（免费视觉模型）+ Edge-TTS + 系统语音识别，开聊吧！",
+            "Configured: free-vision LLM + Edge-TTS + built-in speech recognition — start chatting!",
+        )
+    }
+    val guideBrowserFail: String get() = zh("没有找到可用的浏览器", "No browser available on this device")
+    val guideCloseA11y: String get() = zh("关闭引导", "Dismiss guide")
+
     private fun zh(zh: String, en: String): String = if (lang == Lang.EN) en else zh
     private fun f(en: String, zh: String): String = if (lang == Lang.EN) en else zh
 }

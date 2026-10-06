@@ -339,6 +339,9 @@ class OpenRouterProviderTest {
                 "openai/gpt-6-luna",
                 "qwen/qwen3.7-flash",
                 "anthropic/claude-sonnet-4.6",
+                // 免费路由 slug（2026-10-06 64px 红/蓝图实测真视觉）：刻意不在
+                // 首位——服务商默认维持不变，它只作海外新手引导的落点
+                "openrouter/free",
             ),
             or.llmModels,
         )

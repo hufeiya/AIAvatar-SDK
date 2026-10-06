@@ -3,6 +3,7 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.neethu.aiavatar_sdk.ui.GuideVariant
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
 import kotlinx.coroutines.Dispatchers
@@ -622,6 +623,28 @@ private fun setDragModeCommand(uiState: DemoUiState, arg: String?): String {
 
 /** Open/switch a bottom panel without touching the screen (MIUI blocks shell input). */
 private fun openPanelCommand(uiState: DemoUiState, arg: String?): String {
+    when (arg?.lowercase()) {
+        // 新手引导不是 PanelType（独立 overlay，优先级高于全部面板）：
+        // guide=按界面语言自动选受众，guide_cn/guide_intl=强制指定（A/B 另一版）
+        "guide", "onboarding" -> {
+            uiState.guideVariantOverride = null
+            uiState.activePanel = PanelType.NONE
+            uiState.guideVisible = true
+            return "panel=guide (variant by app language)"
+        }
+        "guide_cn" -> {
+            uiState.guideVariantOverride = GuideVariant.CN
+            uiState.activePanel = PanelType.NONE
+            uiState.guideVisible = true
+            return "panel=guide (forced CN/siliconflow)"
+        }
+        "guide_intl", "guide_en" -> {
+            uiState.guideVariantOverride = GuideVariant.INTL
+            uiState.activePanel = PanelType.NONE
+            uiState.guideVisible = true
+            return "panel=guide (forced INTL/openrouter)"
+        }
+    }
     val panel = when (arg?.lowercase()) {
         null, "none", "off", "close" -> PanelType.NONE
         "models", "model" -> PanelType.MODELS
@@ -631,7 +654,7 @@ private fun openPanelCommand(uiState: DemoUiState, arg: String?): String {
         "cards", "card" -> PanelType.CARDS
         "settings" -> PanelType.SETTINGS
         else -> throw IllegalArgumentException(
-            "open_panel expects none|models|animations|expressions|scenes|cards|settings, got '$arg'"
+            "open_panel expects none|models|animations|expressions|scenes|cards|settings|guide|guide_cn|guide_intl, got '$arg'"
         )
     }
     uiState.activePanel = panel
