@@ -26,6 +26,14 @@ interface SkillHost {
     /** 当前相机抓拍缓存里的一帧（data URL）；无缓存/相机未开返回 null。 */
     fun snapshotImage(): String?
 
+    /**
+     * 抓拍缓存里**最新**的一帧（不管清晰度）：「看这边」判负瞬间要 ≤1 个
+     * 采样周期的新鲜度定格用户的懵逼表情，[snapshotImage] 的"窗内最清晰"
+     * 策略可能取到 500ms 前的旧帧。默认实现退化为 [snapshotImage]，集成方
+     * 有最新帧语义时覆写。
+     */
+    fun snapshotLatest(): String? = snapshotImage()
+
     /** 采音中实时调整 VAD 句尾静默悬停（技能态收短、退出恢复）。 */
     fun setVadHangover(ms: Long)
 

@@ -74,6 +74,9 @@
 | `skill_exit` | — | 强制退场激活中的技能（=对用户说「不玩了」的效果）：恢复用户设置的 VAD 句尾悬停，回 IDLE |
 | `rps_throw` | `ai_arg`= rock \| scissor \| paper（省略=查状态） | **强制出拳**（须 ARMED 态）：本地随机改为指定手势，播手势 VRMA + 抓帧，state→THROWN；此后下一句话（语音或 `send_chat "三二一"`）即成为裁判回合（带帧+技能指令发给大模型）——真机 A/B 与不开麦验证玩法的关键入口 |
 | `rps_gesture` | `ai_arg`= rock \| scissor \| paper（省略=查状态） | **模拟相机确认的用户手势**（P2 本地判定路径，免摄像头/免真手势）：ARMED 收到即本地随机出拳+本地判胜负+`speak()` 即时宣判（无 LLM 往返）；THROWN 收到=纯手势连局开下一拳；下一句话（语音或 `send_chat`）成为气氛组回合（指令带本地判定结果，模型只反应不重判）。验证 P2 链路时大模型无需 vision——判定是本地确定值 |
+| `look_status` | — | 「看这边」技能状态机快照：state（IDLE/INTRO/POINTING/ANNOUNCING）/已判定局数/比分（虚拟人:用户）/上次指向方向/本局结论（dodged/caught/frozen）/连续无脸局数/是否存有判负抓拍帧（技能 docs/lookhere-skill-feasibility.md；激活走语音「看这边」或含关键词的 send_chat） |
+| `look_throw` | `ai_arg`= up \| down \| left \| right（省略=查状态） | **强制朝指定方向指**：跳过 RNG 立即开/重开一局（播指向 VRMA+喊"看这边!"+判定窗）。两个用途：①屏幕方向标定——逐个执行，人眼看虚拟人实际指向画面的哪一侧，与文件名不符就改 `LookHereSkill.screenToAssetDir` 映射表；②免麦 A/B——强制指向后立刻转头，观察宣判是否正确 |
+| `face_pose` | — | 最近一次头部姿态观测：yaw/pitch（度）+ 数据年龄。**符号标定入口**：在「看这边」激活态（视频模式+前摄）依次向自己左/右/上/下转头，记录四组符号，与 `LookHereTuning` 的 `yawPositiveIsScreenLeft`/`pitchPositiveIsScreenUp` 对照，错了改布尔并用已知答案单测锁死。无数据时提示前置条件（技能激活+视频模式+前摄+脸在画面内） |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。

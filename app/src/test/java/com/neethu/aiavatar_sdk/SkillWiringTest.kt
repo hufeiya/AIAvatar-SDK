@@ -1,7 +1,10 @@
 package com.neethu.aiavatar_sdk
 
 import com.neethu.aiavatar_sdk.skills.isSkillGestureAsset
+import com.neethu.aiavatar_sdk.skills.lookHereAssets
 import com.neethu.aiavatar_sdk.skills.rpsHandAssets
+import com.neethu.orchestrator.skill.LookDir
+import com.neethu.orchestrator.skill.LookHereSkill
 import com.neethu.orchestrator.skill.RpsSkill
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,6 +52,29 @@ class SkillWiringTest {
         for (path in rpsHandAssets.values) {
             assertTrue("path must point into assets/animations: $path", path.startsWith("animations/"))
             assertTrue(path.endsWith(".vrma"))
+        }
+    }
+
+    @Test
+    fun `look-here gesture assets are excluded from llm catalog paths and complete`() {
+        assertEquals(LookDir.entries.toSet(), lookHereAssets.keys)
+        for (path in lookHereAssets.values) {
+            assertTrue(isSkillGestureAsset(path))
+            assertTrue("path must point into assets/animations: $path", path.startsWith("animations/"))
+            assertTrue(path.endsWith(".vrma"))
+        }
+        assertTrue(isSkillGestureAsset("/sdcard/Android/data/pkg/files/12_技能_看这边/gesture_left.vrma"))
+        assertFalse(isSkillGestureAsset("animations/04_交流手势/Nodding Head Yes.vrma"))
+    }
+
+    @Test
+    fun `look-here screen-to-asset mapping is a bijection over all directions`() {
+        val skill = LookHereSkill(lookHereAssets)
+        assertEquals(LookDir.entries.toSet(), skill.screenToAssetDir.values.toSet())
+        // 每个屏幕方向都能解析出一个资产路径（assetFor 的键完备性）
+        for (dir in LookDir.entries) {
+            val fileDir = skill.screenToAssetDir[dir] ?: dir
+            assertTrue("missing asset for $dir", lookHereAssets.containsKey(fileDir))
         }
     }
 }

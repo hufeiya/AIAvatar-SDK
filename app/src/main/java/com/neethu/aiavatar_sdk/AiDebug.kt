@@ -162,6 +162,18 @@ fun aiDebugHelp(): String = """
 |                           P2 local-judging path (local throw + instant
 |                           spoken verdict) without a camera — the next
 |                           utterance becomes the atmosphere turn
+|  look_status              Dump the Look-Here skill state (state/rounds/
+|                           score/last point direction/outcome/no-face streak)
+|  look_throw <arg>         Force a point: up | down | left | right (omit
+|                           ai_arg = status). Starts/restarts a round with a
+|                           fixed direction — screen-direction calibration
+|                           and no-mic A/B entry point (docs/lookhere-skill-
+|                           feasibility.md §5)
+|  face_pose                Dump the latest head pose from the FaceLandmarker
+|                           lane (yaw/pitch degrees + age; needs the look-here
+|                           skill active + video mode + front camera). Turn
+|                           your head each way and lock the signs into
+|                           LookHereTuning — the sign-calibration probe
 |Providers (SiliconFlow + Volcano + OpenRouter; LLM/TTS/ASR dropdowns in ⚙️):
 |  set_provider <arg>       Switch LLM provider: siliconflow | volcano |
 |                           openrouter (model list follows; empty model =

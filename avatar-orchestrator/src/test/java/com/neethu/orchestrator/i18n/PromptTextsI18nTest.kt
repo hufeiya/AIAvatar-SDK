@@ -128,6 +128,30 @@ class PromptTextsI18nTest {
         assertEquals("（出拳）", RpsTextsZh.throwPlaceholder)
     }
 
+    // ── LookHereTexts：EN 全成员无中文 ────────────────────────────────────────
+
+    @Test
+    fun `en look-here texts have no chinese`() {
+        val en = LookHereTextsEn
+        assertNoCjk("introDirective", en.introDirective())
+        assertNoCjk("lookHereCry", en.lookHereCry)
+        for (odd in booleanArrayOf(true, false)) {
+            assertNoCjk("caughtTail odd=$odd", en.caughtTail(odd))
+            assertNoCjk("frozenTail odd=$odd", en.frozenTail(odd))
+            assertNoCjk("dodgedTail odd=$odd", en.dodgedTail(odd))
+        }
+        assertNoCjk("noFaceHint", en.noFaceHint())
+        assertNoCjk("reportDirective with frame", en.reportDirective(3, 1, 4, true))
+        assertNoCjk("reportDirective no frame", en.reportDirective(0, 2, 2, false))
+    }
+
+    @Test
+    fun `zh look-here anchors keep their shape`() {
+        assertTrue(LookHereTextsZh.introDirective().startsWith("【技能:看这边】"))
+        assertEquals("看这边!", LookHereTextsZh.lookHereCry)
+        assertTrue(LookHereTextsZh.reportDirective(2, 1, 3, true).contains("比分你2:1"))
+    }
+
     // ── of(lang) 分发 ─────────────────────────────────────────────────────────
 
     @Test
@@ -136,5 +160,7 @@ class PromptTextsI18nTest {
         assertEquals(PromptTextsEn, PromptTexts.of(Lang.EN))
         assertEquals(RpsTextsZh, RpsTexts.of(Lang.ZH))
         assertEquals(RpsTextsEn, RpsTexts.of(Lang.EN))
+        assertEquals(LookHereTextsZh, LookHereTexts.of(Lang.ZH))
+        assertEquals(LookHereTextsEn, LookHereTexts.of(Lang.EN))
     }
 }

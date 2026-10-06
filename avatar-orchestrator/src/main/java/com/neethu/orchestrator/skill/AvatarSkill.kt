@@ -44,6 +44,22 @@ interface AvatarSkill {
      */
     fun onUserGesture(gesture: Int, ctx: SkillContext) {}
 
+    /**
+     * 头部姿态观测（「看这边」技能：MediaPipe FaceLandmarker 的
+     * facialTransformationMatrix 分解出的 yaw/pitch，度，app 层逐帧喂）。
+     * 只在技能激活时才有事件（app 侧按 isActive 门控整条检测车道，与手势
+     * 车道互斥——同一分析线程不并跑两个 MediaPipe 任务）。
+     */
+    fun onHeadPose(yawDeg: Float, pitchDeg: Float, ctx: SkillContext) {}
+
+    /**
+     * 一次直通 [SkillHost.speak] 的播放完成（成功或失败都会来；被 interrupt
+     * 掐断的不会——打断走 [onInterrupted]）。「看这边」用它做回合节拍
+     * （go 信号播完才宣判、宣判播完才下一局，避免自己的 speak 抢占自己的
+     * 音频）；不依赖播放时序的技能无需理会。
+     */
+    fun onSpeakCompleted(spokenText: String, ctx: SkillContext) {}
+
     /** 一轮回合（含技能经 sendTurn 发起的）完整结束。 */
     fun onTurnCompleted(reply: String, ctx: SkillContext) {}
 

@@ -114,9 +114,11 @@ import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
+import com.neethu.orchestrator.skill.LookHereSkill
 import com.neethu.orchestrator.skill.RpsSkill
 import com.neethu.aiavatar_sdk.skills.DemoSkillHost
 import com.neethu.aiavatar_sdk.skills.isSkillGestureAsset
+import com.neethu.aiavatar_sdk.skills.lookHereAssets
 import com.neethu.aiavatar_sdk.skills.rpsHandAssets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -847,8 +849,12 @@ private fun DemoScreen(
     // 构造传入；RpsSkill 实例跨会话重建保持状态（局数/激活态）。
     val skillHost = remember { DemoSkillHost(scope) }
     val rpsSkill = remember { RpsSkill(rpsHandAssets) }
+    val lookHereSkill = remember { LookHereSkill(lookHereAssets) }
     // 技能指令行/宣判词随界面语言切换（实例跨会话重建保持状态）
-    LaunchedEffect(uiState.lang) { rpsSkill.lang = uiState.lang }
+    LaunchedEffect(uiState.lang) {
+        rpsSkill.lang = uiState.lang
+        lookHereSkill.lang = uiState.lang
+    }
     val aiChat = remember {
         AiChatController(scope, controller, context.applicationContext, skillHost)
     }
@@ -904,6 +910,7 @@ private fun DemoScreen(
                 }
             s.actionCatalog = buildLlmActionCatalog(assetPaths, externalFiles)
             s.skills.register(rpsSkill)
+            s.skills.register(lookHereSkill)
         }
     }
 
@@ -1258,10 +1265,16 @@ private fun DemoScreen(
     // 猜拳 P2 手势车道（docs/rps-skill-feasibility.md §5）：技能激活（INVITED 起，
     // 顺带预热引擎）才在分析线程跑 MediaPipe；确认手势主线程广播给全部技能。
     // 无事件时零开销（不转位图不建引擎），MediaPipe 不可用则纯走 P0 语音路径。
-    videoTracker.gestureEnabled = { rpsSkill.isActive }
+    // 「看这边」的头部姿态车道互斥优先（同一分析线程不并跑两个 MediaPipe 任务）。
+    videoTracker.gestureEnabled = { rpsSkill.isActive && !lookHereSkill.isActive }
+    videoTracker.headPoseEnabled = { lookHereSkill.isActive }
     videoTracker.onGestureConfirmed = { code ->
         scope.launch { session?.skills?.onUserGesture(code) }
     }
+    videoTracker.onHeadPose = { yaw, pitch ->
+        scope.launch { session?.skills?.onHeadPose(yaw, pitch) }
+    }
+    skillHost.snapshotLatestProvider = { videoTracker.snapshotLatestDataUrl() }
     freeSpeech.isAvatarSpeaking = { chatPhase == ConversationPhase.SPEAKING }
 
     val onToggleFreeTalk: () -> Unit = {
@@ -1793,6 +1806,25 @@ private fun DemoScreen(
             skillDebug = { id, arg ->
                 session?.skills?.debug(id, arg)
                     ?: throw IllegalStateException("no AI chat session (skills live on the session)")
+            },
+            // ai_cmd face_pose：最近一次头部姿态观测（「看这边」符号标定用）——
+            // 数据在 videoTracker（分析线程写），不经技能注册表；直接显示系统
+            // 按当前标定常量把该头姿解读成哪个屏幕方向，用户转头一对照即知
+            // 符号布尔是否要翻
+            facePose = {
+                val p = videoTracker.latestHeadPose
+                if (p == null) {
+                    "no head pose yet (requires: look-here skill active + video mode + " +
+                        "front camera + a face in frame)"
+                } else {
+                    val age = android.os.SystemClock.elapsedRealtime() - p.atMs
+                    val believed = lookHereSkill.tuning.dominantDirection(p.yawDeg, p.pitchDeg)
+                    val believedStr = believed?.label(uiState.lang) ?: "≈center"
+                    ("yaw=%.1f pitch=%.1f age=%dms → system reads your head as: %s " +
+                        "(hold your head turned to one side; if this label disagrees with " +
+                        "reality, flip LookHereTuning.yawPositiveIsScreenLeft/pitchPositiveIsScreenUp)")
+                        .format(p.yawDeg, p.pitchDeg, age, believedStr)
+                }
             },
         )
     }

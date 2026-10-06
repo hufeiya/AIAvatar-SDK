@@ -486,6 +486,7 @@ class AvatarSession(
         if (turnJob?.isActive == true) interrupt("superseded")
         val ttsCfg = ttsConfig ?: run {
             emit(AvatarEvent.TurnFailed(IllegalStateException("ttsConfig not set")))
+            skills.onSpeakCompleted(text)
             return
         }
         val job = scope.launch {
@@ -505,12 +506,16 @@ class AvatarSession(
                 pipeline.awaitTurnComplete()
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
+                // speak 的完成事件单独广播（回合结果广播刻意不含 speak）：
+                // 「看这边」用它做回合节拍；其余技能默认空实现无感
+                skills.onSpeakCompleted(text)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
                 pipeline.cancelTurn("speak-error")
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnFailed(t))
+                skills.onSpeakCompleted(text)
             }
         }
         turnJob = job

@@ -41,9 +41,14 @@ import java.util.concurrent.Executors
  *     分析帧上跑 MediaPipe GestureRecognizer（bundled ~8MB，IMAGE 模式
  *     同步 10-20ms），结果经 [GestureStabilityGate] 确认后投 [onGestureConfirmed]
  *     到主线程 → 技能缝。关着时零开销（不建引擎不转位图）。
+ *  4. **头部姿态**（「看这边」技能）：[headPoseEnabled] 为真时（技能激活）
+ *     跑 MediaPipe FaceLandmarker（~3.7MB，IMAGE 模式同步 10-30ms），
+ *     facialTransformationMatrix 分解出 yaw/pitch（度）经 [onHeadPose] 投
+ *     主线程 → 技能缝，最近一帧存 [latestHeadPose]（face_pose 调试观测）。
+ *     与手势车道互斥（同一分析线程不并跑两个 MediaPipe 任务），关=零开销。
  *
  * 生命周期：进出视频模式配对 [start]/[stop]；[switchLens] 重绑前后摄。
- * ML Kit 检测器随 start/stop 重建/释放；手势引擎懒创建、stop 时经分析
+ * ML Kit 检测器随 start/stop 重建/释放；手势/姿态引擎懒创建、stop 时经分析
  * executor 串行释放（与识别调用同队列，杜绝并发 close 原生实例）。
  * 线程：相机绑定在主线程（CameraX 要求），分析回调解在单线程 executor。
  */
@@ -92,6 +97,28 @@ class UserCameraTracker(private val context: android.content.Context) {
     private var gestureEngine: HandGestureRecognizer? = null
     private val gestureGate = GestureStabilityGate()
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // ── 头部姿态车道（「看这边」技能）────────────────────────────────────
+    // 线程约定与手势车道相同；判定窗/稳定性门在技能层（LookHereJudge），
+    // 这里只逐帧上报原始姿态。
+
+    /** 一帧头部姿态（相机系欧拉角，度；屏幕方向映射在技能层标定）。 */
+    data class HeadPoseSample(val yawDeg: Float, val pitchDeg: Float, val atMs: Long)
+
+    /** 技能要头部姿态吗（app 接 lookHereSkill.isActive）：关=整条车道零开销。 */
+    @Volatile
+    var headPoseEnabled: () -> Boolean = { false }
+
+    /** 头部姿态回调（主线程投递，度）。 */
+    @Volatile
+    var onHeadPose: ((Float, Float) -> Unit)? = null
+
+    /** 最近一次头部姿态（分析线程写，ai_cmd face_pose 主线程读）。 */
+    @Volatile
+    var latestHeadPose: HeadPoseSample? = null
+        private set
+
+    private var poseEngine: FaceLandmarkerEngine? = null
 
     private var lastSnapshotMs = 0L
     private var lastDetectMs = 0L
@@ -193,11 +220,13 @@ class UserCameraTracker(private val context: android.content.Context) {
         detector = null
         latestFace = null
         busy.set(false)
-        // 手势引擎在分析线程释放：与可能还在跑的 recognize() 同队列串行，
-        // 杜绝主线程 close 撞上原生实例并发调用
+        // 手势/姿态引擎在分析线程释放：与可能还在跑的 recognize()/detect() 同
+        // 队列串行，杜绝主线程 close 撞上原生实例并发调用
         executor.execute {
             gestureEngine?.close()
             gestureEngine = null
+            poseEngine?.close()
+            poseEngine = null
         }
         Log.i(TAG, "camera released")
     }
@@ -232,6 +261,9 @@ class UserCameraTracker(private val context: android.content.Context) {
     /** 发送时刻取帧：缓存窗内最清晰一帧的 data URL；无缓存返回 null。 */
     fun snapshotDataUrl(): String? = ring.best()?.dataUrl
 
+    /** 最新一帧（不管清晰度）：「看这边」判负瞬间的懵逼表情要新鲜度。 */
+    fun snapshotLatestDataUrl(): String? = ring.newest()?.dataUrl
+
     /** ai_cmd 观测行。 */
     fun debugStatus(): String {
         val face = latestFace
@@ -249,6 +281,14 @@ class UserCameraTracker(private val context: android.content.Context) {
         gestureEngine?.let { return it }
         return runCatching { HandGestureRecognizer(context).also { gestureEngine = it } }
             .onFailure { Log.w(TAG, "gesture recognizer init failed: ${it.message}") }
+            .getOrNull()
+    }
+
+    /** 懒建姿态引擎（同手势引擎的线程与静默降级约定）。 */
+    private fun obtainPoseEngine(): FaceLandmarkerEngine? {
+        poseEngine?.let { return it }
+        return runCatching { FaceLandmarkerEngine(context).also { poseEngine = it } }
+            .onFailure { Log.w(TAG, "face landmarker init failed: ${it.message}") }
             .getOrNull()
     }
 
@@ -277,10 +317,12 @@ class UserCameraTracker(private val context: android.content.Context) {
         }
         try {
             val rotation = proxy.imageInfo.rotationDegrees
-            // 手势车道只在前摄+技能激活的分析帧上跑（关=零开销）；app 侧接的是
-            // rpsSkill.isActive，INVITED 起就预热引擎，ARMED 首个手势不必吃冷启动
+            // 检测车道只在前摄+技能激活的分析帧上跑（关=零开销）；两条
+            // MediaPipe 车道互斥（同一分析线程不并跑），激活技能方优先
+            val wantPose = detectDue && lensFacing == CameraSelector.LENS_FACING_FRONT &&
+                headPoseEnabled()
             val wantGesture = detectDue && lensFacing == CameraSelector.LENS_FACING_FRONT &&
-                gestureEnabled()
+                gestureEnabled() && !wantPose
             val snapBitmap = if (snapDue) {
                 runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
             } else {
@@ -311,6 +353,21 @@ class UserCameraTracker(private val context: android.content.Context) {
                     val cb = onGestureConfirmed
                     if (confirmed != PresetGestures.NONE && cb != null) {
                         mainHandler.post { cb(confirmed) }
+                    }
+                }
+            }
+
+            // 头部姿态（「看这边」）：与手势块同款复用抓拍位图的套路；无门控
+            // ——判定窗/基线/稳定性都在技能层（LookHereJudge），这里逐帧直报
+            if (wantPose) {
+                val bmp = snapBitmap ?: runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
+                if (bmp != null) {
+                    val pose = runCatching { obtainPoseEngine()?.detect(bmp) }.getOrNull()
+                    if (bmp !== snapBitmap) bmp.recycle()
+                    if (pose != null) {
+                        latestHeadPose = HeadPoseSample(pose.first, pose.second, now)
+                        val cb = onHeadPose
+                        if (cb != null) mainHandler.post { cb(pose.first, pose.second) }
                     }
                 }
             }

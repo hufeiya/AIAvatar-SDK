@@ -89,6 +89,8 @@ internal class AiChatDebugHooks(
     val skillDebug: (String, String?) -> String = { _, _ ->
         "AI chat not wired in this screen"
     },
+    /** ai_cmd face_pose：最近一次头部姿态观测行（「看这边」符号标定用）。 */
+    val facePose: () -> String = { "head pose not wired in this screen" },
 )
 
 /**
@@ -325,6 +327,20 @@ internal suspend fun executeAiCommand(
                 // 判定路径），免摄像头/免真手势驱动——本地出拳+即时宣判立即发生，
                 // 下一句 send_chat/语音成为气氛组回合
                 chat.skillDebug("rps", command.arg?.lowercase()?.let { "gesture_$it" } ?: "status")
+            }
+            "look_status" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.skillDebug("look", "status")
+            }
+            "look_throw" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // ai_arg = up|down|left|right（省略=查状态）：强制朝指定方向指——
+                // 屏幕方向标定与免麦 A/B 的关键入口
+                chat.skillDebug("look", command.arg?.lowercase()?.let { "throw_$it" } ?: "status")
+            }
+            "face_pose" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.facePose()
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

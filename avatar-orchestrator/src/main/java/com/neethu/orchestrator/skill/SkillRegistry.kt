@@ -41,9 +41,22 @@ class SkillRegistry(
         return null
     }
 
-    /** 一句识别文本到达；返回是否有技能消费了它（消费=调用方跳过默认发送）。 */
-    fun onUtterance(text: String): Boolean =
-        skills.values.any { skill -> skill.onUtterance(text, contextFor(skill)) }
+    /**
+     * 一句识别文本到达；返回是否有技能消费了它（消费=调用方跳过默认发送）。
+     * 广播后做**单活跃收口**：一局之内一句话让两个技能同时转活（比如游戏
+     * 中说"猜拳"唤醒了 RpsSkill），后激活者胜出、先激活的走 onExit 副作用
+     * 退场——技能互不知晓，仲裁收在框架里。
+     */
+    fun onUtterance(text: String): Boolean {
+        val before = skills.values.filterTo(ArrayList()) { it.isActive }
+        val consumed = skills.values.any { skill -> skill.onUtterance(text, contextFor(skill)) }
+        val after = skills.values.filter { it.isActive }
+        if (after.size > 1) {
+            val keep = after.lastOrNull { it !in before } ?: after.first()
+            for (skill in after) if (skill !== keep) skill.onExit(contextFor(skill))
+        }
+        return consumed
+    }
 
     /** VAD 句尾快路径（ASR 之前的时机信号）。 */
     fun onVadUtterance(wavMs: Long) {
@@ -53,6 +66,16 @@ class SkillRegistry(
     /** 相机手势观测（P2 MediaPipe 缝）。 */
     fun onUserGesture(gesture: Int) {
         for (skill in skills.values) skill.onUserGesture(gesture, contextFor(skill))
+    }
+
+    /** 头部姿态观测（「看这边」缝，度）。 */
+    fun onHeadPose(yawDeg: Float, pitchDeg: Float) {
+        for (skill in skills.values) skill.onHeadPose(yawDeg, pitchDeg, contextFor(skill))
+    }
+
+    /** 直通 speak 播放完成（成功/失败都广播；被掐断的不广播，见 AvatarSkill doc）。 */
+    fun onSpeakCompleted(spokenText: String) {
+        for (skill in skills.values) skill.onSpeakCompleted(spokenText, contextFor(skill))
     }
 
     fun onTurnCompleted(reply: String) {
