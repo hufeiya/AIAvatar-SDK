@@ -204,6 +204,8 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity
 ```
 
+**签名打包**：在仓库根目录放一个 `keystore.properties`（四行：`storeFile` / `storePassword` / `keyAlias` / `keyPassword`，文件与密钥库都被 .gitignore 排除），`./gradlew :app:assembleRelease` 即产出正式签名的 `app/build/outputs/apk/release/AIAvatar-v<版本>-release.apk`；没有该文件时自动回落 debug 签名，克隆即跑。正式签名一经上架请永久保管密钥库——签名变了无法覆盖安装。
+
 `docs/` 目录是面向维护者的内部文档（架构交接、调试协议、技能可行性报告）。
 
 ## Roadmap（接口优化方向）

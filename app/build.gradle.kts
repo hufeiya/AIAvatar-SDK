@@ -1,8 +1,24 @@
+import com.android.build.gradle.api.ApkVariantOutput
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// ── 正式签名配置（根目录 keystore.properties 存在则启用）────────────────
+// keystore.properties 里四行：storeFile / storePassword / keyAlias / keyPassword
+// （该文件与密钥库 *.jks 都在 .gitignore，严禁入库）。文件缺失时回落 debug
+// 签名——保持「克隆即跑」，assembleDebug/assembleRelease 均可装可跑，只是
+// release 的签名不是正式的。签名变了包就换不了旧安装，正式发布签名一旦
+// 上线请永久保管好密钥库。
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+val hasReleaseSigning = keystorePropsFile.exists() &&
+    keystoreProps.getProperty("storeFile")?.isNotBlank() == true
 
 android {
     namespace = "com.neethu.aiavatar_sdk"
@@ -18,6 +34,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -25,8 +52,20 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // demo 项目:release 直接用 debug 签名(免配 keystore,可装可调试对比)
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                // demo 项目:无 keystore.properties 时回落 debug 签名(免配可装可调试对比)
+                signingConfigs.getByName("debug")
+            }
+        }
+    }
+    // 产物重命名：app/build/outputs/apk/<variant>/AIAvatar-v<版本>-<variant>.apk
+    applicationVariants.all {
+        val variantName = this.name
+        outputs.all {
+            (this as? ApkVariantOutput)?.outputFileName =
+                "AIAvatar-v${defaultConfig.versionName}-$variantName.apk"
         }
     }
     compileOptions {
