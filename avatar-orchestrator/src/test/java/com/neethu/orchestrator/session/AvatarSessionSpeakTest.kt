@@ -80,10 +80,10 @@ class AvatarSessionSpeakTest {
         }
     }
 
-    private fun newSession(queue: RecordingQueue, tts: TtsAdapter): AvatarSession =
+    private fun newSession(queue: RecordingQueue, tts: TtsAdapter, llm: LlmAdapter? = NeverCalledLlm()): AvatarSession =
         AvatarSession(
             scope = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()),
-            llm = NeverCalledLlm(),
+            llm = llm,
             tts = tts,
             controller = null,
             playbackQueue = queue,
@@ -152,6 +152,47 @@ class AvatarSessionSpeakTest {
         session.speak("   \n ")
 
         assertEquals(0, queue.played.size)
+        assertEquals(ConversationPhase.IDLE, session.phase.value)
+    }
+
+    @Test
+    fun `speak works on a speak-only session with llm null`() = runTest {
+        // 纯 TTS 会话（llm = null）：speak 通道零依赖 LLM，免费 TTS 场景的最小接入面
+        val queue = RecordingQueue()
+        val session = newSession(queue, FakeTts(), llm = null)
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        backgroundScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            session.events.collect { events += it }
+        }
+
+        session.speak("你好呀。")
+
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("你好呀。"), queue.played.map { it.text })
+        assertEquals(1, events.filterIsInstance<AvatarEvent.TurnCompleted>().size)
+        assertTrue(events.none { it is AvatarEvent.TurnFailed })
+        assertEquals(ConversationPhase.IDLE, session.phase.value)
+    }
+
+    @Test
+    fun `send on a speak-only session emits TurnFailed and stays idle`() = runTest {
+        val session = newSession(RecordingQueue(), FakeTts(), llm = null)
+        session.llmConfig = LlmConfig(baseUrl = "https://example.invalid", apiKey = "k", model = "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val failures = mutableListOf<AvatarEvent.TurnFailed>()
+        backgroundScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            session.events.collect { if (it is AvatarEvent.TurnFailed) failures += it }
+        }
+
+        session.send("说话模式没有大脑。")
+
+        testScheduler.runCurrent()
+
+        // 配置齐全但 llm adapter 未注入：与缺 ttsConfig 同款收口（事件 + 回 IDLE，不崩溃）
+        assertEquals(1, failures.size)
+        assertTrue(failures[0].error.message!!.contains("speak-only"))
         assertEquals(ConversationPhase.IDLE, session.phase.value)
     }
 }

@@ -334,6 +334,12 @@
   - **UI**：MODELS 面板顶部导入入口（ListPanel 加 `header` 槽位）；SAF `OpenDocument` MIME 用 `*/*`（VRM 无标准类型，部分文件管理器报 octet-stream、部分报空，按扩展名过滤会漏，落盘前 magic 校验兜底）；导入成功=Toast+自动选中+新上下文，失败上错误条；双语文案 `importModel/modelImported/modelImportFailed`。
   - **adb**：`import_model <path>`（push 到外部目录即导，与 UI 同落盘/防撞/自动选中/新上下文路径）；help 与 docs/ai-debug-intents.md 同步。单测：ImportedModelLibraryTest 8（magic/净化/防撞）+FaceDriverExpressionRefreshTest 2（集合重捕/名字解析重绑+dedup 清零语义）。
 
+- **最小接入样例 + README 快速开始（2026-10-06，用户需求「GitHub README 展示几行代码就能用 SDK」；单测 +2 全量 529 全绿 app159/corelib56/adapter74/orchestrator240 debug 变体；APK 组装 + 真机 62fabe84 冒烟：SimpleDemoActivity 启动→10.vrm 加载→开场白两句合成播放→FaceDriver 口型驱动日志实证）**：
+  - **`AvatarSession.llm` 改可空（`llm: LlmAdapter? = null`）**：纯 TTS 会话不再需要塞占位 adapter——`send()` 在 llm 未注入时与缺 ttsConfig 同款收口（emit `TurnFailed(IllegalStateException("llm adapter not set (speak-only session)"))` + 回 IDLE 不崩溃）；`speak()` 通道零依赖 LLM。构造参数 `llm` 带默认值但后面的 `tts` 没有，纯 TTS 接入必须用命名参数（`AvatarSession(scope, tts = EdgeTtsAdapter(), controller = c)`）。
+  - **`SimpleDemoActivity`（app 模块，~200 行）**：README 的活样例——**只 import SDK 公开 API**（corelib 四件套 + orchestrator AvatarSession + adapter 三类），零 app 内部助手；免 Key 可跑（显示 + Edge-TTS 说话），填文件顶部 `API_KEY` 常量即开启 LLM 对话（`llm = if (API_KEY.isBlank()) null else OpenAiCompatibleLlmAdapter(...)`）。Manifest `exported=true` 无 intent-filter，`adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity` 直达；LAUNCHER 仍是 MainActivity。
+  - **根 `README.md` 新建**（全仓此前无 README）：三段式快速开始（显示→免 Key 说话→对话，代码与 SimpleDemoActivity 逐行对应）+ 资产准备 + API 速查表 + **Roadmap=SDK 接口优化四方向**（①maven-publish 发布物〔全仓无 publishing 配置只能源码集成〕②高阶门面把 app 层 AiChatController/AiProviders 约 600 行装配逻辑下沉 ③非 Compose View 入口〔SoulLinkRenderer 是 internal〕④corelib 内置默认 IBL）。
+  - **坑（自查抓出）**：首版 SimpleDemoActivity 漏写 `loadModel` 的 `LaunchedEffect`——AvatarView 背景色正常渲染但模型永不加载、state 停在 Idle 无任何提示（截屏差分+logcat 定位）；StatusText 里 `Modifier.align`（BoxScope 扩展）在独立 Composable 函数体内解析不到，必须调用点传 modifier。
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。

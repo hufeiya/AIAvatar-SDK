@@ -71,11 +71,18 @@ import kotlinx.coroutines.launch
  * ```
  *
  * If no [AvatarController] is provided the session still works (audio-only,
- * headless) — useful for tests and voice-only deployments.
+ * headless) — useful for tests and voice-only deployments. Likewise, `llm = null`
+ * builds a speak-only session (free TTS, no LLM) — [send] then emits
+ * [AvatarEvent.TurnFailed] instead of streaming.
  */
 class AvatarSession(
     private val scope: CoroutineScope,
-    private val llm: LlmAdapter,
+    /**
+     * null = 纯 TTS 会话（只允许 [speak]，[send] 发 [AvatarEvent.TurnFailed]）——
+     * 免 LLM 的「只显示+说话」接入不必再塞占位 adapter。有默认值但后面的
+     * [tts] 没有，纯 TTS 接入请用命名参数（见类 KDoc 示例）。
+     */
+    private val llm: LlmAdapter? = null,
     private val tts: TtsAdapter,
     private val controller: AvatarController? = null,
     private val options: Options = Options(),
@@ -377,6 +384,9 @@ class AvatarSession(
         val ttsCfg = ttsConfig ?: run {
             emit(AvatarEvent.TurnFailed(IllegalStateException("ttsConfig not set"))); return
         }
+        val llmAdapter = llm ?: run {
+            emit(AvatarEvent.TurnFailed(IllegalStateException("llm adapter not set (speak-only session)"))); return
+        }
         if (images.isNotEmpty()) {
             Log.i("AvatarSession", "${STREAM_PREFIX}multimodal turn: ${images.size} image(s), text=${text.take(40)}")
         }
@@ -399,7 +409,7 @@ class AvatarSession(
             var usage: LlmUsage? = null
             try {
                 val built = buildRequestMessages(images, contextFirstTurn)
-                llm.streamChat(built.messages, llmCfg).collect { event ->
+                llmAdapter.streamChat(built.messages, llmCfg).collect { event ->
                     when (event) {
                         is LlmStreamEvent.TextDelta -> {
                             if (ttfbMs < 0) ttfbMs = SystemClock.elapsedRealtime() - turnStartMs

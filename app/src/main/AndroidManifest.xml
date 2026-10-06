@@ -41,6 +41,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 最小接入样例（README 快速开始的活样例）；无 intent-filter，
+             adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity 直达 -->
+        <activity
+            android:name=".SimpleDemoActivity"
+            android:exported="true"
+            android:label="@string/simple_demo_label" />
     </application>
 
 </manifest>

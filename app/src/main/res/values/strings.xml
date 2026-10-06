@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">AIAvatar-SDK</string>
+    <string name="simple_demo_label">最小接入演示</string>
 </resources>
