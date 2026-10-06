@@ -16,10 +16,11 @@
 :app  （Demo：全功能演示 + 最小接入样例）
  │
  ├──> :avatar-orchestrator   会话编排：LLM 流 / TTS 管线 / 表情仲裁 / 技能框架
- │      │
+ │      │                      + AIAvatarSdk 高阶门面（配置装配一步到位）
  │      └──> :avatar-ai-adapter   LlmAdapter / TtsAdapter / AsrAdapter 接口与实现
  │
- └──> :corelib               Filament 渲染底座：AvatarController + AvatarView（Compose）
+ └──> :corelib               Filament 渲染底座：AvatarController
+                               + AvatarView（Compose）/ AvatarSurfaceView（传统 View）
 ```
 
 依赖方向只允许向下；adapter 不感知渲染，corelib 不感知 AI。
@@ -59,7 +60,7 @@ class DemoActivity : ComponentActivity() {
             AvatarView(
                 modifier = Modifier.fillMaxSize(),
                 controller = controller,
-                config = AvatarConfig(iblPath = "default_env.ktx"), // IBL 可选
+                config = AvatarConfig(), // 内置默认环境光，零资产开箱即亮
             )
 
             LaunchedEffect(Unit) {
@@ -68,6 +69,14 @@ class DemoActivity : ComponentActivity() {
         }
     }
 }
+```
+
+传统 View（非 Compose）工程用 `AvatarSurfaceView`：
+
+```kotlin
+val avatarView = AvatarSurfaceView(this)               // 生命周期自动绑定 Activity
+setContentView(avatarView)
+avatarView.controller.loadModel("model.vrm")
 ```
 
 模型就绪状态通过 `controller.state`（`Idle → Loading → Ready / Error`）观察。
@@ -102,6 +111,22 @@ LaunchedEffect(state) {
 
 ### 4. 开启对话（填一个 API Key）
 
+**方式 A：`AIAvatarSdk` 门面（推荐）**——adapter 工厂、配置解析、会话重建全部收拢，一条 `configure` 开聊：
+
+```kotlin
+val chat = AIAvatarSdk(scope, controller, applicationContext)
+
+// 内置三家服务商目录（硅基流动 / 火山引擎 / OpenRouter），模型/音色留空 = 服务商默认
+chat.configure(AIAvatarSdk.ChatConfig(apiKey = "sk-...", ttsEngine = TtsEngine.EDGE))
+
+chat.send("今晚吃什么好？")            // LLM 流式回复，逐句 TTS 播报
+chat.interrupt()                       // 随时打断
+```
+
+配置（key/模型/音色/语言/上下文 id…）任何变化在下一次 `configure` 时自动重建会话；自定义 OpenAI 兼容端点传 `baseUrl` 覆盖即可，模型名原样透传。
+
+**方式 B：直接装配 `AvatarSession`**（要更细的控制时）：
+
 ```kotlin
 val session = remember {
     AvatarSession(
@@ -135,7 +160,7 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 | 资产 | 必须 | 说明 |
 |---|---|---|
 | VRM / GLB 模型 | ✅ | 放 `assets/`，`controller.loadModel("model.vrm")`；本地文件用 `loadModelFromFile()` |
-| IBL 环境光（.ktx） | 可选 | 放 `assets/` 后传 `AvatarConfig(iblPath = …)`；不传则使用灯光 rig 默认照明 |
+| IBL 环境光（.ktx） | 可选 | **内置默认环境光**（`AvatarConfig()` 零资产即得）；要自定义时放 `assets/` 传 `AvatarConfig(iblPath = …)`，传 `AvatarConfig.IBL_NONE` 关闭 |
 
 口型同步、眨眼、呼吸、表情仲裁由会话内建的 FaceDriver 自动驱动，无需额外接线。
 
@@ -144,7 +169,14 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 **`AvatarController`**（渲染，corelib）
 `loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings`
 
-**`AvatarSession`**（对话编排，orchestrator）
+**渲染入口**（corelib）
+`AvatarView(modifier, controller, config)` Compose · `AvatarSurfaceView(context, attrs, style, config, controller)` 传统 View（生命周期自动绑定 Activity/Fragment，`controller` 属性取控制器）
+
+**`AIAvatarSdk`**（高阶门面，orchestrator）
+`configure(ChatConfig, modelReady)` 装配/重建会话 · `send(text, images)` · `speak(text)` · `interrupt()` · `events / phase`（当前会话事件与阶段） · `setCharacterCard(card)`（跨重建自动重放） · `close()`。
+`ChatConfig` 字段：`provider`（内置目录：SILICONFLOW / VOLCANO / OPENROUTER）· `baseUrl`（自定义端点覆盖）· `apiKey` · `llmModel`（留空=默认）· `ttsEngine`（EDGE 免费 / OPENAI_COMPATIBLE）· `ttsProvider / ttsApiKey / ttsModel / voice` · `lang` · `contextId`（换历史段落）。
+
+**`AvatarSession`**（低阶会话，orchestrator）
 `send(text, images)` LLM 回合 · `speak(text)` 纯 TTS 播报（免 LLM） · `interrupt()` · `startFaceDriving()` · `setCharacterCard(card)` · `events: SharedFlow<AvatarEvent>` · `phase: StateFlow<ConversationPhase>`
 
 **TTS 适配器**（`TtsAdapter` 实现，adapter）
@@ -167,9 +199,10 @@ adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity
 ## Roadmap（接口优化方向）
 
 1. **Maven 发布**：四模块补 `maven-publish`，支持 `implementation("…")` 一行依赖，摆脱源码集成。
-2. **高阶门面**：把「adapter 工厂 + 配置装配 + 会话重建」从 demo 层下沉为 `AIAvatarSdk` 门面（现在这套逻辑在 demo 的 `AiChatController` / `AiProviders`，约 600 行），对外收敛成 `configure(key, model, voice)` + `send(text)`。
-3. **非 Compose View 入口**：`SoulLinkRenderer` 目前是 `internal`，传统 View 工程接不进来；补一个公开的 `AvatarSurfaceView(context, controller)`。
-4. **内置默认 IBL**：corelib 打包默认环境光，`AvatarConfig()` 零资产开箱即得高级照明。
+
+~~2. 高阶门面 `AIAvatarSdk`~~ ✅ 已完成（见快速开始 §4 方式 A）
+~~3. 非 Compose View 入口 `AvatarSurfaceView`~~ ✅ 已完成（见快速开始 §2）
+~~4. 内置默认 IBL~~ ✅ 已完成（`AvatarConfig()` 零资产开箱即亮）
 
 ## License
 

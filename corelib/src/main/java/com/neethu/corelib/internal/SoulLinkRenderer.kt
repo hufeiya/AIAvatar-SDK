@@ -987,9 +987,12 @@ internal class SoulLinkRenderer(
             }
         }
 
-        // Load IBL if configured
-        config.iblPath?.let { iblPath ->
-            loadEnvironment(iblPath)
+        // Load IBL: explicit asset path > built-in default > IBL_NONE disables
+        // (AvatarConfig() 零资产开箱即得环境光，见 AvatarConfig.BUILT_IN_IBL)
+        when (config.iblPath) {
+            AvatarConfig.IBL_NONE -> Unit
+            null -> loadEnvironment(AvatarConfig.BUILT_IN_IBL)
+            else -> loadEnvironment(config.iblPath)
         }
 
         applyMaterialEnhancements()

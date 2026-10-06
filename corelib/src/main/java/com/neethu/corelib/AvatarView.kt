@@ -16,10 +16,12 @@ import com.neethu.corelib.internal.SoulLinkRenderer
  * ```kotlin
  * val controller = rememberAvatarController()
  *
+ * // AvatarConfig() ships a built-in IBL — zero assets, lit out of the box;
+ * // pass iblPath for a custom environment (classic View: AvatarSurfaceView)
  * AvatarView(
  *     modifier = Modifier.fillMaxSize(),
  *     controller = controller,
- *     config = AvatarConfig(iblPath = "default_env.ktx")
+ *     config = AvatarConfig()
  * )
  *
  * LaunchedEffect(Unit) {

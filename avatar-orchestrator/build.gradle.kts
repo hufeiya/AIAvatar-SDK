@@ -28,7 +28,9 @@ android {
 
 dependencies {
     api(project(":avatar-ai-adapter"))
-    implementation(project(":corelib"))
+    // api：AvatarSession/AIAvatarSdk.ChatConfig 的公开签名暴露 corelib 类型
+    // （AvatarController/Lang），Maven 消费者必须能传递解析到它
+    api(project(":corelib"))
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)

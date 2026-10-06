@@ -3,27 +3,18 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.mutableStateOf
-import com.neethu.aiadapter.edge.EdgeTtsAdapter
-import com.neethu.aiadapter.text.EdgeTtsTexts
-import com.neethu.aiadapter.text.VolcanoTtsTexts
-import com.neethu.aiadapter.model.LlmConfig
-import com.neethu.aiadapter.model.TtsConfig
-import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
-import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
-import com.neethu.aiadapter.volcengine.VolcanoEngineTtsAdapter
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.Lang
-import com.neethu.orchestrator.history.ConversationDatabase
-import com.neethu.orchestrator.i18n.promptTextsOf
-import com.neethu.orchestrator.history.RoomConversationStore
+import com.neethu.orchestrator.facade.AIAvatarSdk
+import com.neethu.orchestrator.facade.ChatProvider
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.skill.SkillHost
 import kotlinx.coroutines.CoroutineScope
 
 /**
  * AI 对话配置（多服务商版：硅基流动/火山引擎/OpenRouter）。除 API Key 外全部
- * 下拉框选择，模型/音色留空即用服务商默认（见 [resolveLlmModel]/[resolveTtsModel]/
- * [resolveVoice]）。
+ * 下拉框选择，模型/音色留空即用服务商默认（解析正本在 SDK 目录
+ * [ChatProvider]，见 [resolveLlmModel]/[resolveTtsModel]/[resolveVoice]）。
  *
  * Key 按服务分存（硅基流动与 OpenRouter 一把通用；**火山的语音与大模型是两把
  * key**：[apiKeyVolcano]=方舟 Ark 大模型，[apiKeyVolcanoTts]=豆包语音合成，实测
@@ -82,6 +73,31 @@ data class AiChatPrefs(
     val isConfigured: Boolean
         get() = apiKeyFor(provider).isNotBlank() && ttsReady &&
             resolveLlmModel(provider, llmModel).isNotBlank()
+
+    /**
+     * 持久化配置 → SDK 门面装配输入（[AiChatController] 的会话装配正本在
+     * [AIAvatarSdk]，这里只做字段映射）。
+     */
+    fun toChatConfig(contextId: String, characterId: String?, lang: Lang): AIAvatarSdk.ChatConfig =
+        AIAvatarSdk.ChatConfig(
+            provider = provider.sdk,
+            apiKey = apiKeyFor(provider),
+            llmModel = llmModel,
+            ttsEngine = ttsEngine,
+            ttsProvider = if (ttsSameProvider) null else ttsProvider.sdk,
+            ttsApiKey = when {
+                // 火山「同服务商」也必须显式给豆包语音那把 key（两把钥匙互不通用）
+                ttsSameProvider && provider == AiProvider.VOLCANO -> apiKeyVolcanoTts
+                !ttsSameProvider -> apiKeyForTts()
+                else -> null
+            },
+            ttsModel = ttsModel,
+            voice = voice,
+            lang = lang,
+            enableLlmCamera = llmCamera,
+            contextId = contextId,
+            characterId = characterId,
+        )
 }
 
 private const val KEY_AI_PROVIDER = "ai_provider"
@@ -201,21 +217,6 @@ fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
 }
 
 /**
- * ASR 模型留空时按端点推断：硅基流动 → `Qwen/Qwen3-ASR-1.7B`（其
- * /audio/transcriptions 端点的默认语音识别模型），OpenRouter →
- * `openai/whisper-large-v3`（OpenRouter 文档示例模型，multipart 实测在册），
- * 其他 → OpenAI 的 `whisper-1`。
- */
-fun resolveAsrModel(baseUrl: String, configured: String): String =
-    configured.trim().ifBlank {
-        when {
-            baseUrl.contains("siliconflow", ignoreCase = true) -> "Qwen/Qwen3-ASR-1.7B"
-            baseUrl.contains("openrouter.ai", ignoreCase = true) -> "openai/whisper-large-v3"
-            else -> "whisper-1"
-        }
-    }
-
-/**
  * 大模型身份签名：只含影响对话能力的字段（服务商 + 解析后的模型名）。
  * 协议里的表情/动作目录由所配模型实现决定，切换签名即同步轮换对话上下文
  * （历史清空、新上下文首请求带新目录，见 MainActivity.updateAiPrefs）。
@@ -226,8 +227,9 @@ fun llmIdentitySignature(p: AiChatPrefs): String =
 
 /**
  * Demo 的会话装配器：把 [AiChatPrefs] + 上下文 id 变成一条 [AvatarSession]。
- * 配置或上下文变化时用 [rebuild] 丢弃旧会话重建（AIRI getProviderInstance 的
- * "凭据变化即重建实例"语义）；上下文 id 变化即切换对话历史（任务 3）。
+ * 装配正本在 SDK 门面 [AIAvatarSdk]（adapter 工厂/配置解析/身份重建全在那边），
+ * 这个类只剩 prefs 映射 + demo 的就绪标志转发——配置或上下文变化时用
+ * [rebuild] 语义（[ensure] 内部按 [AIAvatarSdk.ChatConfig] 全量相等判身份）。
  */
 class AiChatController(
     private val scope: CoroutineScope,
@@ -237,19 +239,20 @@ class AiChatController(
     /** 技能框架能力缝（docs/rps-skill-feasibility.md §4.3）；null = 无技能能力。 */
     private val skillHost: SkillHost? = null,
 ) {
-    /** 会话身份：配置 + 上下文 + 提示词语言。任一变化都触发重建。 */
-    data class SessionIdentity(val prefs: AiChatPrefs, val contextId: String, val lang: Lang)
+    private val sdk = AIAvatarSdk(
+        scope = scope,
+        controller = avatarController,
+        appContext = appContext,
+        skillHost = skillHost,
+    )
 
-    var session: AvatarSession? = null
-        private set
-
-    /** 当前会话所用的身份；用于判断是否需要重建。 */
-    var builtFor: SessionIdentity? = null
-        private set
+    /** 当前会话（[ensure] 装配成功后非空）；进阶定制直接操作它。 */
+    val session: AvatarSession? get() = sdk.session
 
     /**
-     * 确保存在一个与 [prefs]/[contextId] 匹配、且在模型 [ready] 后启动了面部
-     * 驱动的会话。身份未变且会话存活时是 no-op。
+     * 确保存在一个与 [prefs]/[contextId]/[lang] 匹配、且在模型 [ready] 后启动
+     * 了面部驱动的会话。身份未变且会话存活时是 no-op；配置不完整返回 null
+     * 且不动现有会话。
      *
      * @param characterId 信息性字段，随 Room 会话行落库（上下文列表展示用）。
      */
@@ -262,115 +265,13 @@ class AiChatController(
         lang: Lang = Lang.ZH,
     ): AvatarSession? {
         if (!prefs.isConfigured) return null
-        val identity = SessionIdentity(prefs, contextId, lang)
-        val existing = session
-        if (existing != null && builtFor == identity) {
-            if (ready && !faceDrivingStarted) existing.startFaceDriving().also { faceDrivingStarted = true }
-            return existing
-        }
-        existing?.close()
-
-        val db = ConversationDatabase.getInstance(appContext)
-        val store = RoomConversationStore.from(db, sessionId = contextId, characterId = characterId)
-
-        val llm = OpenAiCompatibleLlmAdapter(prefs.provider.baseUrl, prefs.apiKeyFor(prefs.provider))
-        val ttsProvider = prefs.ttsProviderResolved
-        val tts = when (prefs.ttsEngine) {
-            // Edge-TTS（任务 6）：微软朗读接口免费无 Key；输出恒 MP3 24kHz，
-            // orchestrator 的 PcmDecoder MediaCodec 路径直接可解
-            TtsEngine.EDGE -> EdgeTtsAdapter(texts = edgeTtsTexts(lang))
-            TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
-                // 硅基流动走 OpenAI 兼容 /audio/speech（wav 16k，两 TTS 模型实测可用）
-                AiProvider.SILICONFLOW ->
-                    OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
-                // 火山 seed-tts-2.0 只提供 V3 双向流式 WebSocket；适配器对外仍是
-                // 句级整段语义，输出恒为 PCM 16k（口型管线免解码直喂）
-                AiProvider.VOLCANO ->
-                    VolcanoEngineTtsAdapter(prefs.apiKeyForTts(), texts = volcanoTtsTexts(lang))
-                // OpenRouter 同一 OpenAI 兼容 schema，适配器直接复用
-                AiProvider.OPENROUTER ->
-                    OpenAiCompatibleTtsAdapter(ttsProvider.baseUrl, prefs.apiKeyForTts())
-            }
-        }
-        val session = AvatarSession(
-            scope, llm, tts, avatarController,
-            AvatarSession.Options(
-                lang = lang,
-                enableLlmCamera = prefs.llmCamera,
-                // Room 持久化后上下文可无限增长；请求只带最近 40 条 user/assistant
-                //（≈20 轮）。身份前言每轮恒带；人设全文+协议目录（~12K chars）
-                // 只随上下文首轮发送、失败自动重发（AvatarSession 内聚，见
-                // buildRequestMessages），都不进 store、不受裁剪
-                recentTurnLimit = 40,
-            ),
-            store = store,
-            skillHost = skillHost,
+        return sdk.configure(
+            prefs.toChatConfig(contextId, characterId, lang),
+            modelReady = ready,
         )
-        val model = resolveLlmModel(prefs.provider, prefs.llmModel)
-        session.llmConfig = LlmConfig(
-            baseUrl = prefs.provider.baseUrl,
-            apiKey = prefs.apiKeyFor(prefs.provider),
-            model = model,
-            // 略低于默认 0.8：多模态行内标签协议对指令遵循敏感（真机实测
-            // 0.8 下模型偶尔完全忽略标签/用括号演戏），0.6 是遵循与创意折中
-            temperature = 0.6f,
-            // 关深度思考（首句延迟治理，见 [llmExtraBody]）：火山 doubao-seed 系
-            // 与硅基流动 Qwen3 系默认都开思考，思考 token 全成首句前的隐形等待；
-            // 其他模型无额外参数
-            extraBody = llmExtraBody(prefs.provider, model),
-        )
-        session.ttsConfig = when (prefs.ttsEngine) {
-            TtsEngine.EDGE ->
-                // mp3 容器自带采样率（24kHz），无需指定；voice 不在目录即落默认
-                TtsConfig(
-                    model = "edge-readaloud",
-                    voice = resolveEdgeVoice(prefs.voice, lang),
-                    responseFormat = "mp3",
-                )
-            TtsEngine.OPENAI_COMPATIBLE -> when (ttsProvider) {
-                AiProvider.OPENROUTER ->
-                    // OpenRouter /audio/speech 只认 mp3/pcm（wav 请求会 400）；
-                    // mp3 容器自带采样率（Voxtral 实测 22.05kHz），不传 sampleRate，
-                    // 解码与口型走 Edge-TTS 同款 MP3→MediaCodec 路径
-                    TtsConfig(
-                        model = resolveTtsModel(ttsProvider, prefs.ttsModel),
-                        voice = resolveVoice(ttsProvider, prefs.voice),
-                        responseFormat = "mp3",
-                    )
-                else ->
-                    TtsConfig(
-                        model = resolveTtsModel(ttsProvider, prefs.ttsModel),
-                        voice = resolveVoice(ttsProvider, prefs.voice),
-                        responseFormat = "wav",
-                        // wLipSync 标定输入是 16kHz；CosyVoice2 默认 24kHz 会走 MFCC
-                        // 前端的分数降采样路径，实测口型得分塌缩（见 docs/ai-layer-handoff.md 附录A）
-                        sampleRate = 16_000,
-                    )
-            }
-        }
-        if (ready) {
-            session.startFaceDriving()
-            faceDrivingStarted = true
-        }
-        this.session = session
-        builtFor = identity
-        return session
     }
-
-    private var faceDrivingStarted = false
 
     fun shutdown() {
-        session?.close()
-        session = null
-        builtFor = null
-        faceDrivingStarted = false
+        sdk.close()
     }
 }
-
-/** 应用语言 → Edge-TTS 错误文案目录（适配器模块不依赖 corelib，这里做映射）。 */
-fun edgeTtsTexts(lang: Lang): EdgeTtsTexts =
-    if (lang == Lang.EN) EdgeTtsTexts.EN else EdgeTtsTexts.ZH
-
-/** 应用语言 → 火山 TTS 错误文案目录。 */
-fun volcanoTtsTexts(lang: Lang): VolcanoTtsTexts =
-    if (lang == Lang.EN) VolcanoTtsTexts.EN else VolcanoTtsTexts.ZH

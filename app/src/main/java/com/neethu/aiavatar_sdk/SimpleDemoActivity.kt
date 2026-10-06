@@ -125,7 +125,8 @@ private fun SimpleDemoScreen() {
         AvatarView(
             modifier = Modifier.fillMaxSize(),
             controller = controller,
-            config = AvatarConfig(iblPath = "default_env.ktx"),
+            // 零资产开箱：内置默认环境光（自定义 KTX 用 AvatarConfig(iblPath = ...)）
+            config = AvatarConfig(),
         )
 
         // 模型加载状态提示（README 片段可省略这段）

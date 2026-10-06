@@ -136,6 +136,9 @@ class FaceDriver(
     }
 
     fun stop() {
+        // 未 start 过 = 没贴过帧回调：直接跳过 Choreographer（JVM 单测没有
+        // Choreographer 实例，session.close() → stop() 不该在这里炸）
+        if (!running) return
         running = false
         Choreographer.getInstance().removeFrameCallback(frameCallback)
     }
