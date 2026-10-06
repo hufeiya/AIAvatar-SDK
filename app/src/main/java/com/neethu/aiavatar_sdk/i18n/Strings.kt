@@ -504,6 +504,12 @@ class Strings(val lang: Lang) {
     val guideBrowserFail: String get() = zh("没有找到可用的浏览器", "No browser available on this device")
     val guideCloseA11y: String get() = zh("关闭引导", "Dismiss guide")
 
+    /** 截图缩放（步骤页点图进全屏，放大层点任意处/返回键退出）。 */
+    val guideZoomTapHint: String get() = zh("点图可放大", "Tap image to zoom")
+    val guideZoomInA11y: String get() = zh("放大查看截图", "Zoom in on the screenshot")
+    val guideZoomOutA11y: String get() = zh("退出放大", "Exit zoom")
+    val guideZoomHint: String get() = zh("点击任意位置退出放大", "Tap anywhere to exit zoom")
+
     private fun zh(zh: String, en: String): String = if (lang == Lang.EN) en else zh
     private fun f(en: String, zh: String): String = if (lang == Lang.EN) en else zh
 }

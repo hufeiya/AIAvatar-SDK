@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -70,8 +72,9 @@ import kotlinx.coroutines.withContext
  * 新手引导（2026-10 用户需求「让用户 1 分钟内直接玩」+「用同样方式做非中文
  * 用户引导」）：AI 还没配置好时自动弹出的半屏面板（与设置页同款 bottom
  * sheet），双受众（[GuideVariant]）——国内=硅基流动（简繁中文系统），海外=
- * OpenRouter（其余全部语言）。3 张步骤截图轮播 + 第 4 页注册链接与 Key 输入；
- * 确认后一键配置 大模型/TTS/ASR。可关闭；点输入框/语音框会再弹。
+ * OpenRouter（其余全部语言）。3 张步骤截图轮播（点图全屏放大，再点退出）+
+ * 第 4 页注册链接与 Key 输入；确认后一键配置 大模型/TTS/ASR。可关闭；
+ * 点输入框/语音框会再弹。
  *
  * 触发判定与一键配置是纯函数（[onboardingGuideVariant]/[withOnboardingKey]/
  * [withOnboardingAsr]），单测直测；面板本体只在 MainActivity 挂载。
@@ -178,6 +181,8 @@ fun OnboardingGuideSheet(
     val s = LocalStrings.current
     val context = LocalContext.current
     var key by remember { mutableStateOf("") }
+    // 全屏放大层当前展示的截图（null=未放大）：点步骤图进入，点任意处/返回键退出
+    var zoomedAsset by remember { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
@@ -240,7 +245,12 @@ fun OnboardingGuideSheet(
                         .weight(1f),
                 ) { page ->
                     if (page < steps.size) {
-                        GuideStepPage(variant = variant, stepAsset = steps[page], stepIndex = page)
+                        GuideStepPage(
+                            variant = variant,
+                            stepAsset = steps[page],
+                            stepIndex = page,
+                            onZoom = { zoomedAsset = steps[page] },
+                        )
                     } else {
                         GuideKeyPage(
                             variant = variant,
@@ -283,6 +293,15 @@ fun OnboardingGuideSheet(
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // 截图可放大只在步骤页提示（第 4 页无图）
+                    if (pagerState.currentPage < GUIDE_PAGE_COUNT - 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = s.guideZoomTapHint,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    }
                 }
                 // 提示条：确认即自动配置（让用户放心随便填）
                 Text(
@@ -296,21 +315,77 @@ fun OnboardingGuideSheet(
                 )
             }
         }
+
+        // 全屏放大层：盖住面板与遮罩，黑底 Fit 展示原始截图；点任意处/返回键退出
+        zoomedAsset?.let { asset ->
+            BackHandler { zoomedAsset = null }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { zoomedAsset = null },
+                    )
+            ) {
+                val zoomBitmap = rememberGuideBitmap(asset)
+                zoomBitmap?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = s.guideZoomOutA11y,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                // 退出提示给黑胶囊底：步骤截图多为白底网页，裸白字会看不见
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color.Black.copy(alpha = 0.45f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 20.dp),
+                ) {
+                    Text(
+                        text = s.guideZoomHint,
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
-/** 轮播步骤页（1-3）：截图 + 步骤标题；国内版第 2 页（实名）叠「电脑版网页」提示。 */
+/** assets 截图异步解码（步骤页与全屏放大层共用；IO 线程解码，失败给 null 不崩）。 */
 @Composable
-private fun GuideStepPage(variant: GuideVariant, stepAsset: String, stepIndex: Int) {
-    val s = LocalStrings.current
+private fun rememberGuideBitmap(stepAsset: String): ImageBitmap? {
     val context = LocalContext.current
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, stepAsset) {
+    val state = produceState<ImageBitmap?>(initialValue = null, stepAsset) {
         value = withContext(Dispatchers.IO) {
             runCatching {
                 context.assets.open(stepAsset).use { BitmapFactory.decodeStream(it) }
             }.getOrNull()?.asImageBitmap()
         }
     }
+    return state.value
+}
+
+/**
+ * 轮播步骤页（1-3）：截图 + 步骤标题；国内版第 2 页（实名）叠「电脑版网页」提示。
+ * 截图点按进全屏放大（[onZoom]，见 [OnboardingGuideSheet] 的放大层）。
+ */
+@Composable
+private fun GuideStepPage(
+    variant: GuideVariant,
+    stepAsset: String,
+    stepIndex: Int,
+    onZoom: () -> Unit,
+) {
+    val s = LocalStrings.current
+    val bitmap = rememberGuideBitmap(stepAsset)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -348,11 +423,16 @@ private fun GuideStepPage(variant: GuideVariant, stepAsset: String, stepIndex: I
             bitmap?.let {
                 Image(
                     bitmap = it,
-                    contentDescription = null,
+                    contentDescription = s.guideZoomInA11y,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxHeight()
-                        .clip(RoundedCornerShape(12.dp)),
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onZoom,
+                        ),
                 )
             }
         }
