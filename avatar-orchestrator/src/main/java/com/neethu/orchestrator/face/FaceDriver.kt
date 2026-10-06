@@ -194,6 +194,22 @@ class FaceDriver(
         blender.apply(EmotionCue(resolved, weight.coerceIn(0f, 1f)), EmotionBlender.HOLD_NO_RESET)
     }
 
+    // ── Face mimicry（「模仿我」P2 表情通道）──────────────────────────────
+
+    /** 最近一帧映射好的 mimic 表情权重；null = 表情车道断供（情绪/眨眼接管）。 */
+    @Volatile private var mimicFace: Map<String, Float>? = null
+    private val activeMimicMorphs = HashSet<String>()
+
+    /**
+     * Feed one frame of mimic face weights (morph names ALREADY mapped to the
+     * model's names by the app via [MimicFaceMapper]; the driver re-gates them
+     * through `send`). `null` releases the face — the previously driven morphs
+     * ease to zero once and emotion/blink reclaim their channels.
+     */
+    fun setMimicFace(weights: Map<String, Float>?) {
+        mimicFace = weights
+    }
+
     /** Release the manual expression, easing back to neutral. */
     fun clearManualExpression() {
         blender.apply(EmotionCue("neutral", 1f))
@@ -231,7 +247,8 @@ class FaceDriver(
         // 2. emotion morph values
         val emotionValues = blender.tick(deltaSeconds)
 
-        // 3. blink (suppressed by eye-area emotions)
+        // 3. blink (suppressed by eye-area emotions; P2 表情模仿供真实眨眼时
+        // 也让位——用户的真实眨眼经 mimicFace 的 eyeBlink morph 直通)
         var blink = microMotion.tickBlink(deltaSeconds)
         if (blender.eyeAreaActive) blink = 0f
 
@@ -246,6 +263,11 @@ class FaceDriver(
         // as the viseme smoothing decays at clip end the emotion re-claims the
         // mouth on its own (no separate blend-back pass needed — the emotion
         // value never got zeroed).
+        val mimic = mimicFace
+        val mimicOwnsFace = mimic != null
+        val mimicOwnsBlink = mimic?.keys?.any { it.contains("blink", ignoreCase = true) } == true
+        if (mimicOwnsBlink) blink = 0f
+
         val visemeByName = HashMap<String, Float>(VowelDriver.VOWEL_COUNT)
         for (v in 0 until VowelDriver.VOWEL_COUNT) {
             visemeByName[VowelDriver.VOWEL_NAMES[v]] = viseme[v]
@@ -253,10 +275,32 @@ class FaceDriver(
         for ((name, value) in blendMouth(visemeByName, emotionValues)) {
             send(name, value)
         }
-        for ((name, value) in emotionValues) {
-            if (name in EmotionBlender.VISEME_SET) continue // owned by the mouth channel above
-            send(name, value)
+        if (mimicOwnsFace) {
+            // 模仿期：情绪通道整体让位（mimic 逐帧绝对权重，混情绪会打架）；
+            // blender 状态照常推进，断供即自然接回（值从未清零）。说话期嘴部
+            // 所有权让给口型 max 通道：VISEME_SET 的 morph 完全跳过（上面刚写
+            // 过），jawOpen 等其它下颌 morph 归零（否则卡在用户张嘴值上）。
+            for ((name, weight) in mimic) {
+                when {
+                    lipSyncActive && name in EmotionBlender.VISEME_SET -> Unit
+                    lipSyncActive && name in MOUTH_YIELD_SET -> send(name, 0f)
+                    else -> send(name, weight)
+                }
+            }
+            // 上一帧还驱着、这一帧掉出映射的 morph（如 eyeBlink 归零）补一发 0
+            for (m in activeMimicMorphs) if (m !in mimic) send(m, 0f)
+        } else {
+            // 断供：mimic 上一帧驱着的 morph 一次性归零（后续被 dedup 静默），
+            // 情绪/眨眼通道即刻接回（blender 值从未清零=自然 blend-back）
+            for (m in activeMimicMorphs) send(m, 0f)
+            for ((name, value) in emotionValues) {
+                if (name in EmotionBlender.VISEME_SET) continue // owned by the mouth channel above
+                send(name, value)
+            }
         }
+        // 记账无论激活与否都同步（断供→清空=下次激活从头写入）
+        activeMimicMorphs.clear()
+        if (mimic != null) activeMimicMorphs.addAll(mimic.keys)
         send(BLINK, blink)
     }
 
@@ -343,6 +387,17 @@ class FaceDriver(
 
         /** Default hold for session-applied emotions when no clip duration is known. */
         const val DEFAULT_EMOTION_HOLD_MS = 3_000L
+
+        /**
+         * 模仿期说话时表情通道要**归零让位**的下颌/嘴形 morph（VISEME_SET 之外
+         * 的张嘴系——ARKit 命名模型没有 aa/ih 这类预设 morph，口型只动 vowel
+         * 预设，jawOpen 不归零会卡在用户的张嘴值上和语音打架）。VISEME_SET 本身
+         * 是跳过（口型 max 通道拥有），这里只收额外项。
+         */
+        private val MOUTH_YIELD_SET = setOf(
+            "jawOpen", "jawLeft", "jawRight", "jawForward", "mouthClose",
+            "mouthShrugLower", "mouthShrugUpper",
+        )
 
         /**
          * Pure mouth-channel merge (unit-testable without a renderer): every

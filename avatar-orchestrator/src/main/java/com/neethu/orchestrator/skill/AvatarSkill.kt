@@ -53,6 +53,15 @@ interface AvatarSkill {
     fun onHeadPose(yawDeg: Float, pitchDeg: Float, ctx: SkillContext) {}
 
     /**
+     * 身体关键点可见性观测（「模仿我」技能：PoseLandmarker 上半身质量门，
+     * app 层**节流到状态变化**才广播——逐帧事件对技能层是滥用）。技能用它跑
+     * 降级阶梯（持续不可见 → 催促 → 退场提示）；模仿的逐帧姿态数据**不走本缝**
+     * （app 车道直驱渲染引擎，绕过 orchestrator——感知-渲染直通，技能只管
+     * 生命周期）。
+     */
+    fun onBodyTracking(visible: Boolean, ctx: SkillContext) {}
+
+    /**
      * 一次直通 [SkillHost.speak] 的播放完成（成功或失败都会来；被 interrupt
      * 掐断的不会——打断走 [onInterrupted]）。「看这边」用它做回合节拍
      * （go 信号播完才宣判、宣判播完才下一局，避免自己的 speak 抢占自己的

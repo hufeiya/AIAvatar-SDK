@@ -73,6 +73,11 @@ class SkillRegistry(
         for (skill in skills.values) skill.onHeadPose(yawDeg, pitchDeg, contextFor(skill))
     }
 
+    /** 身体关键点可见性（「模仿我」缝；app 侧已节流到状态变化才广播）。 */
+    fun onBodyTracking(visible: Boolean) {
+        for (skill in skills.values) skill.onBodyTracking(visible, contextFor(skill))
+    }
+
     /** 直通 speak 播放完成（成功/失败都广播；被掐断的不广播，见 AvatarSkill doc）。 */
     fun onSpeakCompleted(spokenText: String) {
         for (skill in skills.values) skill.onSpeakCompleted(spokenText, contextFor(skill))

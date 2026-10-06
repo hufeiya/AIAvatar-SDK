@@ -16,6 +16,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
+import com.neethu.corelib.MimicPose
 import com.neethu.orchestrator.face.FacePointProjector
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
@@ -45,7 +46,16 @@ import java.util.concurrent.Executors
  *     跑 MediaPipe FaceLandmarker（~3.7MB，IMAGE 模式同步 10-30ms），
  *     facialTransformationMatrix 分解出 yaw/pitch（度）经 [onHeadPose] 投
  *     主线程 → 技能缝，最近一帧存 [latestHeadPose]（face_pose 调试观测）。
- *     与手势车道互斥（同一分析线程不并跑两个 MediaPipe 任务），关=零开销。
+ *  5. **身体模仿**（「模仿我」技能）：[bodyMimicEnabled] 为真时跑 MediaPipe
+ *     PoseLandmarker（~5.5MB，IMAGE 同步 15-30ms），世界关键点经
+ *     PoseMimicMath 镜像解算 + MimicDirectionFilter 滤波成 [latestMimicPose]
+ *     （虚拟人世界系方向集，主线程 ticker 消费直驱渲染引擎——不经技能层）；
+ *     人形可见性走 [latestBodyVisible]。三条 MediaPipe 车道互斥（同一分析
+ *     线程不并跑），关=零开销。
+ *  6. **表情/精确头部**（「模仿我」P2）：[faceMimicEnabled] 且身体车道活跃时
+ *     **隔帧**跑 FaceLandmarker（blendshapes 开启的独立实例），52 ARKit
+ *     blendshapes → [latestMimicFace]（主线程喂 FaceDriver 表情通道），
+ *     变换矩阵在保鲜窗内替代鼻-耳估算作头部朝向（±2° 级精解）。
  *
  * 生命周期：进出视频模式配对 [start]/[stop]；[switchLens] 重绑前后摄。
  * ML Kit 检测器随 start/stop 重建/释放；手势/姿态引擎懒创建、stop 时经分析
@@ -120,6 +130,66 @@ class UserCameraTracker(private val context: android.content.Context) {
 
     private var poseEngine: FaceLandmarkerEngine? = null
 
+    // ── 身体模仿车道（「模仿我」技能）────────────────────────────────────
+    // 线程约定与手势/头部姿态车道相同；方向解算/镜像/滤波在这里做（PoseMimicMath
+    // + MimicDirectionFilter），引擎消费的 MimicPose 已经是虚拟人世界系方向集。
+
+    /** 技能要身体姿态吗（app 接 mimicSkill.isActive）：关=整条车道零开销。 */
+    @Volatile
+    var bodyMimicEnabled: () -> Boolean = { false }
+
+    /**
+     * 最近一帧模仿目标（虚拟人世界系方向集，滤波后；分析线程写，主线程
+     * ticker 消费 → controller.setMimicPose）。人形质量不足时为 visible=false
+     * 的保活 ping；人整个不在时停在旧帧（引擎按新鲜度自愈还原）。
+     */
+    @Volatile
+    var latestMimicPose: MimicPose? = null
+        private set
+
+    /** 最近一帧人形可见性（ticker 节流后经 skills.onBodyTracking 喂技能层）。 */
+    @Volatile
+    var latestBodyVisible: Boolean = false
+        private set
+
+    private var bodyEngine: PoseLandmarkerEngine? = null
+    private val mimicFilter = MimicDirectionFilter()
+
+    // ── 表情/精确头部车道（「模仿我」P2，与身体车道穿插）─────────────────
+    // 身体每帧（80ms）、表情隔帧（160ms）——同一分析线程串行两个 MediaPipe
+    // 任务（PoseLandmarker + FaceLandmarker）。低成本机跳脸：表情慢变量，
+    // 丢几帧无感，身体方向才是主通道。
+
+    /** 表情车道开关（app 接 mimicFaceEnabled；仅身体车道活跃时被咨询）。 */
+    @Volatile
+    var faceMimicEnabled: () -> Boolean = { false }
+
+    /** 一帧表情观测：头部变换矩阵（列主序 4×4，可空）+ ARKit blendshapes。 */
+    class MimicFaceFrame(
+        val matrix: FloatArray?,
+        val shapes: Map<String, Float>,
+        val atMs: Long,
+    )
+
+    /** 最近一帧表情观测（分析线程写，主线程 ticker 消费喂 FaceDriver）。 */
+    @Volatile
+    var latestMimicFace: MimicFaceFrame? = null
+        private set
+
+    private var faceMimicEngine: FaceLandmarkerEngine? = null
+
+    /** 懒建表情引擎（blendshapes 开启的 FaceLandmarker 实例，与看这边的实例分开）。 */
+    private fun obtainFaceMimicEngine(): FaceLandmarkerEngine? {
+        faceMimicEngine?.let { return it }
+        return runCatching { FaceLandmarkerEngine(context, blendshapes = true).also { faceMimicEngine = it } }
+            .onFailure { Log.w(TAG, "face mimic landmarker init failed: ${it.message}") }
+            .getOrNull()
+    }
+
+    /** 表情矩阵有效期内头部朝向用它（防双源切换抖动）；断供后回落鼻-耳。 */
+    @Volatile
+    private var faceHeadUntilMs = 0L
+
     private var lastSnapshotMs = 0L
     private var lastDetectMs = 0L
     private val busy = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -169,6 +239,12 @@ class UserCameraTracker(private val context: android.content.Context) {
         // 重绑（换镜头/补 Preview/进出视频模式）后门控从干净态起步，别让上一段
         // 会话遗留的「未重新武装」吞掉本段的第一个手势
         gestureGate.reset()
+        // 模仿车道同理：滤波状态/旧目标随重绑作废（镜头换了坐标系没变，但
+        // 目标断流期间的旧方向不该续上）
+        mimicFilter.reset()
+        latestMimicPose = null
+        latestBodyVisible = false
+        faceHeadUntilMs = 0L
         detector = FaceDetection.getClient(
             FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
@@ -220,14 +296,21 @@ class UserCameraTracker(private val context: android.content.Context) {
         detector = null
         latestFace = null
         busy.set(false)
-        // 手势/姿态引擎在分析线程释放：与可能还在跑的 recognize()/detect() 同
-        // 队列串行，杜绝主线程 close 撞上原生实例并发调用
+        // 手势/姿态/身体引擎在分析线程释放：与可能还在跑的 recognize()/detect()
+        // 同队列串行，杜绝主线程 close 撞上原生实例并发调用
         executor.execute {
             gestureEngine?.close()
             gestureEngine = null
             poseEngine?.close()
             poseEngine = null
+            bodyEngine?.close()
+            bodyEngine = null
+            faceMimicEngine?.close()
+            faceMimicEngine = null
         }
+        latestMimicPose = null
+        latestBodyVisible = false
+        latestMimicFace = null
         Log.i(TAG, "camera released")
     }
 
@@ -292,6 +375,14 @@ class UserCameraTracker(private val context: android.content.Context) {
             .getOrNull()
     }
 
+    /** 懒建身体引擎（「模仿我」；模型缺失/初始化失败=车道静默停用）。 */
+    private fun obtainBodyEngine(): PoseLandmarkerEngine? {
+        bodyEngine?.let { return it }
+        return runCatching { PoseLandmarkerEngine(context).also { bodyEngine = it } }
+            .onFailure { Log.w(TAG, "pose landmarker init failed: ${it.message}") }
+            .getOrNull()
+    }
+
     // ── 分析管线（analysis executor 线程）────────────────────────────────
 
     private fun analyzeFrame(proxy: ImageProxy) {
@@ -323,6 +414,11 @@ class UserCameraTracker(private val context: android.content.Context) {
                 headPoseEnabled()
             val wantGesture = detectDue && lensFacing == CameraSelector.LENS_FACING_FRONT &&
                 gestureEnabled() && !wantPose
+            val wantBody = detectDue && lensFacing == CameraSelector.LENS_FACING_FRONT &&
+                bodyMimicEnabled() && !wantPose && !wantGesture
+            // 表情隔帧穿插（时间槽奇偶），身体是主通道
+            val wantFaceMimic = wantBody && faceMimicEnabled() &&
+                (now / DETECT_INTERVAL_MS) % 2L == 0L
             val snapBitmap = if (snapDue) {
                 runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
             } else {
@@ -368,6 +464,64 @@ class UserCameraTracker(private val context: android.content.Context) {
                         latestHeadPose = HeadPoseSample(pose.first, pose.second, now)
                         val cb = onHeadPose
                         if (cb != null) mainHandler.post { cb(pose.first, pose.second) }
+                    }
+                }
+            }
+
+            // 身体模仿（「模仿我」）：世界关键点 → 镜像解算 → 滤波 → 目标集。
+            // 判定/平滑全在数据层（PoseMimicMath），这里只换手 latestMimicPose；
+            // 没人时不投喂（引擎按新鲜度自愈还原），关键点在但质量差时投
+            // visible=false 的保活 ping（定格而非弹回）
+            if (wantFaceMimic) {
+                val bmp = snapBitmap ?: runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
+                if (bmp != null) {
+                    val result = runCatching { obtainFaceMimicEngine()?.detectResult(bmp) }.getOrNull()
+                    if (bmp !== snapBitmap) bmp.recycle()
+                    if (result != null) {
+                        val shapes = result.faceBlendshapes().orElse(null)?.firstOrNull()
+                            ?.filter { it.score() > 0.01f && !it.categoryName().equals("neutral", true) }
+                            ?.associate { it.categoryName() to it.score() }
+                        val matrix = result.facialTransformationMatrixes().orElse(null)?.firstOrNull()
+                        if (!shapes.isNullOrEmpty() || matrix != null) {
+                            latestMimicFace = MimicFaceFrame(matrix, shapes.orEmpty(), now)
+                            faceHeadUntilMs = now + FACE_HEAD_FRESH_MS
+                        }
+                    }
+                }
+            }
+
+            if (wantBody) {
+                val bmp = snapBitmap ?: runCatching { rotatedUpright(proxy, rotation) }.getOrNull()
+                if (bmp != null) {
+                    val result = runCatching { obtainBodyEngine()?.detect(bmp) }.getOrNull()
+                    if (bmp !== snapBitmap) bmp.recycle()
+                    val world = result?.worldLandmarks()?.firstOrNull()
+                    if (world != null) {
+                        // ⚠ Landmark.visibility() 是 Optional<Float>（可能缺省）
+                        val pts = world.map {
+                            PLandmark(it.x(), it.y(), it.z(), it.visibility().orElse(0f))
+                        }
+                        val solved = PoseMimicMath.mimicPoseFromLandmarks(pts, now, mirror = true)
+                        if (solved != null) {
+                            // 头部朝向优先用 FaceLandmarker 矩阵精解（±2°），鼻-耳
+                            // 估算（±5-10°）只在表情车道没数据/刚断供时兜底——
+                            // 切换点被 faceHeadUntilMs 钉住，避免双源逐帧抖动
+                            val face = latestMimicFace
+                            val final = if (face?.matrix != null && now <= faceHeadUntilMs) {
+                                PoseMimicMath.withHeadOverride(
+                                    solved,
+                                    PoseMimicMath.headForwardFromMatrix(face.matrix!!, mirror = true),
+                                )
+                            } else {
+                                solved
+                            }
+                            latestMimicPose = mimicFilter.filter(final)
+                            latestBodyVisible = final.visible
+                        } else {
+                            latestBodyVisible = false
+                        }
+                    } else {
+                        latestBodyVisible = false
                     }
                 }
             }
@@ -474,5 +628,8 @@ class UserCameraTracker(private val context: android.content.Context) {
         private const val DETECT_INTERVAL_MS = 80L
         private const val SNAPSHOT_SIZE = 512
         private const val SNAPSHOT_JPEG_QUALITY = 80
+
+        /** 表情矩阵驱动头部的保鲜窗（隔帧 160ms 采样 ×2 的容忍）。 */
+        private const val FACE_HEAD_FRESH_MS = 400L
     }
 }

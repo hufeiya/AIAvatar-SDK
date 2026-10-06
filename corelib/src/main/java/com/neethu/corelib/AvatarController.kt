@@ -312,6 +312,36 @@ class AvatarController {
         return renderer?.lookAtInfo()
     }
 
+    // ── Public API: Mimic（「模仿我」）────────────────────────────────────
+
+    /**
+     * Feed one frame of mimic pose targets — the "imitate me" pipeline (user's
+     * body from the camera → avatar's bones, mirror semantics baked in by the
+     * app lane). All directions are unit vectors in avatar world space
+     * (+X screen right, +Y up, +Z toward the viewer). Thread-safe: call from
+     * any thread; the render thread consumes the latest frame each tick.
+     *
+     * Pass `null` to ease the avatar back to its animated pose (a frame older
+     * than ~600 ms triggers the same restore automatically — the renderer
+     * self-heals when the camera lane stops feeding).
+     */
+    fun setMimicPose(pose: MimicPose?) {
+        renderer?.setMimicPose(pose)
+    }
+
+    /** Stop mimicking: ease back to the animated pose over ~300 ms. */
+    fun clearMimicPose() {
+        renderer?.setMimicPose(null)
+    }
+
+    /**
+     * Last-frame mimic state (engaged/restoring, pose age, smoothed head
+     * angles), or `null` when no view is attached. Diagnostics surface.
+     */
+    fun getMimicInfo(): MimicInfo? {
+        return renderer?.mimicInfo()
+    }
+
     // ── Public API: Breath ───────────────────────────────────────────────
 
     /**

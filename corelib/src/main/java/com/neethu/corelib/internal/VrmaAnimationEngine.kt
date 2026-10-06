@@ -182,6 +182,14 @@ internal class VrmaAnimationEngine(
     }
 
     fun isActive(): Boolean = isPlaying && currentAnimation != null
+
+    /**
+     * 是否正在播**一次性**动作（非 idle 接管）——骨骼叠加层（模仿引擎）的挂起
+     * 判据：`<act:>` 手势/技能手势要完整播放，播完回 idle 后叠加层自动续上。
+     * 循环播放的非 idle 手动动画也算（用户手动播动画时模仿让路是合理语义）。
+     */
+    fun isOneShotActive(): Boolean = isPlaying && !idleTakeover && currentAnimation != null
+
     fun getVrmMetaVersion(): String = vrmMetaVersion
 
     /** Duration of the currently loaded animation in seconds (0 when none). */

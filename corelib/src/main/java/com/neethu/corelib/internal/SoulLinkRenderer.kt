@@ -2,6 +2,7 @@ package com.neethu.corelib.internal
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.SystemClock
 import android.view.SurfaceView
 import android.view.Choreographer
 import com.google.android.filament.ColorGrading
@@ -44,6 +45,8 @@ import com.neethu.corelib.BreathInfo
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.LookAtInfo
+import com.neethu.corelib.MimicInfo
+import com.neethu.corelib.MimicPose
 import com.neethu.corelib.ToneMappingMode
 
 /**
@@ -119,6 +122,10 @@ internal class SoulLinkRenderer(
     private var breathSpeaking = false
     private var breathAmplitudeScale = 1f
     private var breathRateBpm = -1f  // <0 = 引擎默认
+
+    // Pose mimic (「模仿我」) bone overlay support——方向绝对驱动，数据由 app
+    // 相机车道经 AvatarController.setMimicPose 原子换手喂入（不经 orchestrator）
+    private var mimicEngine: VrmPoseMimicEngine? = null
 
     // Spring bone physics support
     internal var springBoneManager: VrmSpringBoneManager? = null
@@ -335,6 +342,21 @@ internal class SoulLinkRenderer(
             // propagate. (The single updateBoneMatrices below covers both
             // animation branches; the spring-bone block re-runs it later.)
             lookAtEngine?.update(gazeDt.coerceIn(0.001f, 0.05f))
+
+            // Mimic overlay（「模仿我」）：neck/head + 双臂的**绝对方向**驱动，
+            // 排在视线之后（头/颈 mimic 赢=跟用户转头，眼睛保持注视相机），
+            // 蒙皮传播之前（骨骼程序化层的统一落点）。一次性 VRMA 播放期间挂起
+            // （`<act:>` 手势完整播完，播完自动续上）；断供 >600ms 引擎自愈还原。
+            val animationWrote = (vrma != null && vrma.isActive()) ||
+                (animator != null && currentAnimationIndex >= 0)
+            val oneShotActive = (vrma?.isOneShotActive() == true) ||
+                (animator != null && currentAnimationIndex >= 0 && !isAnimationLooping)
+            mimicEngine?.update(
+                gazeDt.coerceIn(0.001f, 0.05f),
+                SystemClock.elapsedRealtime(),
+                animationWrote,
+                oneShotActive,
+            )
             // 显式提交本帧全部局部变换写入（idle/呼吸/视线）：TransformManager
             // 惰性求值，commit 前所有 getWorldTransform/蒙皮都读旧世界变换。
             // gti 依赖 lookAt 内部的 commit——gaze off（target=null 提前 return）
@@ -800,6 +822,7 @@ internal class SoulLinkRenderer(
             expressionManager = null
             lookAtEngine = null
             breathEngine = null
+            mimicEngine = null
             springBoneManager = null
             animator = null
 
@@ -908,6 +931,28 @@ internal class SoulLinkRenderer(
                     breath.setSpeaking(breathSpeaking)
                     breath.setAmplitudeScale(breathAmplitudeScale)
                     if (breathRateBpm > 0) breath.setRateHz(breathRateBpm / 60f)
+                }
+
+                // Mimic overlay engine（「模仿我」）——P1 头/颈+双臂 + P2 躯干三段
+                // 与双锁骨的绝对方向驱动，与视线引擎一样在 VRM 0.x root 翻转之后
+                // 绑定（faceLocalDir 假设模型面向 +Z）。缺骨优雅降级：缺头=头部
+                // 不驱，缺手骨=小臂不驱，缺脊柱段=该段不参与分摊。
+                mimicEngine = VrmPoseMimicEngine(modelViewer.engine).also { mimic ->
+                    mimic.bind(
+                        neckEntity,
+                        headEntity,
+                        resolveHumanoidEntity(asset, bytes, "leftUpperArm"),
+                        resolveHumanoidEntity(asset, bytes, "leftLowerArm"),
+                        resolveHumanoidEntity(asset, bytes, "leftHand"),
+                        resolveHumanoidEntity(asset, bytes, "rightUpperArm"),
+                        resolveHumanoidEntity(asset, bytes, "rightLowerArm"),
+                        resolveHumanoidEntity(asset, bytes, "rightHand"),
+                        resolveHumanoidEntity(asset, bytes, "spine"),
+                        resolveHumanoidEntity(asset, bytes, "chest"),
+                        resolveHumanoidEntity(asset, bytes, "upperChest"),
+                        resolveHumanoidEntity(asset, bytes, "leftShoulder"),
+                        resolveHumanoidEntity(asset, bytes, "rightShoulder"),
+                    )
                 }
 
                 // A pending shot re-frames the freshly loaded character to the
@@ -1092,6 +1137,22 @@ internal class SoulLinkRenderer(
 
     /** Last-frame gaze state for diagnostics. */
     fun lookAtInfo(): LookAtInfo? = lookAtEngine?.info()
+
+    // ── Mimic API（「模仿我」）────────────────────────────────────────────
+
+    /**
+     * Feed one frame of mimic pose targets (avatar-world unit directions,
+     * mirror semantics already baked in by the app lane). Thread-safe atomic
+     * handoff — the render thread consumes the latest frame. `null` starts the
+     * ease-back to the animated pose; a frame older than
+     * [VrmPoseMimicEngine.HOLD_MS] triggers the same restore automatically.
+     */
+    fun setMimicPose(pose: MimicPose?) {
+        mimicEngine?.setPose(pose)
+    }
+
+    /** Last-frame mimic state for diagnostics (`ai_cmd mimic_status`). */
+    fun mimicInfo(): MimicInfo? = mimicEngine?.info()
 
     // ── Breath API ───────────────────────────────────────────────────────
 

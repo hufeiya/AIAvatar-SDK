@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -91,6 +92,7 @@ import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.theme.AIAvatarSDKTheme
 import com.neethu.aiavatar_sdk.video.UserCameraTracker
+import com.neethu.aiavatar_sdk.video.PoseMimicMath
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.AvatarRenderSettings
@@ -115,6 +117,7 @@ import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
 import com.neethu.orchestrator.skill.LookHereSkill
+import com.neethu.orchestrator.skill.MimicSkill
 import com.neethu.orchestrator.skill.RpsSkill
 import com.neethu.aiavatar_sdk.skills.DemoSkillHost
 import com.neethu.aiavatar_sdk.skills.isSkillGestureAsset
@@ -850,10 +853,12 @@ private fun DemoScreen(
     val skillHost = remember { DemoSkillHost(scope) }
     val rpsSkill = remember { RpsSkill(rpsHandAssets) }
     val lookHereSkill = remember { LookHereSkill(lookHereAssets) }
+    val mimicSkill = remember { MimicSkill() }
     // 技能指令行/宣判词随界面语言切换（实例跨会话重建保持状态）
     LaunchedEffect(uiState.lang) {
         rpsSkill.lang = uiState.lang
         lookHereSkill.lang = uiState.lang
+        mimicSkill.lang = uiState.lang
     }
     val aiChat = remember {
         AiChatController(scope, controller, context.applicationContext, skillHost)
@@ -911,6 +916,7 @@ private fun DemoScreen(
             s.actionCatalog = buildLlmActionCatalog(assetPaths, externalFiles)
             s.skills.register(rpsSkill)
             s.skills.register(lookHereSkill)
+            s.skills.register(mimicSkill)
         }
     }
 
@@ -1101,11 +1107,18 @@ private fun DemoScreen(
         }
     }
 
+    // 「模仿我」调试/开关状态（先于两个消费循环声明——Kotlin 局部变量顺序）
+    var mimicForcedPreset by remember { mutableStateOf<String?>(null) }
+    var mimicFaceEnabled by remember { mutableStateOf(true) }
+
     // 视线消费（~30Hz）：追踪器的新人脸观测 → FaceDriver POINT 注入缝；人脸
     // 离开画面 >1.5s 回退 CAMERA（看着镜头等用户回来）。无会话时直驱 controller。
+    // 顺路消费「模仿我」车道（同一节奏）：最新目标 → 渲染引擎（原子换手），
+    // 可见性状态变化才广播给技能层（降级阶梯在技能内部计时）
     LaunchedEffect(uiState.inputMode, session) {
         if (uiState.inputMode != InputMode.VIDEO) return@LaunchedEffect
         var lastNanos = System.nanoTime()
+        var lastBodyVisSent: Boolean? = null
         while (true) {
             delay(33)
             val now = System.nanoTime()
@@ -1123,6 +1136,53 @@ private fun DemoScreen(
             } else if (videoTracker.isActive && videoTracker.faceAgeMs() > 1500) {
                 fd?.setGazeMode(GazeMode.CAMERA)
             }
+            videoTracker.latestMimicPose?.let { controller.setMimicPose(it) }
+            val vis = videoTracker.latestBodyVisible
+            if (vis != lastBodyVisSent) {
+                lastBodyVisSent = vis
+                session?.skills?.onBodyTracking(vis)
+            }
+            // 表情模仿（P2）：blendshapes → 模型 morph 名映射在 FaceDriver 内做
+            // （它持有模型支持名集合）；断供传 null=表情通道让位回情绪/眨眼
+            session?.faceDriver?.setMimicFace(
+                if (mimicFaceEnabled) videoTracker.latestMimicFace?.shapes else null,
+            )
+        }
+    }
+
+    // 「模仿我」常驻循环（任意输入模式，~15Hz）：①mimic_force 合成姿态续时戳
+    // （免相机 A/B，引擎按新鲜度消费）②激活时不在视频模式→自动切换（模仿不挑
+    // 模型，不走 videoModeBlockReason 的视觉门控；相机权限由进模式的 effect 补
+    // 申请）③技能退场/撤销合成姿态→引擎立即缓动回待机（不等 600ms 过期自愈）
+    // ④呼吸让位（P2 躯干通道与呼吸同骨组，模仿期关呼吸，退场恢复用户设置）
+    var breathYielded = false
+    var wasActivePrev = false
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(66)
+            val forced = mimicForcedPreset
+            if (forced != null) {
+                PoseMimicMath.forcedPreset(forced, SystemClock.elapsedRealtime())
+                    ?.let { controller.setMimicPose(it) }
+            }
+            if (mimicSkill.isActive && uiState.inputMode != InputMode.VIDEO) {
+                uiState.switchInputMode(InputMode.VIDEO)
+            }
+            val active = mimicSkill.isActive || forced != null
+            if (active) {
+                controller.setBreathEnabled(false)
+                breathYielded = true
+            } else {
+                if (breathYielded) {
+                    controller.setBreathEnabled(uiState.motionSettings.breathEnabled)
+                    breathYielded = false
+                }
+                if (!mimicSkill.isActive && forced == null && videoTracker.latestMimicPose == null) {
+                    // 幂等兜底：确保没有残留姿态目标（缓动自愈已在引擎侧）
+                }
+            }
+            if (wasActivePrev && !active) controller.setMimicPose(null)
+            wasActivePrev = active
         }
     }
 
@@ -1268,6 +1328,9 @@ private fun DemoScreen(
     // 「看这边」的头部姿态车道互斥优先（同一分析线程不并跑两个 MediaPipe 任务）。
     videoTracker.gestureEnabled = { rpsSkill.isActive && !lookHereSkill.isActive }
     videoTracker.headPoseEnabled = { lookHereSkill.isActive }
+    // 「模仿我」身体车道（docs/mimic-skill-feasibility.md §8）：第三条 MediaPipe
+    // 车道，与手势/头姿态互斥（同一分析线程），仅技能激活+前摄时跑
+    videoTracker.bodyMimicEnabled = { mimicSkill.isActive && !lookHereSkill.isActive && !rpsSkill.isActive }
     videoTracker.onGestureConfirmed = { code ->
         scope.launch { session?.skills?.onUserGesture(code) }
     }
@@ -1825,6 +1888,79 @@ private fun DemoScreen(
                         "reality, flip LookHereTuning.yawPositiveIsScreenLeft/pitchPositiveIsScreenUp)")
                         .format(p.yawDeg, p.pitchDeg, age, believedStr)
                 }
+            },
+            // ai_cmd mimic_status：技能状态机 + 渲染引擎 + 相机车道三段汇总
+            mimicStatus = {
+                val skillLine = session?.skills?.debug("mimic", "status")
+                    ?: "no session (mimic skill lives on the AI session)"
+                val info = controller.getMimicInfo()
+                val engineLine = info?.let {
+                    "engaged=${it.engaged} restoring=${it.restoring} " +
+                        "poseAge=${it.poseAgeMs}ms head=(yaw=%.0f°,pitch=%.0f°) ".format(
+                            it.headYawDeg, it.headPitchDeg,
+                        ) +
+                        "torso=(pitch=%.0f°,roll=%.0f°,yaw=%.0f°)".format(
+                            it.torsoPitchDeg, it.torsoRollDeg, it.torsoYawDeg,
+                        )
+                } ?: "renderer not attached"
+                val laneLine = videoTracker.latestMimicPose?.let {
+                    "age=${SystemClock.elapsedRealtime() - it.timestampMs}ms visible=${it.visible}"
+                } ?: "no pose"
+                val face = videoTracker.latestMimicFace
+                val faceLine = face?.let {
+                    "face: age=${SystemClock.elapsedRealtime() - it.atMs}ms " +
+                        "shapes=${it.shapes.size} matrix=${it.matrix != null} " +
+                        "feed=${if (mimicFaceEnabled) "on" else "off"}"
+                } ?: "face: no frame"
+                "$skillLine | engine: $engineLine | lane: $laneLine | $faceLine"
+            },
+            // ai_cmd mimic_pose：最近解算的镜像方向集（符号标定探针，mimic_force 同源）
+            mimicPose = {
+                val p = videoTracker.latestMimicPose
+                    ?: error(
+                        "no mimic pose yet (requires: mimic skill active + video mode + " +
+                            "front camera + upper body in frame; or inject with mimic_force)"
+                    )
+                fun d(name: String, v: FloatArray?) =
+                    v?.joinToString(prefix = "$name=(", postfix = ")", separator = ",") { "%.2f".format(it) }
+                        ?: "$name=null"
+                "avatar-frame directions (T-pose check: user-left arm should read Lu=(1,0,0) " +
+                    "→ avatar-RIGHT, Ru=(-1,0,0); torso upright axis=(0,1,0) line=(1,0,0)): " +
+                    "${d("head", p.headForward)} ${d("Lu", p.leftUpperArm)} ${d("Ll", p.leftLowerArm)} " +
+                    "${d("Ru", p.rightUpperArm)} ${d("Rl", p.rightLowerArm)} " +
+                    "${d("torso", p.torsoAxis)} ${d("sline", p.shoulderLine)} visible=${p.visible}"
+            },
+            // ai_cmd mimic_force <preset>：合成姿态注入（走真实解算路径，免相机 A/B）
+            mimicForce = { arg ->
+                when (arg) {
+                    null, "status" ->
+                        "forced preset = ${mimicForcedPreset ?: "(none)"} " +
+                            "(options: ${PoseMimicMath.FORCED_PRESETS.joinToString("|")})"
+                    "off", "none" -> {
+                        mimicForcedPreset = null
+                        "mimic force cleared (engine eases back)"
+                    }
+                    in PoseMimicMath.FORCED_PRESETS -> {
+                        mimicForcedPreset = arg
+                        "mimic forced preset=$arg — watch which side the avatar raises " +
+                            "(mirror calibration entry; works without camera/skill)"
+                    }
+                    else -> throw IllegalArgumentException(
+                        "mimic_force expects ${PoseMimicMath.FORCED_PRESETS.joinToString("|")}, got '$arg'"
+                    )
+                }
+            },
+            // ai_cmd mimic_face on|off（省略=查状态）：表情车道开关（P2 A/B）
+            setMimicFace = { arg ->
+                val new = when (arg) {
+                    null, "status" -> mimicFaceEnabled
+                    "on", "true", "1" -> true
+                    "off", "false", "0" -> false
+                    else -> throw IllegalArgumentException("mimic_face expects on|off, got '$arg'")
+                }
+                if (arg != null && arg != "status") mimicFaceEnabled = new
+                "mimic face lane = ${if (mimicFaceEnabled) "on" else "off"} " +
+                    "(blendshapes→FaceDriver; body lane unaffected)"
             },
         )
     }

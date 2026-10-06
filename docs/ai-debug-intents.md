@@ -77,6 +77,10 @@
 | `look_status` | — | 「看这边」技能状态机快照：state（IDLE/INTRO/POINTING/ANNOUNCING）/已判定局数/比分（虚拟人:用户）/上次指向方向/本局结论（dodged/caught/frozen）/连续无脸局数/是否存有判负抓拍帧（技能 docs/lookhere-skill-feasibility.md；激活走语音「看这边」或含关键词的 send_chat） |
 | `look_throw` | `ai_arg`= up \| down \| left \| right（省略=查状态） | **强制朝指定方向指**：跳过 RNG 立即开/重开一局（播指向 VRMA+喊"看这边!"+判定窗）。两个用途：①屏幕方向标定——逐个执行，人眼看虚拟人实际指向画面的哪一侧，与文件名不符就改 `LookHereSkill.screenToAssetDir` 映射表；②免麦 A/B——强制指向后立刻转头，观察宣判是否正确 |
 | `face_pose` | — | 最近一次头部姿态观测：yaw/pitch（度）+ 数据年龄。**符号标定入口**：在「看这边」激活态（视频模式+前摄）依次向自己左/右/上/下转头，记录四组符号，与 `LookHereTuning` 的 `yawPositiveIsScreenLeft`/`pitchPositiveIsScreenUp` 对照，错了改布尔并用已知答案单测锁死。无数据时提示前置条件（技能激活+视频模式+前摄+脸在画面内） |
+| `mimic_status` | — | 「模仿我」三段汇总：技能状态机（state=IDLE/INTRO/ACTIVE/BANTER、催促计数、是否见过人）+ 渲染引擎（engaged/restoring/姿态年龄/平滑头部角）+ 相机车道（最新 MimicPose 年龄/可见性）（技能 docs/mimic-skill-feasibility.md；激活走语音「模仿我」或含关键词的 send_chat，激活即自动切视频模式） |
+| `mimic_pose` | — | 最近解算的镜像方向集（虚拟人世界系单位向量 + 数据年龄）。**符号标定探针**：在模仿激活态做 T-pose——用户左臂应读出 `Lu=(1,0,0)`（驱动虚拟人**右**臂）、用户右臂 `Ru=(-1,0,0)`；双臂前伸 z=+1（指观察者）。任一轴与推导不符改 `PoseMimicMath.mirrorFrame` + 已知答案单测。无数据时提示前置条件（可用 `mimic_force` 替代探路） |
+| `mimic_force` | `ai_arg`= tpose \| left_up \| right_up \| both_up \| forward \| lean_left \| lean_right \| bow \| turn_left \| off（省略=查状态） | **注入合成姿态**（在 MediaPipe 坐标里搭骨架后走与真实检测**完全相同**的解算路径）：免相机/免技能激活直接驱动渲染引擎。用途：①镜像标定——`left_up` 后人眼看虚拟人抬的是哪只手（应抬它自己的右手）；②P2 躯干标定——`lean_left`/`lean_right`/`bow` 看躯干倾斜方向、`turn_left` 看转身方向，方向错了改 `PoseMimicMath.mirrorFrame`；③引擎 A/B（退场缓动/单发 VRMA 让路/与呼吸视线共存）。`off` 撤销注入、引擎缓动回待机 |
+| `mimic_face` | `ai_arg`= on \| off（省略=查状态） | P2 表情车道开关（默认 on）：52 ARKit blendshapes → 模型 morph 名映射（`MimicFaceMapper`，ARKit 命名模型直配、VRM 预设模型走别名降级）→ FaceDriver 表情通道。**所有权规则**：说话期嘴部让给口型（jawOpen 等归零）、用户的真实眨眼替代自动眨眼、情绪通道整体让位（blender 状态保留、断供即接回）。off=只模仿身体，表情留在情绪通道——排查表情 vs 身体问题的隔离开关 |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。

@@ -27,6 +27,17 @@ internal object GazeMath {
 
     fun quatInverse(q: FloatArray): FloatArray = floatArrayOf(-q[0], -q[1], -q[2], q[3])
 
+    /**
+     * Unit-quaternion for a rotation of [angleRad] about [axis]（轴内部归一化；
+     * 模仿引擎的躯干欧拉分量绕世界轴分解用）。
+     */
+    fun axisAngleQuat(axis: FloatArray, angleRad: Float): FloatArray {
+        val len = len3(axis)
+        if (len < 1e-8f || abs(angleRad) < 1e-9f) return floatArrayOf(0f, 0f, 0f, 1f)
+        val s = sin(angleRad / 2f) / len
+        return floatArrayOf(axis[0] * s, axis[1] * s, axis[2] * s, cos(angleRad / 2f))
+    }
+
     /** Rotate [v] by [q] (v' = q·v·q⁻¹, expanded via the two-cross trick). */
     fun rotateVector(q: FloatArray, v: FloatArray): FloatArray {
         val qx = q[0]; val qy = q[1]; val qz = q[2]; val qw = q[3]
@@ -184,5 +195,25 @@ internal object GazeMath {
         val r = quatMultiply(quatInverse(a), b)
         val v = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2])
         return 2f * atan2(v, abs(r[3]))
+    }
+
+    /**
+     * Normalized linear interpolation between unit quaternions [a]→[b], weight
+     * [t]∈[0,1]（模仿引擎退场缓动用：相邻帧姿态差极小，nlerp 与 slerp 不可分
+     * 辨且免三角函数）。走最短弧：dot<0 时翻转 [b] 的符号（q 与 −q 同一旋转）。
+     * 端点保证精确：t=0 返回 [a]、t=1 返回 [b]（符号归一后）。
+     */
+    fun quatNlerp(a: FloatArray, b: FloatArray, t: Float): FloatArray {
+        var bx = b[0]; var by = b[1]; var bz = b[2]; var bw = b[3]
+        if (a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw < 0f) {
+            bx = -bx; by = -by; bz = -bz; bw = -bw
+        }
+        val x = a[0] + (bx - a[0]) * t
+        val y = a[1] + (by - a[1]) * t
+        val z = a[2] + (bz - a[2]) * t
+        val w = a[3] + (bw - a[3]) * t
+        val len = sqrt((x * x + y * y + z * z + w * w).toDouble()).toFloat()
+        if (len < 1e-9f) return floatArrayOf(a[0], a[1], a[2], a[3])
+        return floatArrayOf(x / len, y / len, z / len, w / len)
     }
 }

@@ -91,6 +91,14 @@ internal class AiChatDebugHooks(
     },
     /** ai_cmd face_pose：最近一次头部姿态观测行（「看这边」符号标定用）。 */
     val facePose: () -> String = { "head pose not wired in this screen" },
+    /** ai_cmd mimic_status：模仿技能 + 渲染引擎 + 相机车道状态汇总。 */
+    val mimicStatus: () -> String = { "mimic not wired in this screen" },
+    /** ai_cmd mimic_pose：最近解算的镜像方向集（「模仿我」符号标定探针）。 */
+    val mimicPose: () -> String = { "mimic not wired in this screen" },
+    /** ai_cmd mimic_force <preset>：合成姿态注入（免相机 A/B 镜像标定入口）。 */
+    val mimicForce: (String?) -> String = { "mimic not wired in this screen" },
+    /** ai_cmd mimic_face on|off：表情车道开关（P2 表情模仿 A/B）。 */
+    val setMimicFace: (String?) -> String = { "mimic not wired in this screen" },
 )
 
 /**
@@ -341,6 +349,26 @@ internal suspend fun executeAiCommand(
             "face_pose" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.facePose()
+            }
+            "mimic_status" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.mimicStatus()
+            }
+            "mimic_pose" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.mimicPose()
+            }
+            "mimic_force" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // ai_arg = tpose|left_up|right_up|both_up|forward|off（省略=查状态）：
+                // 注入合成姿态走真实解算路径——免相机/免技能激活 A/B 引擎与镜像符号
+                chat.mimicForce(command.arg?.lowercase())
+            }
+            "mimic_face" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // ai_arg = on|off（省略=查状态）：表情车道开关——排查表情通道与
+                // 身体通道问题的隔离开关（off=只模仿身体，表情留在情绪通道）
+                chat.setMimicFace(command.arg?.lowercase())
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."

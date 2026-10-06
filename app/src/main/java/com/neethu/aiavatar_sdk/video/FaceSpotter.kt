@@ -6,6 +6,7 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.sqrt
@@ -41,21 +42,29 @@ object HeadPoseMath {
 }
 
 /**
- * MediaPipe FaceLandmarker 薄封装（「看这边」头部姿态判定件，
- * docs/lookhere-skill-feasibility.md §3）。
+ * MediaPipe FaceLandmarker 薄封装（「看这边」头部姿态判定件 + P2「模仿我」
+ * 表情/精确头部判定件，docs/lookhere-skill-feasibility.md §3 与
+ * docs/mimic-skill-feasibility.md P2）。
  *
  * bundled 模型 `assets/face_landmarker.task`（float16 ~3.7MB）+ IMAGE 运行
- * 模式：调用方（UserCameraTracker 分析线程）给一帧直立位图，同步返回
- * (yawDeg, pitchDeg)。`facialTransformationMatrixes` 直出头部旋转矩阵——
- * yaw/pitch 同一来源同一噪声特性，比 ML Kit 的 eulerY（无 pitch）或关键点
- * 几何估算稳。单帧 CPU 10-30ms，80ms 帧级门下与 ML Kit 人脸检测错峰；只在
- * 技能激活+前摄时跑（关=零开销不建引擎），与手势车道互斥（同一分析线程
- * 不并跑两个 MediaPipe 任务）。不依赖 GMS，国产无服务设备可跑。
+ * 模式：调用方（UserCameraTracker 分析线程）给一帧直立位图，同步返回。
+ * `facialTransformationMatrixes` 直出头部旋转矩阵——yaw/pitch 同一来源同一
+ * 噪声特性，比 ML Kit 的 eulerY（无 pitch）或关键点几何估算稳。单帧 CPU
+ * 10-30ms，80ms 帧级门下与 ML Kit 人脸检测错峰；只在技能激活+前摄时跑
+ * （关=零开销不建引擎）。不依赖 GMS，国产无服务设备可跑。
+ *
+ * **两个实例**：看这边车道（`blendshapes=false` 默认）只要矩阵；模仿车道
+ * （`blendshapes=true`）额外要 52 ARKit blendshapes（表情模仿）。不共用一个
+ * 实例——开 blendshapes 有逐帧成本，别让看这边的判定窗背上它；两车道本来
+ * 就随单活跃收口互斥，内存多一份模型是可接受代价。
  *
  * 创建/识别/释放全部约束在分析线程串行执行——MediaPipe 原生实例不允许
- * 跨线程并发使用（手势引擎同款约束）。
+ * 跨线程并发使用（手势/Pose 引擎同款约束）。
  */
-class FaceLandmarkerEngine(context: Context) {
+class FaceLandmarkerEngine(
+    context: Context,
+    private val blendshapes: Boolean = false,
+) {
 
     private val landmarker: FaceLandmarker = FaceLandmarker.createFromOptions(
         context,
@@ -67,15 +76,20 @@ class FaceLandmarkerEngine(context: Context) {
             )
             .setRunningMode(RunningMode.IMAGE)
             .setNumFaces(1)
-            .setOutputFaceBlendshapes(false)
+            .setOutputFaceBlendshapes(blendshapes)
             .setOutputFacialTransformationMatrixes(true)
             .build(),
     )
 
+    /** 完整结果（矩阵 + 可选 blendshapes）；无脸返回 null。 */
+    fun detectResult(upright: Bitmap): FaceLandmarkerResult? {
+        return landmarker.detect(BitmapImageBuilder(upright).build())
+    }
+
     /** 识别一帧直立位图，返回 (yawDeg, pitchDeg)；无脸/无矩阵返回 null。 */
     fun detect(upright: Bitmap): Pair<Float, Float>? {
-        val result = landmarker.detect(BitmapImageBuilder(upright).build())
-        val matrix = result.facialTransformationMatrixes().orElse(null)?.firstOrNull()
+        val matrix = detectResult(upright)?.facialTransformationMatrixes()?.orElse(null)
+            ?.firstOrNull()
             ?: return null
         return HeadPoseMath.yawPitchDeg(matrix)
     }

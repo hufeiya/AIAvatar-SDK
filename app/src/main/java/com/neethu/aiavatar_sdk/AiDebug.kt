@@ -174,6 +174,22 @@ fun aiDebugHelp(): String = """
 |                           skill active + video mode + front camera). Turn
 |                           your head each way and lock the signs into
 |                           LookHereTuning — the sign-calibration probe
+|  mimic_status             Dump the Imitate-Me skill + render engine + camera
+|                           lane state (docs/mimic-skill-feasibility.md)
+|  mimic_pose               Dump the latest solved mirror directions (avatar-
+|                           frame unit vectors + age) — the mimic sign-
+|                           calibration probe (T-pose: user-left arm reads
+|                           Lu=(1,0,0) and drives the avatar's RIGHT arm)
+|  mimic_force <arg>        Inject a synthetic pose: tpose | left_up |
+|                           right_up | both_up | forward | lean_left |
+|                           lean_right | bow | turn_left | off (omit ai_arg
+|                           = status). Runs the real solve path without a
+|                           camera — watch which side the avatar raises /
+|                           which way the torso leans (P2 torso calibration)
+|  mimic_face <arg>         on | off (omit ai_arg = status): toggle the P2
+|                           expression lane (52 ARKit blendshapes → model
+|                           morphs via FaceDriver; real blinks replace auto-
+|                           blink, mouth yields to lip-sync while speaking)
 |Providers (SiliconFlow + Volcano + OpenRouter; LLM/TTS/ASR dropdowns in ⚙️):
 |  set_provider <arg>       Switch LLM provider: siliconflow | volcano |
 |                           openrouter (model list follows; empty model =
