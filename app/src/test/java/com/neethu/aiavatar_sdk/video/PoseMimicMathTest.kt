@@ -20,9 +20,11 @@ import org.junit.Test
 
 /**
  * 「模仿我」方向解算纯函数层的已知答案单测：**合成关键点 → 断言每根方向分量
- * 精确值**——四层坐标系（MediaPipe 轴向/相机镜像/VRM 世界系/玩法镜像）的符号
- * 表全在这里锁死（docs/mimic-skill-feasibility.md §5）。真机标定若发现某轴
- * 反了，改 [PoseMimicMath.mirrorFrame] + 同步改本文件，不动其他逻辑。
+ * 精确值**——坐标系符号表全在这里锁死（docs/mimic-skill-feasibility.md §5）：
+ * Pose 世界系（x右/y下/z朝相机，[PoseMimicMath.mirrorFrame]）与 FaceLandmarker
+ * 矩阵系（x左/y上/z远，[PoseMimicMath.matrixFrame]，经头部矩阵测试锁死）两套
+ * 转换分开锁。真机标定若发现某轴反了，改对应转换函数 + 同步改本文件，不动
+ * 其他逻辑。
  */
 class PoseMimicMathTest {
 
@@ -42,11 +44,11 @@ class PoseMimicMathTest {
         assertEquals(z, actual[2], 1e-4f)
     }
 
-    /** 头部关键点（正对镜头）：鼻尖略近相机、双耳对称。 */
+    /** 头部关键点（正对镜头）：鼻尖略近相机（Pose 系 z+ = 朝相机）、双耳对称。 */
     private fun head() = listOf(
-        NOSE to pl(0f, -0.62f, -0.08f),
-        LEFT_EYE to pl(0.03f, -0.65f, -0.08f),
-        RIGHT_EYE to pl(-0.03f, -0.65f, -0.08f),
+        NOSE to pl(0f, -0.62f, 0.08f),
+        LEFT_EYE to pl(0.03f, -0.65f, 0.08f),
+        RIGHT_EYE to pl(-0.03f, -0.65f, 0.08f),
         LEFT_EAR to pl(0.08f, -0.62f, 0f),
         RIGHT_EAR to pl(-0.08f, -0.62f, 0f),
     )
@@ -95,12 +97,12 @@ class PoseMimicMathTest {
 
     @Test
     fun `arm toward camera - avatar points at the viewer (mirror z flip)`() {
-        // 用户左臂伸向手机（−z_mp，越近越小）→ (0,0,+1)_A = 指向观察者
+        // 用户左臂伸向手机（+z_mp，Pose 系 z+ = 朝相机）→ (0,0,+1)_A = 指向观察者
         val p = PoseMimicMath.mimicPoseFromLandmarks(
             pts(
                 *head().toTypedArray(),
-                LEFT_SHOULDER to pl(0.2f, -0.35f), LEFT_ELBOW to pl(0.2f, -0.35f, -0.25f),
-                LEFT_WRIST to pl(0.2f, -0.35f, -0.45f),
+                LEFT_SHOULDER to pl(0.2f, -0.35f), LEFT_ELBOW to pl(0.2f, -0.35f, 0.25f),
+                LEFT_WRIST to pl(0.2f, -0.35f, 0.45f),
                 RIGHT_SHOULDER to pl(-0.2f, -0.35f), RIGHT_ELBOW to pl(-0.2f, -0.10f),
                 RIGHT_WRIST to pl(-0.2f, 0.12f),
             ),
@@ -112,14 +114,14 @@ class PoseMimicMathTest {
 
     @Test
     fun `head forward mirrors - user turns left, avatar turns to its right`() {
-        // 用户头转向他自己的左 30°：鼻尖相对双耳中点 = (sin30, 0, −cos30)·k 在
-        // MP 系（x_mp+ = 用户左侧）≈ (0.04, 0, −0.07)；镜像后 x<0（转向虚拟人
-        // 右侧=画面左）且 z>0（朝向用户）
+        // 用户头转向他自己的左 30°：鼻尖相对双耳中点 = (sin30, 0, cos30)·k 在
+        // MP 系（x_mp+ = 用户左侧；z_mp+ = 朝相机，鼻尖前突）≈ (0.04, 0, 0.07)；
+        // 镜像后 x<0（转向虚拟人右侧=画面左）且 z>0（朝向用户）
         val p = PoseMimicMath.mimicPoseFromLandmarks(
             pts(
-                NOSE to pl(0.12f, -0.62f, -0.07f),
-                LEFT_EYE to pl(0.11f, -0.65f, -0.07f),
-                RIGHT_EYE to pl(0.05f, -0.65f, -0.07f),
+                NOSE to pl(0.12f, -0.62f, 0.07f),
+                LEFT_EYE to pl(0.11f, -0.65f, 0.07f),
+                RIGHT_EYE to pl(0.05f, -0.65f, 0.07f),
                 LEFT_EAR to pl(0.16f, -0.62f, 0f),
                 RIGHT_EAR to pl(0.0f, -0.62f, 0f),
                 LEFT_SHOULDER to pl(0.2f, -0.35f), LEFT_ELBOW to pl(0.45f, -0.35f),
@@ -144,16 +146,16 @@ class PoseMimicMathTest {
                 *head().toTypedArray(),
                 LEFT_SHOULDER to pl(0.2f, -0.35f), LEFT_ELBOW to pl(0.45f, -0.35f),
                 LEFT_WRIST to pl(0.7f, -0.35f),
-                RIGHT_SHOULDER to pl(-0.2f, -0.35f), RIGHT_ELBOW to pl(-0.2f, -0.35f, -0.25f),
-                RIGHT_WRIST to pl(-0.2f, -0.35f, -0.45f),
+                RIGHT_SHOULDER to pl(-0.2f, -0.35f), RIGHT_ELBOW to pl(-0.2f, -0.35f, 0.25f),
+                RIGHT_WRIST to pl(-0.2f, -0.35f, 0.45f),
             ),
             timestampMs = 1000,
             mirror = false,
         )!!
-        // 用户左臂 (+1,0,0)_mp → 人偶=(+x,−y,−z)=(1,0,0)_A 填虚拟人**左**臂（同侧，
+        // 用户左臂 (+1,0,0)_mp → 人偶=(+x,−y,+z)=(1,0,0)_A 填虚拟人**左**臂（同侧，
         // 指向虚拟人自己的左侧）
         assertDir(p.leftUpperArm, 1f, 0f, 0f)
-        // 用户右臂前伸 (0,0,−1)_mp → 人偶=(0,0,+1)_A（前伸仍前伸——前后轴恒翻）
+        // 用户右臂前伸 (0,0,+1)_mp → 人偶=(0,0,+1)_A（前伸仍前伸——前后轴恒翻）
         assertDir(p.rightUpperArm, 0f, 0f, 1f)
     }
 
@@ -184,7 +186,7 @@ class PoseMimicMathTest {
     fun `all parts invisible yields a liveness ping with visible=false`() {
         val p = PoseMimicMath.mimicPoseFromLandmarks(
             pts(
-                NOSE to pl(0f, -0.62f, -0.08f, vis = 0.1f),
+                NOSE to pl(0f, -0.62f, 0.08f, vis = 0.1f),
                 LEFT_EAR to pl(0.08f, -0.62f, 0f, vis = 0.1f),
                 RIGHT_EAR to pl(-0.08f, -0.62f, 0f, vis = 0.1f),
                 LEFT_SHOULDER to pl(0.2f, -0.35f, vis = 0.1f),
@@ -316,7 +318,7 @@ class PoseMimicTorsoMathTest {
     private fun pl(x: Float, y: Float, z: Float = 0f, vis: Float = 0.9f) = PLandmark(x, y, z, vis)
 
     private fun head() = listOf(
-        PoseMimicMath.NOSE to pl(0f, -0.62f, -0.08f),
+        PoseMimicMath.NOSE to pl(0f, -0.62f, 0.08f),
         PoseMimicMath.LEFT_EAR to pl(0.08f, -0.62f, 0f),
         PoseMimicMath.RIGHT_EAR to pl(-0.08f, -0.62f, 0f),
     )
@@ -348,16 +350,16 @@ class PoseMimicTorsoMathTest {
 
     @Test
     fun `user leaning toward camera bows the avatar torso toward viewer`() {
-        // 双肩整体前移（−z_mp = 朝相机）并放低（y+）
+        // 双肩整体前移（+z_mp = 朝相机，Pose 系 z+ 朝相机）并放低（y+）
         val leaning = pts(
             *head().toTypedArray(),
-            PoseMimicMath.LEFT_SHOULDER to pl(0.2f, -0.30f, -0.25f),
-            PoseMimicMath.RIGHT_SHOULDER to pl(-0.2f, -0.30f, -0.25f),
+            PoseMimicMath.LEFT_SHOULDER to pl(0.2f, -0.30f, 0.25f),
+            PoseMimicMath.RIGHT_SHOULDER to pl(-0.2f, -0.30f, 0.25f),
             PoseMimicMath.LEFT_HIP to pl(0.1f, 0.05f),
             PoseMimicMath.RIGHT_HIP to pl(-0.1f, 0.05f),
         )
         val p = PoseMimicMath.mimicPoseFromLandmarks(leaning, 1000)!!
-        // 轴 z 分量：肩前移 → 轴 z<0 → 镜像 z 取反 → 正 = 顶端朝观察者
+        // 轴 z 分量：肩前移 → 轴 z>0（朝相机）→ 镜像 z 保号 → 正 = 顶端朝观察者
         assertTrue("torso z should be positive, got ${p.torsoAxis!![2]}", p.torsoAxis!![2] > 0.4f)
     }
 
@@ -380,13 +382,13 @@ class PoseMimicTorsoMathTest {
 
     @Test
     fun `head forward from matrix extracts mirrored column direction`() {
-        // 构造「用户头转向他自己的左 30°」的矩阵：forward_mp 应有 +x 分量
-        //（用户左 = +x_mp）。对 (0,0,−1) 前向，绕 +Y 转 −30° 得 (−sin(−30)·(−1)…)；
-        // 直接构造期望向量反推矩阵：col-major 4×4，R 列 = (X', Y', Z')。
-        // 取 forward_mp = normalize(0.5, 0, −0.866)（朝相机且偏用户左），
-        // Z' 列 = −forward（FACE_FORWARD_LOCAL=−1 → forward = −Z' 列）→ Z' = (−0.5,0,0.866)；
-        // Y' 列 = (0,1,0)；X' = Y'×Z' = (0.866·? ) 正交右手系构造。
-        val zc = floatArrayOf(-0.5f, 0f, 0.866f)
+        // 矩阵系（真机实证 2026-10-06）：x+ = 画面左、y+ = 上、z+ = 远离相机，
+        // 规范脸 +X=脸右/+Y=上/+Z=脑后，FACE_FORWARD_LOCAL=−1 → forward = −Z' 列。
+        // 构造「用户头转向他自己的左 30°」：脑后方向转向用户右（画面左 = +x_矩阵）
+        // 且保持远离相机 → Z' = (sin30, 0, cos30) = (0.5, 0, 0.866)。
+        // 首版误用 Pose 系 mirrorFrame 把此矩阵的 x/y 双反（用户实测「我向左转头
+        // 虚拟人向右转」），本测试按精确分量锁死矩阵专用转换。
+        val zc = floatArrayOf(0.5f, 0f, 0.866f)
         val yc = floatArrayOf(0f, 1f, 0f)
         val xc = floatArrayOf(
             yc[1] * zc[2] - yc[2] * zc[1],
@@ -400,9 +402,20 @@ class PoseMimicTorsoMathTest {
             it[15] = 1f
         }
         val fwd = PoseMimicMath.headForwardFromMatrix(m, mirror = true)!!
-        // forward_mp = −Z' 列 = (0.5, 0, −0.866)：镜像后 x<0（转向虚拟人右侧）且 z>0（朝用户）
-        assertTrue("avatar head x should be negative, got ${fwd[0]}", fwd[0] < 0f)
-        assertTrue("avatar head z should be positive, got ${fwd[2]}", fwd[2] > 0f)
+        // forward_mp = −Z' 列 = (−0.5, 0, −0.866)（x<0 = 画面右 = 用户左 = 转头方向）；
+        // 矩阵转换 mirror=(+x,+y,−z) → (−0.5, 0, +0.866)：x<0 转向虚拟人右侧（画面左），
+        // z>0 朝用户——与 Pose 系鼻-耳路径同向（双源一致）
+        assertVec(fwd, -0.5f, 0f, 0.866f)
+    }
+
+    @Test
+    fun `head forward from matrix rest state faces the viewer`() {
+        // 用户正对相机：脑后 = 远离相机 = +z_矩阵 → forward_mp = (0,0,−1)；
+        // 转换后 = (0,0,+1)_A = 虚拟人面向用户（z 语义反射的唯一 rest 锚）。
+        val m = FloatArray(16).also {
+            it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f
+        }
+        assertVec(PoseMimicMath.headForwardFromMatrix(m, mirror = true)!!, 0f, 0f, 1f)
     }
 
     @Test

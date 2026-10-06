@@ -238,14 +238,15 @@ Kalidokit 自己也是这个思路。
 
 四个坐标系（比看这边还多一个"玩法镜像"），任何一处想当然就是"左右全反"：
 
-| 坐标系 | 语义 | 事实/预填 |
+| 坐标系 | 语义 | 事实/**真机已标定（2026-10-06）** |
 |---|---|---|
-| MediaPipe 世界系 | worldLandmarks 原始输出 | 原点=髋中点；x/y 随图像（y 向下）、z 越小越近相机（官网语义，**预填**） |
+| MediaPipe 世界系 | worldLandmarks 原始输出 | 原点=髋中点；x+ = 画面右 = 用户左、y+ = 画面下、**z+ = 朝向相机**（⚠ 与 normalized landmarks 官网"z 越小越近"语义相反——真机归因：首版按 z 远离相机实现，抬臂等冠状面动作全对而手放胸前等深度动作全反，z 语义翻转后修复；x/y 由 P1 真机验收锁死） |
+| FaceLandmarker 矩阵系 | facialTransformationMatrix | **与 Pose 系不同构**：x+ = 画面左、y+ = 上、z+ = 远离相机。判定=lookhere 真机标定锚点（yaw正=用户转左、pitch正=低头）唯二候选中排除 (x右,y下,z远)（该解下 mimic 头不可能反，与用户实测「我向左转头虚拟人向右转」矛盾）；转换走 `PoseMimicMath.matrixFrame` 与 Pose 系分开 |
 | 相机帧 | PoseSpotter 的输入 | 前摄分析帧**不镜像**（`rotatedUpright` 只旋转，`UserCameraTracker.kt:367-373` 同看这边）；用户把头转向他自己的左，帧里鼻尖移向画面右（面对面效应） |
 | VRM 世界系 | 渲染世界 | +X 屏幕右、+Y 上、+Z 朝相机（`AvatarController.moveAvatar` doc :461）；模型恒面向 +Z（VRM 0.x 由 renderer 翻转 180° 后绑定） |
 | 玩法镜像 | 用户左手 → 虚拟人右手 | **换侧 + 方向 x 取反**（推导见下） |
 
-### 5.1 镜像映射推导（预填，待标定）
+### 5.1 镜像映射推导（真机标定后锁死）
 
 用户面向相机（即面向 +Z）。设用户左臂抬起，其大臂方向（肩→肘）在世界系里 ≈ (+x, +y, 0)
 ——用户左侧=观察者右侧=+X。**镜像规则：拿用户左臂数据驱动虚拟人右臂，方向取
@@ -256,8 +257,12 @@ corelib 引擎按骨名对号入座，不再关心镜像。
 
 ```
 x_avatar = −x_mp（镜像）    y_avatar = −y_mp（MP y 向下→世界 y 向上）
-z_avatar = −z_mp（MP z 越小越近相机→世界 +Z 朝相机）
+z_avatar = +z_mp（MP z+ = 朝向相机 = 模仿语义的"前伸反射"：用户前伸=虚拟人前伸，
+           纯帧转换 −z_mp 与语义反射 +z 合并后保号）
 左(用户) → avatarRightArm；右(用户) → avatarLeftArm
+
+矩阵系（头部精解专用）：mirror = (+x, +y, −z) / puppet = (−x, +y, −z)
+Pose 系：mirror = (−x, −y, +z) / puppet = (+x, −y, +z)
 ```
 
 ### 5.2 标定协议（真机一次，全部固化成常量+单测，同看这边 §5 精神）
