@@ -45,3 +45,6 @@ app/src/main/assets/vrms/SK_Sun_PERFORMANCE_jacket_off_1024.vrm
 app/src/main/assets/vrms/HatsuneMikuNT.vrm
 # 正式签名凭据(keystore.properties 指向密钥库;密钥库本体由上面 *.jks 规则覆盖)
 keystore.properties
+
+# Maven Central 发布凭据(tools/release.sh 与 publish-central.py 读取)
+central.properties
