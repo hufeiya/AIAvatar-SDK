@@ -1,5 +1,10 @@
 # AIAvatar-SDK
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.hufeiya/corelib.svg?label=Maven%20Central&color=orange)](https://central.sonatype.com/artifact/io.github.hufeiya/corelib)
+[![Platform](https://img.shields.io/badge/Platform-Android%2010%2B%20%2F%20API%2029%2B-green.svg?logo=android)](https://developer.android.com)
+[![GitHub release](https://img.shields.io/github/v/release/hufeiya/AIAvatar-SDK?logo=github)](https://github.com/hufeiya/AIAvatar-SDK/releases)
+
 开源 Android 3D 虚拟人 SDK：**Filament PBR 渲染 + 纯客户端 AI 对话（LLM / TTS 直连 OpenAI 兼容 API）+ 端侧口型 / 表情 / 微动作驱动**——没有自建服务端，语音合成、口型同步、情绪表达、视线、呼吸、眨眼全部在端侧完成。
 
 | | |
@@ -9,6 +14,26 @@
 | 多模态行内标签 | `<emo:joy>` 表情、`<act:wave>` 动作（VRMA）、`<cam:closeup>` 运镜，LLM 直出 |
 | 语音 | TTS：Edge-TTS（**免费无 Key**）/ OpenAI 兼容 / 火山引擎；LLM：任意 OpenAI 兼容端点 |
 | 其他 | SillyTavern 人物卡、多语言（zh / en）、可选技能框架（猜拳 / 看这边 / 模仿我） |
+
+## 特性一览
+
+| 弹簧骨骼 | 拟人微动作 | 52 表情 |
+|:---:|:---:|:---:|
+| [▶ 动图](docs/images/springbone.gif)<br>**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | [▶ 动图](docs/images/lifelike-motion.gif)<br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | [▶ 动图](docs/images/expressions-52.gif)<br>**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
+| [▶ 动图](docs/images/character-card.gif)<br>**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | [▶ 动图](docs/images/skills.gif)<br>**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | [▶ 动图](docs/images/camera-work.gif)<br>**程序化运镜**<br>LLM 行内 `<cam:closeup>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
+
+**更多特性**
+
+- **纯客户端对话管线**：LLM 流式 → 智能断句 → 并发 TTS → 顺序播放，无自建服务端
+- **免费开箱即说**：Edge-TTS（免 Key）+ 系统内置 ASR（免 Key），一个 Key 都不填也能语音对话
+- **服务商内置目录**：硅基流动 / 火山引擎 / OpenRouter 一键切换，任意 OpenAI 兼容端点 `baseUrl` 覆盖
+- **多模态行内标签**：`<emo:joy>` 表情、`<act:wave>` 动作（内置 334 个 VRMA 动画）、`<cam:closeup>` 运镜，LLM 单流直出
+- **视频通话模式**：摄像头注视（看镜头 / 跟随你的脸）、表情跟随、动作模仿
+- **导入外部 VRM 模型**：文件选择器导入即换人，表情目录自动刷新、对话上下文自动轮换
+- **语音输入三种形态**：按住说话 / 连续聆听（VAD 自动断句）/ 系统 ASR
+- **中英双语**：提示词、默认音色、UI 文案全量 zh / en
+- **开箱即亮的渲染**：内置 IBL 环境光零资产；Compose（`AvatarView`）与传统 View（`AvatarSurfaceView`）双入口
+- **对话历史持久化**：Room 存储、多上下文管理、人物卡跨会话重建自动重放
 
 ## 架构
 
@@ -208,12 +233,34 @@ adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity
 
 `docs/` 目录是面向维护者的内部文档（架构交接、调试协议、技能可行性报告）。
 
-## Roadmap（接口优化方向）
+## 参考项目与致谢
 
-~~1. Maven 发布~~ ✅ 已完成（`io.github.hufeiya` 三库模块，见 §1；上传链路见 `tools/publish-central.py` 头注）
-~~2. 高阶门面 `AIAvatarSdk`~~ ✅ 已完成（见快速开始 §4 方式 A）
-~~3. 非 Compose View 入口 `AvatarSurfaceView`~~ ✅ 已完成（见快速开始 §2）
-~~4. 内置默认 IBL~~ ✅ 已完成（`AvatarConfig()` 零资产开箱即亮）
+本项目的实现大量受益于以下开源项目与资产来源：
+
+**渲染与模型格式**
+
+- [Filament](https://github.com/google/filament)（Google）— PBR 渲染引擎，`:corelib` 的渲染底座
+- [three-vrm](https://github.com/pixiv/three-vrm)（pixiv）— VRM 运行时语义的参照实现（表情权重、hips 拖拽、视线等行为对齐）
+- [VRM](https://vrm.dev/)（VRM Consortium）— 开放 3D 虚拟人模型格式与 VRMA 动画规范
+
+**编排与「生命感」算法**
+
+- [AIRI](https://github.com/moeru-ai/airi)（moeru-ai）— 对话编排与微动作算法的参照实现：流式断句、元音口型驱动、眼球 saccade、系统提示词组装等多处逐常量移植，口型标定 profile 直接复用
+
+**AI 服务与协议**
+
+- [edge-tts](https://github.com/rany2/edge-tts) — Edge-TTS 免费语音合成协议的开源实现，`Sec-MS-GEC` 鉴权算法的对齐来源
+- [SillyTavern](https://github.com/SillyTavern/SillyTavern) — 人物卡（Tavern Card）格式定义；内置预置卡含官方 5 张（[SillyTavern-Content](https://github.com/SillyTavern/SillyTavern-Content)）
+
+**端侧感知**
+
+- [MediaPipe](https://developers.google.com/mediapipe)（Google）— 手势 / 人脸 / 姿态 Landmarker，猜拳判定、看这边、动作模仿的感知底座
+
+**动作资产**
+
+- [Mixamo](https://www.mixamo.com/)（Adobe）— 内置 VRMA 动画库的原始动作来源（FBX → VRMA 转换）
+
+以及 Kotlin Coroutines / Jetpack Compose / OkHttp / Room 等开源基础设施——一并致谢。
 
 ## License
 
