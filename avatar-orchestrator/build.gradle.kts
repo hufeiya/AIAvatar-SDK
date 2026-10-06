@@ -33,7 +33,9 @@ dependencies {
     // （AvatarController/Lang），Maven 消费者必须能传递解析到它
     api(project(":corelib"))
 
-    implementation(libs.kotlinx.coroutines.android)
+    // api：AvatarSession 构造参数/phase 暴露 CoroutineScope/StateFlow（类型链经
+    // adapter 的 api 也可达，这里显式声明防上游收窄）
+    api(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
     api(libs.androidx.room.runtime)

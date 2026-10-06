@@ -51,13 +51,18 @@ android {
 dependencies {
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    
+    // （原 appcompat/material 两行依赖在 corelib 源码零引用，发布物不把它们
+    //   强加给消费者，2026-10-07 发布审计时移除）
+    // api：公开签名暴露这些库的类型——lifecycle 的 DefaultLifecycleObserver 是
+    // AvatarSurfaceView 的父类型、compose 的 Modifier/Composable 在 AvatarView
+    // 签名上、coroutines 的 StateFlow 在 AvatarController.state 上；implementation
+    // 会让 Maven 消费者编译报 "Cannot access supertype"（0.1.0 消费者冒烟抓出）
+    api(libs.androidx.lifecycle.runtime.ktx)
+    api(libs.kotlinx.coroutines.core)
+
     // Compose
     implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
+    api(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
