@@ -93,7 +93,7 @@ enum class AntiAliasingMode {
  *   displayed (consumed by the demo/UI layer, ignored by the renderer).
  */
 data class AvatarRenderSettings(
-    val iblIntensity: Float = 5_000f,
+    val iblIntensity: Float = 13_000f,
     val iblRotationDegrees: Float = 0f,
     val lightingRig: LightingRig = LightingRig.STUDIO,
     val shadowMapSize: Int = 1024,
@@ -136,7 +136,7 @@ enum class QualityPreset {
      * through so applying a preset does not reset user-tuned values.
      */
     fun toRenderSettings(
-        iblIntensity: Float = 5_000f,
+        iblIntensity: Float = 13_000f,
         iblRotationDegrees: Float = 0f,
         showFps: Boolean = true,
     ): AvatarRenderSettings = when (this) {

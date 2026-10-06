@@ -216,6 +216,8 @@ private const val KEY_VIDEO_PIP_Y = "ai_video_pip_y"
 private const val KEY_AI_PRESET_CARDS = "ai_preset_cards"
 /** 人物卡提示词人工编辑覆盖（fileName→文本，[CardPromptOverrides]）。 */
 private const val KEY_AI_CARD_PROMPT_OVERRIDES = "ai_card_prompt_overrides"
+/** IBL 默认亮度 5000→13000（2026-10 调亮）的一次性迁移标记。 */
+private const val KEY_RENDER_IBL_MIGRATED = "render_ibl_migrated_13000"
 
 /**
  * 表情模仿帧的新鲜窗（「模仿我」P2）：表情隔帧 ~160ms 采样，容忍 2-3 个丢帧；
@@ -274,6 +276,15 @@ private inline fun <reified T : Enum<T>> SharedPreferences.enumValue(
 /** 从 SharedPreferences 恢复渲染设置；未保存过的键回落到默认值。 */
 private fun SharedPreferences.loadRenderSettings(): AvatarRenderSettings {
     val defaults = AvatarRenderSettings()
+    // 老版本把当时的默认 5000 随全字段持久化写进了存档，只改代码默认值对
+    // 已有设备无效——首启把存档里的 IBL 强制刷成新默认，其余字段不动；
+    // 此后用户手调的值照常持久化，不会被再刷。
+    if (!getBoolean(KEY_RENDER_IBL_MIGRATED, false)) {
+        edit()
+            .putBoolean(KEY_RENDER_IBL_MIGRATED, true)
+            .putFloat("render_iblIntensity", defaults.iblIntensity)
+            .apply()
+    }
     return AvatarRenderSettings(
         iblIntensity = getFloat("render_iblIntensity", defaults.iblIntensity),
         iblRotationDegrees = getFloat("render_iblRotationDegrees", defaults.iblRotationDegrees),

@@ -340,6 +340,11 @@
   - **根 `README.md` 新建**（全仓此前无 README）：三段式快速开始（显示→免 Key 说话→对话，代码与 SimpleDemoActivity 逐行对应）+ 资产准备 + API 速查表 + **Roadmap=SDK 接口优化四方向**（①maven-publish 发布物〔全仓无 publishing 配置只能源码集成〕②高阶门面把 app 层 AiChatController/AiProviders 约 600 行装配逻辑下沉 ③非 Compose View 入口〔SoulLinkRenderer 是 internal〕④corelib 内置默认 IBL）。
   - **坑（自查抓出）**：首版 SimpleDemoActivity 漏写 `loadModel` 的 `LaunchedEffect`——AvatarView 背景色正常渲染但模型永不加载、state 停在 Idle 无任何提示（截屏差分+logcat 定位）；StatusText 里 `Modifier.align`（BoxScope 扩展）在独立 Composable 函数体内解析不到，必须调用点传 modifier。
 
+- **IBL 默认亮度 5000→13000 lux（2026-10-06，用户反馈「IBL 环境光强度改为默认 13000，现在太暗了」；单测全量 529 全绿不变〔改默认值无新分支〕；APK 组装 + 真机 62fabe84 截屏验证：亮度明显提升、prefs 存档刷成 13000）**：
+  - `AvatarRenderSettings.iblIntensity` 默认值与 `QualityPreset.toRenderSettings()` 的 `iblIntensity` 参数默认值两处 5_000f→13_000f（预设刻意透传 IBL 不覆盖用户调值的既有语义不变）。
+  - **一次性迁移（关键）**：demo 的 `loadRenderSettings` 把全部字段随存档持久化，老设备存档里固化的是旧默认 5000，只改代码默认值对已有安装无效——`loadRenderSettings` 首启检测 `render_ibl_migrated_13000` 标记，无则把 `render_iblIntensity` 强制刷成新默认（其余字段不动），此后用户手调值照常持久化不被再刷。
+  - **同需求的「默认视角改远景」半途已按用户要求退回**（SoulLinkRenderer 的 Manipulator `orbitHomePosition` 实验后还原为 camutils 默认 (0,0,1)，距 MODEL_CENTER 5 单位）——别当丢失的改动重新补上；需要远景取景用 `CameraShot.LONG_SHOT`。
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
