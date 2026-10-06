@@ -44,6 +44,11 @@ import kotlin.math.abs
 class FaceDriver(
     private val controller: AvatarController,
     parentScope: CoroutineScope,
+    /**
+     * 表情名单来源（可注入，JVM 单测用）：默认读控制器（模型重载后集合随
+     * [refreshExpressions] 更新，见 [start]）。生产路径不传。
+     */
+    private val expressionsProvider: () -> List<String> = { controller.getAvailableExpressions() },
 ) {
 
     private val vowelDriver = VowelDriver()
@@ -98,15 +103,36 @@ class FaceDriver(
         }
     }
 
-    /** Start driving. Call once the model is loaded (expression list available). */
+    /**
+     * Start driving. Call once the model is loaded (expression list available).
+     * Calling again after a model reload is safe and expected: the expression
+     * set is re-captured ([refreshExpressions]) so the NEW model's morph names
+     * pass the [send] gate（导入/切换模型后旧集合会把新模型的表情静默丢弃）.
+     */
     fun start() {
-        if (running) return
+        if (running) {
+            refreshExpressions()
+            return
+        }
         controller.setExpressionTransitionDuration(0L)
-        supportedExpressions = controller.getAvailableExpressions().toSet()
+        refreshExpressions()
         vowelDriver.setPhonemeGroups(VowelDriver.defaultLayoutFor(DEFAULT_PHONEMES))
         running = true
         lastFrameNanos = 0L
         Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    /**
+     * Re-capture the supported-expression set from the controller and reset
+     * the per-morph dedup bookkeeping. Must run after every model reload:
+     * the controller cleared its weights alongside the old model, so stale
+     * `sent` entries would suppress re-writes of the same values on the new
+     * model, and morph names unique to the new model would fail the [send]
+     * gate entirely.
+     */
+    fun refreshExpressions() {
+        supportedExpressions = expressionsProvider().toSet()
+        sent.clear()
     }
 
     fun stop() {

@@ -106,7 +106,12 @@ fun aiDebugHelp(): String = """
 |  state                    Dump avatar/scene/animation/expression/camera state
 |  list <arg>               List assets: models | scenes | animations | expressions | cards
     |Assets:
-    |  load_model <arg>         Switch character. arg = file in assets/vrms (.glb/.vrm)
+    |  load_model <arg>         Switch character (builtin assets/vrms or imported
+    |                           filesDir/vrms, .glb/.vrm). Context is kept — use
+    |                           import_model for the panel semantics (new context)
+    |  import_model <arg>       Import a .vrm/.glb file (absolute, or relative to
+    |                           the app's external files dir) into filesDir/vrms,
+    |                           auto-select it and start a new context
     |  load_scene <arg>         Switch scene (file in assets/scene) or remove it (arg=none)
     |  set_expression <arg>     Apply expression. arg = name, ai_weight = 0..1 (default 1)
     |  clear_expression         Reset face to neutral

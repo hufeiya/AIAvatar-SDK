@@ -46,6 +46,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -200,6 +201,10 @@ internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 /** 场景选择持久化（空串 = 无场景，纯色背景）。 */
 private const val KEY_SELECTED_SCENE = "selected_scene"
+/** 选中模型持久化（内置或导入，均按文件名）。 */
+private const val KEY_SELECTED_MODEL = "selected_model"
+/** 无持久化存档时的默认模型（assets/vrms 内置）。 */
+private const val DEFAULT_MODEL = "SK_Sun_PERFORMANCE_jacket_off_1024.vrm"
 private const val KEY_APP_LANGUAGE = "app_language"
 private const val KEY_AI_CONTEXT_ID = "ai_context_id"
 /** 当前上下文创建时的大模型身份签名（[llmIdentitySignature]）；换模型即轮换上下文。 */
@@ -342,9 +347,18 @@ internal class DemoUiState(context: Context) {
         prefs.edit().putString(KEY_APP_LANGUAGE, pref.name).apply()
     }
 
-    val modelFiles: List<String> = listAssets(context, "vrms") {
+    /** APK 内置模型（assets/vrms，随包只读）。 */
+    val builtinModelFiles: List<String> = listAssets(context, "vrms") {
         it.endsWith(".glb") || it.endsWith(".vrm")
     }
+
+    /** 已导入模型（filesDir/vrms，[importModel]/[importModelBytes] 后刷新）。 */
+    var importedModelFiles by mutableStateOf(ImportedModelLibrary.list(context))
+        private set
+
+    /** 模型面板全列表 = 内置 + 导入（导入名防撞，绝不遮蔽内置）。 */
+    val modelFiles: List<String> get() = builtinModelFiles + importedModelFiles
+
     val sceneFiles: List<String> = listAssets(context, "scene") {
         it.endsWith(".glb")
     }
@@ -393,7 +407,28 @@ internal class DemoUiState(context: Context) {
         prefs.saveFreeSpeechSettings(s)
     }
 
-    var selectedModel by mutableStateOf("SK_Sun_PERFORMANCE_jacket_off_1024.vrm")
+    /**
+     * 当前模型（内置或导入的文件名）。持久化（[KEY_SELECTED_MODEL]）；存档
+     * 失效（导入文件被删）回落 [DEFAULT_MODEL]。写入口统一走 [selectModel]，
+     * [LaunchedEffect] 据此加载（导入模型按绝对路径，内置走 assets）。
+     */
+    var selectedModel by mutableStateOf(initialSelectedModel())
+        private set
+
+    /** 切换模型并持久化；动画选择随模型作废。同名 no-op。 */
+    fun selectModel(name: String) {
+        if (name == selectedModel) return
+        selectedModel = name
+        selectedAnimation = null
+        prefs.edit().putString(KEY_SELECTED_MODEL, name).apply()
+    }
+
+    /** 存档名仍存在（内置或已导入）才采纳，否则默认模型。 */
+    private fun initialSelectedModel(): String {
+        val stored = prefs.getString(KEY_SELECTED_MODEL, null)
+        return if (stored != null && (stored in builtinModelFiles || stored in importedModelFiles)) stored
+        else DEFAULT_MODEL
+    }
     var selectedAnimation by mutableStateOf<String?>(null)
     var selectedExpression by mutableStateOf<String?>(null)
     /**
@@ -618,6 +653,22 @@ internal class DemoUiState(context: Context) {
         return entry
     }
 
+    // ── 模型导入（filesDir/vrms，与内置模型同列表同加载路径）──────────────
+
+    /** 从 SAF Uri 导入 VRM/GLB；成功返回落盘文件名并刷新列表，null = 不可读或不是 GLB。 */
+    fun importModel(context: Context, uri: Uri): String? {
+        val name = ImportedModelLibrary.import(context, uri) ?: return null
+        importedModelFiles = ImportedModelLibrary.list(context)
+        return name
+    }
+
+    /** 字节级导入（adb 调试命令用），与 UI 导入同一条落盘/防撞路径。 */
+    fun importModelBytes(bytes: ByteArray, suggestedName: String?): String? {
+        val name = ImportedModelLibrary.importBytes(appContext, bytes, suggestedName) ?: return null
+        importedModelFiles = ImportedModelLibrary.list(appContext)
+        return name
+    }
+
     /** 激活/取消激活（null）并持久化；会话内的系统提示由 DemoScreen 处理。 */
     fun setActiveCard(fileName: String?) {
         activeCardFile = fileName
@@ -801,11 +852,17 @@ private fun DemoScreen(
         DemoUiState.resolveExpressions(state)
     }
 
-    // Load the selected model whenever it changes
-    LaunchedEffect(uiState.selectedModel) {
+    // Load the selected model whenever it changes. 导入模型（filesDir/vrms）按
+    // 绝对路径加载，内置模型走 assets——两条入口共用同一渲染管线（loadModelBytes）。
+    val loadSelectedModel: (Boolean) -> Unit = { force ->
         uiState.selectedExpression = null
         controller.clearAllExpressions()
-        controller.loadModel("vrms/${uiState.selectedModel}")
+        val imported = ImportedModelLibrary.modelFile(context, uiState.selectedModel)
+        if (imported != null) controller.loadModelFromFile(imported.absolutePath, forceReload = force)
+        else controller.loadModel("vrms/${uiState.selectedModel}", forceReload = force)
+    }
+    LaunchedEffect(uiState.selectedModel) {
+        loadSelectedModel(false)
     }
 
     // ── 待机动作：直接挂到渲染控制器，与 AI 会话解耦 ──────────────────────
@@ -847,10 +904,7 @@ private fun DemoScreen(
         val materialReverted = uiState.renderSettings.enhanceMaterials && !new.enhanceMaterials
         uiState.updateRenderSettings(new)
         controller.updateRenderSettings(new)
-        if (materialReverted) {
-            uiState.selectedExpression = null
-            controller.loadModel("vrms/${uiState.selectedModel}", forceReload = true)
-        }
+        if (materialReverted) loadSelectedModel(true)
     }
 
     // ── AI 对话：装配 AvatarSession 并订阅其状态 ──────────────────────────
@@ -926,6 +980,13 @@ private fun DemoScreen(
             s.skills.register(lookHereSkill)
             s.skills.register(mimicSkill)
         }
+    }
+
+    // 模型（重）加载完成后刷新 FaceDriver 的表情集合：ensure 只在会话首次
+    // Ready 时启动驱动，同一会话内换模型（含 adb load_model）新模型的 morph
+    // 名要重新过 send 门控（FaceDriver.start 二次调用=刷新语义）。
+    LaunchedEffect(state) {
+        if (state is AvatarState.Ready) session?.startFaceDriving()
     }
 
     var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
@@ -1550,6 +1611,23 @@ private fun DemoScreen(
                 chatError = uiState.strings().cardParseFailed
             } else {
                 activateCard(entry)
+            }
+        }
+    }
+
+    // 导入模型：SAF 选 VRM/GLB → 落盘 filesDir/vrms → 自动选中 + 新建上下文
+    //（每个模型自带表情集不同，协议目录/表情标签不跨模型复用，聊天上下文随
+    // 模型轮换——与「换大模型即轮换上下文」同一语义）。MIME 用 */*：VRM 无
+    // 标准类型，部分文件管理器报 octet-stream、部分报空，按扩展名过滤会漏。
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val name = uiState.importModel(context, uri)
+            if (name == null) {
+                chatError = uiState.strings().modelImportFailed
+            } else {
+                uiState.selectModel(name)
+                uiState.newContext()
+                Toast.makeText(context, uiState.strings().modelImported(name), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -2289,14 +2367,38 @@ private fun DemoScreen(
                 .fillMaxWidth()
                 .padding(start = 12.dp, end = 72.dp, bottom = 12.dp)
         ) {
+            val s = LocalStrings.current
             ListPanel(
                 title = "Models",
                 items = uiState.modelFiles,
                 selectedItem = uiState.selectedModel,
                 onItemClick = { fileName ->
-                    uiState.selectedModel = fileName
-                    uiState.selectedAnimation = null // reset animation on model switch
+                    if (fileName != uiState.selectedModel) {
+                        uiState.selectModel(fileName)
+                        // 换模型 = 换表情目录：协议目录/表情标签不跨模型复用，
+                        // 上下文随模型轮换（导入自动选中走同一语义）
+                        uiState.newContext()
+                    }
                     uiState.activePanel = PanelType.NONE
+                },
+                header = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                            .clickable { modelPicker.launch(arrayOf("*/*")) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(text = s.importModel, fontSize = 14.sp)
+                    }
                 }
             )
         }
@@ -3401,7 +3503,8 @@ private fun ListPanel(
     selectedItem: String?,
     displayName: (String) -> String = { it },
     onItemClick: (String) -> Unit,
-    onItemLongClick: ((String) -> Unit)? = null
+    onItemLongClick: ((String) -> Unit)? = null,
+    header: (@Composable () -> Unit)? = null
 ) {    Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -3416,6 +3519,7 @@ private fun ListPanel(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
             )
+            header?.invoke()
 
             val listState = rememberLazyListState()
             // The panel's content is only composed while visible, so this runs

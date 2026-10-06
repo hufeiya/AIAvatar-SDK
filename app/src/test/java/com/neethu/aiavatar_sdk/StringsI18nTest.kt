@@ -62,6 +62,8 @@ class StringsI18nTest {
         assertNoCjk("systemAsrStopped", s.systemAsrStopped("busy"))
         assertNoCjk("protocolIntro", s.protocolIntro(123))
         assertNoCjk("chooseA11y", s.chooseA11y("LLM"))
+        assertNoCjk("modelImported", s.modelImported("a.vrm"))
+        assertNoCjk("modelImportFailed", s.modelImportFailed)
         // appLangLabel 刻意双语（见上方豁免注释），不在 EN 无中文断言内
         for (code in intArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 99)) {
             assertNoCjk("systemAsrErrorMessage($code)", s.systemAsrErrorMessage(code))

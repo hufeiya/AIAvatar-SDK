@@ -104,7 +104,28 @@ class AvatarController {
      * @param forceReload If `true`, re-load even if the same path is already loaded.
      */
     fun loadModel(assetPath: String, forceReload: Boolean = false) {
-        if (!forceReload && assetPath == currentModelPath && _state.value is AvatarState.Ready) {
+        loadModelInternal(assetPath, forceReload) { it.loadModel(assetPath) }
+    }
+
+    /**
+     * Load a VRM/GLB model from a file on local storage — for models imported
+     * at runtime (app data dir) instead of shipped in `assets/`. Same state
+     * transitions and idempotency rules as [loadModel]; the idempotency key is
+     * the absolute file path.
+     *
+     * @param filePath Absolute path to the `.vrm`/`.glb` file on the filesystem.
+     * @param forceReload If `true`, re-load even if the same path is already loaded.
+     */
+    fun loadModelFromFile(filePath: String, forceReload: Boolean = false) {
+        loadModelInternal(filePath, forceReload) { it.loadModelFromFile(filePath) }
+    }
+
+    private fun loadModelInternal(
+        pathKey: String,
+        forceReload: Boolean,
+        load: (SoulLinkRenderer) -> Unit,
+    ) {
+        if (!forceReload && pathKey == currentModelPath && _state.value is AvatarState.Ready) {
             return // already loaded
         }
 
@@ -114,11 +135,11 @@ class AvatarController {
             return
         }
 
-        currentModelPath = assetPath
-        _state.value = AvatarState.Loading(assetPath)
+        currentModelPath = pathKey
+        _state.value = AvatarState.Loading(pathKey)
 
         try {
-            r.loadModel(assetPath)
+            load(r)
             val animCount = r.getAnimationCount()
             val expressionNames = r.getAvailableExpressions()
             _state.value = AvatarState.Ready(

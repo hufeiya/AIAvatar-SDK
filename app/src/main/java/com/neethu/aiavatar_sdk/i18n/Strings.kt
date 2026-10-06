@@ -195,6 +195,12 @@ class Strings(val lang: Lang) {
         zh("无法解析所选文件为角色卡（支持 SillyTavern PNG / JSON）",
             "Cannot parse the selected file as a character card (SillyTavern PNG / JSON supported)")
 
+    // ── 模型导入（filesDir/vrms，与内置模型同列表同加载路径）───────────────
+    val importModel: String get() = zh("导入 VRM 模型…", "Import VRM model…")
+    fun modelImported(name: String): String = zh("模型已导入：$name", "Model imported: $name")
+    val modelImportFailed: String get() =
+        zh("无法导入所选文件为模型（支持 VRM/GLB）", "Cannot import the selected file as a model (VRM/GLB supported)")
+
     // ── 上下文 ────────────────────────────────────────────────────────────
     val freeChat: String get() = zh("自由对话", "Free chat")
     val contextCurrent: String get() = zh("当前", "current")

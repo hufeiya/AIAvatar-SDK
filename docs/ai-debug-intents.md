@@ -28,7 +28,8 @@
 | `help` | — | 打印命令表到 logcat |
 | `state` | — | 输出当前状态：模型 / 场景 / 动作 / 表情 / 相机位姿 / 视线（lookAt） / FPS / 可用表情列表 |
 | `list` | `ai_arg`= models \| scenes \| animations \| expressions \| cards | 列出可用资源（调用其他命令前先查有效取值） |
-| `load_model` | `ai_arg`=文件名 | 切换人物（assets/vrms 下的 .glb/.vrm），自动重置表情 |
+| `load_model` | `ai_arg`=文件名 | 切换人物（内置 assets/vrms 或已导入 filesDir/vrms 下的 .glb/.vrm，`list models` 合并列出），自动重置表情；**保持当前上下文**（方便不破坏会话地 A/B 模型；面板切换才会轮换上下文） |
+| `import_model` | `ai_arg`=文件路径 | 导入一个 .vrm/.glb 到应用 data 文件夹（filesDir/vrms）并**自动选中 + 新建上下文**（与面板导入同语义）。arg 为绝对路径或相对应用外部目录（先 `adb push` 到 `/sdcard/Android/data/<pkg>/files/`，无需权限）的相对路径；重名自动加 `_1` 序号后缀（绝不遮蔽内置模型）；非 GLB 文件直接报错 |
 | `load_scene` | `ai_arg`=文件名 \| none | 切换场景（assets/scene 下的 .glb）；`none` 移除场景 |
 | `set_expression` | `ai_arg`=表情名，可选 `ai_weight` | 设置表情；应用前会清空旧表情 |
 | `clear_expression` | — | 清空全部表情，恢复中性表情 |

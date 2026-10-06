@@ -799,169 +799,191 @@ internal class SoulLinkRenderer(
     fun loadModel(assetsPath: String) {
         val assets = surfaceView.context.assets
         assets.open(assetsPath).use { input ->
-            val bytes = input.readBytes()
-            val buffer = ByteBuffer.wrap(bytes)
+            loadModelBytes(input.readBytes())
+        }
+    }
 
-            // Pre-process: inject default morph weights so gltfio uploads morph target
-            // normals (gltfio skips that upload when mesh.weights_count == 0, which
-            // corrupts shading as soon as an expression drives a weight non-zero).
-            buffer.rewind()
-            val morphPatched = GlbMorphPatcher.injectMorphDefaultWeights(buffer)
+    /**
+     * Load a VRM/GLB model from a file on local storage — the entry point for
+     * models imported at runtime into the app data dir (filesDir/vrms). Same
+     * pipeline as [loadModel]; imported models behave exactly like built-ins.
+     * @throws Exception if the model cannot be loaded.
+     */
+    fun loadModelFromFile(path: String) {
+        val file = java.io.File(path)
+        if (!file.isFile) throw java.io.FileNotFoundException("model file not found: $path")
+        file.inputStream().use { input ->
+            loadModelBytes(input.readBytes())
+        }
+    }
 
-            // Pre-process: cull unused bones to stay within Filament's 256 bone limit
-            val loadBuffer = GlbBoneCuller.cullUnusedBones(morphPatched)
-                ?: morphPatched.also { it.rewind() }
+    /**
+     * Everything after the GLB bytes are in hand: morph patcher, bone culling,
+     * engine teardown/rebuild, VRM 0.x root flip, expression/springbone/gaze/
+     * breath/mimic binding. Shared by [loadModel] and [loadModelFromFile].
+     */
+    private fun loadModelBytes(bytes: ByteArray) {
+        val buffer = ByteBuffer.wrap(bytes)
 
-            // Clear old physics and animation state before loading the new model.
-            // This prevents the Choreographer from trying to access destroyed entities
-            // if the ensuing initialization crashes or throws an exception.
-            stopAnimation()
-            stopVrmaAnimation()
-            vrmaEngine = null
-            idleSource = null
-            expressionManager = null
-            lookAtEngine = null
-            breathEngine = null
-            mimicEngine = null
-            springBoneManager = null
-            animator = null
+        // Pre-process: inject default morph weights so gltfio uploads morph target
+        // normals (gltfio skips that upload when mesh.weights_count == 0, which
+        // corrupts shading as soon as an expression drives a weight non-zero).
+        buffer.rewind()
+        val morphPatched = GlbMorphPatcher.injectMorphDefaultWeights(buffer)
 
-            // Load model into Filament
-            modelViewer.loadModelGlb(loadBuffer)
-            modelViewer.transformToUnitCube()
+        // Pre-process: cull unused bones to stay within Filament's 256 bone limit
+        val loadBuffer = GlbBoneCuller.cullUnusedBones(morphPatched)
+            ?: morphPatched.also { it.rewind() }
 
-            // Get animation controller
-            animator = modelViewer.animator
+        // Clear old physics and animation state before loading the new model.
+        // This prevents the Choreographer from trying to access destroyed entities
+        // if the ensuing initialization crashes or throws an exception.
+        stopAnimation()
+        stopVrmaAnimation()
+        vrmaEngine = null
+        idleSource = null
+        expressionManager = null
+        lookAtEngine = null
+        breathEngine = null
+        mimicEngine = null
+        springBoneManager = null
+        animator = null
 
-            // Default: play first animation if available
-            if ((animator?.animationCount ?: 0) > 0) {
-                playAnimation(0, loop = true)
+        // Load model into Filament
+        modelViewer.loadModelGlb(loadBuffer)
+        modelViewer.transformToUnitCube()
+
+        // Get animation controller
+        animator = modelViewer.animator
+
+        // Default: play first animation if available
+        if ((animator?.animationCount ?: 0) > 0) {
+            playAnimation(0, loop = true)
+        }
+
+        // Initialize VRMA engine and bind to model
+        vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
+        modelViewer.asset?.let { asset ->
+            vrmaEngine?.bindToModel(asset, bytes)
+
+            // VRM 0.x models face the opposite direction from VRM 1.0.
+            // Apply a 180° Y rotation to the root so the character faces the camera.
+            if (vrmaEngine?.getVrmMetaVersion() == "0") {
+                val rootEntity = asset.root
+                val tm = modelViewer.engine.transformManager
+                val rootInstance = tm.getInstance(rootEntity)
+                if (rootInstance != 0) {
+                    val rootMat = FloatArray(16)
+                    tm.getTransform(rootInstance, rootMat)
+                    // 180° Y rotation matrix (cos180=-1, sin180=0):
+                    //   [-1  0  0]     flips X and Z
+                    //   [ 0  1  0]
+                    //   [ 0  0 -1]
+                    val rot180 = floatArrayOf(
+                        -1f, 0f, 0f, 0f,
+                         0f, 1f, 0f, 0f,
+                         0f, 0f,-1f, 0f,
+                         0f, 0f, 0f, 1f
+                    )
+                    // Multiply: newTransform = rootMat * rot180
+                    val result = FloatArray(16)
+                    for (row in 0..3) {
+                        for (col in 0..3) {
+                            var sum = 0f
+                            for (k in 0..3) sum += rootMat[row + k * 4] * rot180[k + col * 4]
+                            result[row + col * 4] = sum
+                        }
+                    }
+                    tm.setTransform(rootInstance, result)
+                    android.util.Log.i("SoulLinkRenderer", "Applied 180° Y rotation for VRM 0.x model")
+                }
             }
 
-            // Initialize VRMA engine and bind to model
-            vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
-            modelViewer.asset?.let { asset ->
-                vrmaEngine?.bindToModel(asset, bytes)
+            // Initialize expression (morph target / blend shape) manager
+            expressionManager = VrmExpressionManager(modelViewer.engine).also { exprMgr ->
+                exprMgr.parseFromGlb(bytes)
+                exprMgr.bindToAsset(asset, bytes)
+            }
 
-                // VRM 0.x models face the opposite direction from VRM 1.0.
-                // Apply a 180° Y rotation to the root so the character faces the camera.
-                if (vrmaEngine?.getVrmMetaVersion() == "0") {
-                    val rootEntity = asset.root
-                    val tm = modelViewer.engine.transformManager
-                    val rootInstance = tm.getInstance(rootEntity)
-                    if (rootInstance != 0) {
-                        val rootMat = FloatArray(16)
-                        tm.getTransform(rootInstance, rootMat)
-                        // 180° Y rotation matrix (cos180=-1, sin180=0):
-                        //   [-1  0  0]     flips X and Z
-                        //   [ 0  1  0]
-                        //   [ 0  0 -1]
-                        val rot180 = floatArrayOf(
-                            -1f, 0f, 0f, 0f,
-                             0f, 1f, 0f, 0f,
-                             0f, 0f,-1f, 0f,
-                             0f, 0f, 0f, 1f
-                        )
-                        // Multiply: newTransform = rootMat * rot180
-                        val result = FloatArray(16)
-                        for (row in 0..3) {
-                            for (col in 0..3) {
-                                var sum = 0f
-                                for (k in 0..3) sum += rootMat[row + k * 4] * rot180[k + col * 4]
-                                result[row + col * 4] = sum
-                            }
-                        }
-                        tm.setTransform(rootInstance, result)
-                        android.util.Log.i("SoulLinkRenderer", "Applied 180° Y rotation for VRM 0.x model")
-                    }
+            // Initialize spring bone physics manager
+            if (config.enableSpringBone) {
+                springBoneManager = VrmSpringBoneManager(modelViewer.engine).also { mgr ->
+                    mgr.parseFromGlb(bytes)
+                    mgr.bindToAsset(asset, bytes)
                 }
+            }
 
-                // Initialize expression (morph target / blend shape) manager
-                expressionManager = VrmExpressionManager(modelViewer.engine).also { exprMgr ->
-                    exprMgr.parseFromGlb(bytes)
-                    exprMgr.bindToAsset(asset, bytes)
-                }
+            // Resolve the humanoid hips bone for hips-drag (mouse.html semantics)
+            isVrm0 = parseVrmMetaVersion(bytes) == "0"
+            hipsEntity = resolveHipsEntity(asset, bytes)
+            // 换模型丢弃上一个角色的拖拽位移，基线重新捕获
+            hipsDragOffset.fill(0f)
+            hipsDragState = HipsDragOffsetSolver.initial()
 
-                // Initialize spring bone physics manager
-                if (config.enableSpringBone) {
-                    springBoneManager = VrmSpringBoneManager(modelViewer.engine).also { mgr ->
-                        mgr.parseFromGlb(bytes)
-                        mgr.bindToAsset(asset, bytes)
-                    }
-                }
+            // Resolve the bones the camera-shot driver frames against
+            // (chest falls back spine → upperChest is tried first).
+            headEntity = resolveHumanoidEntity(asset, bytes, "head")
+            chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
+            spineEntity = resolveHumanoidEntity(asset, bytes, "spine")
+            neckEntity = resolveHumanoidEntity(asset, bytes, "neck")
 
-                // Resolve the humanoid hips bone for hips-drag (mouse.html semantics)
-                isVrm0 = parseVrmMetaVersion(bytes) == "0"
-                hipsEntity = resolveHipsEntity(asset, bytes)
-                // 换模型丢弃上一个角色的拖拽位移，基线重新捕获
-                hipsDragOffset.fill(0f)
-                hipsDragState = HipsDragOffsetSolver.initial()
+            // Gaze overlay engine — bound after the VRM 0.x root flip so the
+            // captured rest orientation already faces the camera (+Z).
+            lookAtEngine = VrmLookAtEngine(modelViewer.engine).also { gaze ->
+                gaze.bind(
+                    headEntity,
+                    resolveHumanoidEntity(asset, bytes, "neck"),
+                    resolveHumanoidEntity(asset, bytes, "leftEye"),
+                    resolveHumanoidEntity(asset, bytes, "rightEye"),
+                )
+            }
 
-                // Resolve the bones the camera-shot driver frames against
-                // (chest falls back spine → upperChest is tried first).
-                headEntity = resolveHumanoidEntity(asset, bytes, "head")
-                chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
-                spineEntity = resolveHumanoidEntity(asset, bytes, "spine")
-                neckEntity = resolveHumanoidEntity(asset, bytes, "neck")
+            // Breath overlay engine — spine/shoulder chain on the same
+            // strip-then-overlay paradigm, bound after the VRM 0.x root
+            // flip like the gaze engine (world-axis offsets assume the
+            // model faces +Z).
+            breathEngine = VrmBreathEngine(modelViewer.engine).also { breath ->
+                breath.bind(
+                    resolveHumanoidEntity(asset, bytes, "spine"),
+                    resolveHumanoidEntity(asset, bytes, "chest"),
+                    resolveHumanoidEntity(asset, bytes, "upperChest"),
+                    resolveHumanoidEntity(asset, bytes, "leftShoulder"),
+                    resolveHumanoidEntity(asset, bytes, "rightShoulder"),
+                )
+                breath.setEnabled(breathEnabled)
+                breath.setSpeaking(breathSpeaking)
+                breath.setAmplitudeScale(breathAmplitudeScale)
+                if (breathRateBpm > 0) breath.setRateHz(breathRateBpm / 60f)
+            }
 
-                // Gaze overlay engine — bound after the VRM 0.x root flip so the
-                // captured rest orientation already faces the camera (+Z).
-                lookAtEngine = VrmLookAtEngine(modelViewer.engine).also { gaze ->
-                    gaze.bind(
-                        headEntity,
-                        resolveHumanoidEntity(asset, bytes, "neck"),
-                        resolveHumanoidEntity(asset, bytes, "leftEye"),
-                        resolveHumanoidEntity(asset, bytes, "rightEye"),
-                    )
-                }
+            // Mimic overlay engine（「模仿我」）——P1 头/颈+双臂 + P2 躯干三段
+            // 与双锁骨的绝对方向驱动，与视线引擎一样在 VRM 0.x root 翻转之后
+            // 绑定（faceLocalDir 假设模型面向 +Z）。缺骨优雅降级：缺头=头部
+            // 不驱，缺手骨=小臂不驱，缺脊柱段=该段不参与分摊。
+            mimicEngine = VrmPoseMimicEngine(modelViewer.engine).also { mimic ->
+                mimic.bind(
+                    neckEntity,
+                    headEntity,
+                    resolveHumanoidEntity(asset, bytes, "leftUpperArm"),
+                    resolveHumanoidEntity(asset, bytes, "leftLowerArm"),
+                    resolveHumanoidEntity(asset, bytes, "leftHand"),
+                    resolveHumanoidEntity(asset, bytes, "rightUpperArm"),
+                    resolveHumanoidEntity(asset, bytes, "rightLowerArm"),
+                    resolveHumanoidEntity(asset, bytes, "rightHand"),
+                    resolveHumanoidEntity(asset, bytes, "spine"),
+                    resolveHumanoidEntity(asset, bytes, "chest"),
+                    resolveHumanoidEntity(asset, bytes, "upperChest"),
+                    resolveHumanoidEntity(asset, bytes, "leftShoulder"),
+                    resolveHumanoidEntity(asset, bytes, "rightShoulder"),
+                )
+            }
 
-                // Breath overlay engine — spine/shoulder chain on the same
-                // strip-then-overlay paradigm, bound after the VRM 0.x root
-                // flip like the gaze engine (world-axis offsets assume the
-                // model faces +Z).
-                breathEngine = VrmBreathEngine(modelViewer.engine).also { breath ->
-                    breath.bind(
-                        resolveHumanoidEntity(asset, bytes, "spine"),
-                        resolveHumanoidEntity(asset, bytes, "chest"),
-                        resolveHumanoidEntity(asset, bytes, "upperChest"),
-                        resolveHumanoidEntity(asset, bytes, "leftShoulder"),
-                        resolveHumanoidEntity(asset, bytes, "rightShoulder"),
-                    )
-                    breath.setEnabled(breathEnabled)
-                    breath.setSpeaking(breathSpeaking)
-                    breath.setAmplitudeScale(breathAmplitudeScale)
-                    if (breathRateBpm > 0) breath.setRateHz(breathRateBpm / 60f)
-                }
-
-                // Mimic overlay engine（「模仿我」）——P1 头/颈+双臂 + P2 躯干三段
-                // 与双锁骨的绝对方向驱动，与视线引擎一样在 VRM 0.x root 翻转之后
-                // 绑定（faceLocalDir 假设模型面向 +Z）。缺骨优雅降级：缺头=头部
-                // 不驱，缺手骨=小臂不驱，缺脊柱段=该段不参与分摊。
-                mimicEngine = VrmPoseMimicEngine(modelViewer.engine).also { mimic ->
-                    mimic.bind(
-                        neckEntity,
-                        headEntity,
-                        resolveHumanoidEntity(asset, bytes, "leftUpperArm"),
-                        resolveHumanoidEntity(asset, bytes, "leftLowerArm"),
-                        resolveHumanoidEntity(asset, bytes, "leftHand"),
-                        resolveHumanoidEntity(asset, bytes, "rightUpperArm"),
-                        resolveHumanoidEntity(asset, bytes, "rightLowerArm"),
-                        resolveHumanoidEntity(asset, bytes, "rightHand"),
-                        resolveHumanoidEntity(asset, bytes, "spine"),
-                        resolveHumanoidEntity(asset, bytes, "chest"),
-                        resolveHumanoidEntity(asset, bytes, "upperChest"),
-                        resolveHumanoidEntity(asset, bytes, "leftShoulder"),
-                        resolveHumanoidEntity(asset, bytes, "rightShoulder"),
-                    )
-                }
-
-                // A pending shot re-frames the freshly loaded character to the
-                // same framing (shot survives model switches until cancelled).
-                activeShot?.let { shot ->
-                    shotSteering = true
-                    shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
-                    android.util.Log.i("SoulLinkRenderer", "Re-framing camera shot: $shot")
-                }
+            // A pending shot re-frames the freshly loaded character to the
+            // same framing (shot survives model switches until cancelled).
+            activeShot?.let { shot ->
+                shotSteering = true
+                shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
+                android.util.Log.i("SoulLinkRenderer", "Re-framing camera shot: $shot")
             }
         }
 

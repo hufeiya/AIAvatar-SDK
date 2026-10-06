@@ -126,6 +126,7 @@ internal suspend fun executeAiCommand(
             }
             "list" -> listAssets(controller, uiState, command.arg)
             "load_model" -> loadModelCommand(controller, uiState, command.arg)
+            "import_model" -> importModelCommand(context, uiState, command.arg)
             "load_scene" -> loadSceneCommand(controller, uiState, command.arg)
             "set_expression" -> setExpressionCommand(controller, uiState, command, chat)
             "clear_expression" -> {
@@ -453,10 +454,31 @@ private fun loadModelCommand(
 ): String {
     val name = resolveAssetFile(arg, uiState.modelFiles, "models", listOf(".glb", ".vrm"))
     if (name == uiState.selectedModel) return "model '$name' is already active"
-    uiState.selectedModel = name
-    // Matches the UI panel: the animation selection belongs to the old model
-    uiState.selectedAnimation = null
-    return "loading vrms/$name (expressions/animations reset)"
+    uiState.selectModel(name)
+    val src = if (name in uiState.importedModelFiles) "imported (filesDir/vrms)" else "assets/vrms"
+    // 与 UI 面板刻意不同：调试命令不轮换上下文（模型重载后 FaceDriver 刷新
+    // 表情集合接管），方便不破坏当前会话地 A/B 模型；面板切换才新建上下文
+    return "loading $name from $src (expressions/animations reset; context kept)"
+}
+
+/** import_model：把外存文件导入 filesDir/vrms 并自动选中（与 UI 导入同语义）。 */
+private fun importModelCommand(
+    context: Context,
+    uiState: DemoUiState,
+    arg: String?,
+): String {
+    val arg2 = arg
+        ?: throw IllegalArgumentException(
+            "import_model expects ai_arg = a .vrm/.glb file path (absolute, or relative " +
+                "to the app's external files dir; adb push it there first)"
+        )
+    val file = resolveAppFile(context, arg2)
+    val name = uiState.importModelBytes(file.readBytes(), file.name)
+        ?: throw IllegalArgumentException("not a VRM/GLB file: ${file.absolutePath}")
+    // 与 UI 导入同语义：自动选中 + 新建上下文（表情目录随模型轮换）
+    uiState.selectModel(name)
+    uiState.newContext()
+    return "imported '$name' to filesDir/vrms — selected, new context started"
 }
 
 private fun loadSceneCommand(
