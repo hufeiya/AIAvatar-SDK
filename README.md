@@ -19,8 +19,8 @@
 
 | 弹簧骨骼 | 拟人微动作 | 52 表情 |
 |:---:|:---:|:---:|
-| [▶ 动图](docs/images/springbone.gif)<br>**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | [▶ 动图](docs/images/lifelike-motion.gif)<br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | [▶ 动图](docs/images/expressions-52.gif)<br>**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
-| [▶ 动图](docs/images/character-card.gif)<br>**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | [▶ 动图](docs/images/skills.gif)<br>**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | [▶ 动图](docs/images/camera-work.gif)<br>**程序化运镜**<br>LLM 行内 `<cam:closeup>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
+| <img width="480" height="1066" alt="Image" src="https://github.com/user-attachments/assets/2f9d5407-5399-414a-b6fb-6d3c98759b16" />**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | <img width="480" height="1066" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | <img width="480" height="1066" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" />**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
+| <img width="400" height="888" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" />**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | <img width="480" height="1066" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | <img width="480" height="1066" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" />**程序化运镜**<br>LLM 行内 `<cam:closeup>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
 
 **更多特性**
 
