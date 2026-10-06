@@ -110,6 +110,7 @@ import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.face.GazeMode
+import com.neethu.orchestrator.face.MimicFaceMapper
 import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
@@ -210,6 +211,13 @@ private const val KEY_VIDEO_PIP_Y = "ai_video_pip_y"
 private const val KEY_AI_PRESET_CARDS = "ai_preset_cards"
 /** 人物卡提示词人工编辑覆盖（fileName→文本，[CardPromptOverrides]）。 */
 private const val KEY_AI_CARD_PROMPT_OVERRIDES = "ai_card_prompt_overrides"
+
+/**
+ * 表情模仿帧的新鲜窗（「模仿我」P2）：表情隔帧 ~160ms 采样，容忍 2-3 个丢帧；
+ * 超龄帧不再喂 FaceDriver（通道让位回情绪/眨眼）——否则人脸离开画面/技能退场
+ * 后最后一帧表情会永久钉在脸上。与 UserCameraTracker 的头部矩阵保鲜窗同量级。
+ */
+private const val MIMIC_FACE_FRESH_MS = 500L
 
 /** 新上下文的随机 id（UUID；ai_cmd select_context 支持前缀匹配）。 */
 private fun newContextId(): String = java.util.UUID.randomUUID().toString()
@@ -1142,11 +1150,23 @@ private fun DemoScreen(
                 lastBodyVisSent = vis
                 session?.skills?.onBodyTracking(vis)
             }
-            // 表情模仿（P2）：blendshapes → 模型 morph 名映射在 FaceDriver 内做
-            // （它持有模型支持名集合）；断供传 null=表情通道让位回情绪/眨眼
-            session?.faceDriver?.setMimicFace(
-                if (mimicFaceEnabled) videoTracker.latestMimicFace?.shapes else null,
-            )
+            // 表情模仿（P2）：52 ARKit blendshapes → MimicFaceMapper 映射成模型
+            // morph 名（FaceDriver 的契约：setMimicFace 只收模型已有的名字，原始
+            // ARKit 名在 VRM 预设命名的模型上一个都对不上），再喂表情通道。
+            // 门控三连——用户开关（mimic_face A/B）/技能激活（车道关闭即让位）/
+            // 帧龄（人脸离开画面或车道断供超窗）：任一不满足传 null，FaceDriver
+            // 把上次驱着的 morph 一次性归零并让情绪/眨眼接回，表情不会钉死在
+            // 最后一帧上。映射结果为空（模型无任何对应 morph）同样传 null，别让
+            // 空 map 空占通道压死情绪。
+            session?.faceDriver?.let { fd ->
+                val mapped = videoTracker.latestMimicFace
+                    ?.takeIf {
+                        mimicFaceEnabled && mimicSkill.isActive &&
+                            SystemClock.elapsedRealtime() - it.atMs <= MIMIC_FACE_FRESH_MS
+                    }
+                    ?.let { MimicFaceMapper.map(it.shapes, fd.availableExpressions) }
+                fd.setMimicFace(mapped?.takeIf { it.isNotEmpty() })
+            }
         }
     }
 
@@ -1331,6 +1351,9 @@ private fun DemoScreen(
     // 「模仿我」身体车道（docs/mimic-skill-feasibility.md §8）：第三条 MediaPipe
     // 车道，与手势/头姿态互斥（同一分析线程），仅技能激活+前摄时跑
     videoTracker.bodyMimicEnabled = { mimicSkill.isActive && !lookHereSkill.isActive && !rpsSkill.isActive }
+    // 表情车道开关（P2）：仅用户 A/B 开关（mimic_face）；技能互斥与"仅技能激活
+    // 才咨询"由 wantBody 短路收口，这里不该再叠条件（否则双层门控查状态时会互相糊）
+    videoTracker.faceMimicEnabled = { mimicFaceEnabled }
     videoTracker.onGestureConfirmed = { code ->
         scope.launch { session?.skills?.onUserGesture(code) }
     }
