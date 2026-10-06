@@ -12,19 +12,18 @@ data class PLandmark(val x: Float, val y: Float, val z: Float, val visibility: F
  * MediaPipe 世界关键点 → **虚拟人世界系**的骨段方向集（[MimicPose]），
  * 镜像语义在此烘进数据。JVM 单测主场——合成关键点已知答案锁死全部符号。
  *
- * ## 坐标系推导（真机实证定稿，2026-10-06 用户两轮反馈修订；标定协议见可行性文档 §5.2）
+ * ## 坐标系推导（真机三轮 A/B 定稿，2026-10-06；标定协议见可行性文档 §5.2）
  *
- * - MediaPipe **Pose 世界系**（真机实证）：x+ = 画面右 = 用户左、y+ = 画面下、
- *   **z+ = 朝向相机**。⚠ z 轴与 normalized landmarks 文档的"z 越小越近"相反——
- *   首版按"z+ 远离相机"实现，冠状面动作（抬臂）全对而深度动作全反（用户报告
- *   「手放胸前虚拟人的手还在很远处」= 用户肘向前、虚拟人肘向后），真机归因后
- *   z 语义翻转。x/y 两轴由 P1 真机验收（镜像换侧正确）锁死。
- * - **FaceLandmarker 矩阵系**（真机实证，与 Pose 系**不同构**）：x+ = 画面左、
- *   y+ = 上、z+ = 远离相机（右手系）——x、y 与 Pose 系恰好相反。判定依据：
- *   lookhere 真机标定锚点（yaw正=用户转左、pitch正=低头）唯二筛选出
- *   (x左,y上,z远) 与 (x右,y下,z远) 两解，后者无法产生用户报告的「我向左转头
- *   虚拟人向右转」而被排除（详见 [headForwardFromMatrix] / [matrixFrame] doc）。
- *   两套转换必须分开，共用一个 mirrorFrame 会把矩阵的 x/y 双双弄反。
+ * - MediaPipe **Pose 世界系**：x+ = 画面右 = 用户左、y+ = 画面下、z+ = 远离
+ *   相机（与 normalized landmarks 官网语义一致）。x/y 由 P1 真机验收锁死；
+ *   z 曾被第二轮误翻（"z+ 朝相机"），真机「胳膊都跑到身体后面去了」反证
+ *   原符号正确，第三轮回退。**深度局限**：z 分量精度/比例弱于 x/y（单目
+ *   深度主轴），重度深度动作（手放胸前）前倾分量偏浅——符号已锁死，幅度
+ *   属数据质量（§5.2 探针协议）。
+ * - **FaceLandmarker 矩阵系**（与 Pose 系**不同构**）：转换由三轮真机报告
+ *   三角定位为 `mirror=(+x,−y,−z)`（换算回矩阵系轴向 ≈ x+ = 画面左、y+ = 下、
+ *   z+ = 远离相机）。⚠ 该组合对右手系代数约束不自洽——规范脸模型的 X 轴是
+ *   镜像存储的，**以真机为准，别按右手系直觉重推**（详见 [matrixFrame] doc）。
  * - 虚拟人（avatar）世界系：X+ = 屏幕右（观察者视角）、Y+ = 上、Z+ = 朝观察者。
  * - 前摄分析帧不镜像（`UserCameraTracker.rotatedUpright` 只旋转）：画面右 =
  *   用户自己的左侧（面对面效应）。
@@ -34,8 +33,8 @@ data class PLandmark(val x: Float, val y: Float, val z: Float, val visibility: F
  * 镜面反射；区别只在左右轴：
  *
  * ```
- * mirror（默认）: Pose 系 (−x,−y,+z) / 矩阵系 (+x,+y,−z)，用户左 ←→ 虚拟人右（换侧）
- * puppet（人偶） : Pose 系 (+x,−y,+z) / 矩阵系 (−x,+y,−z)，同侧跟随
+ * mirror（默认）: Pose 系 (−x,−y,−z) / 矩阵系 (+x,−y,−z)，用户左 ←→ 虚拟人右（换侧）
+ * puppet（人偶） : Pose 系 (+x,−y,−z) / 矩阵系 (−x,−y,−z)，同侧跟随
  * ```
  *
  * 已知答案自检（合成 T-pose）：用户左臂水平指向他自己的左 = (+1,0,0)_mp →
@@ -127,21 +126,19 @@ object PoseMimicMath {
      * **FaceLandmarker 矩阵系** → avatar 世界系的单位方向（与 [mirrorFrame]
      * 的 Pose 世界系转换分开——两个数据源的坐标系不同构，共用会把头转反）。
      *
-     * 矩阵系约定（真机实证）：x+ = 画面左、y+ = 上、z+ = 远离相机。判定依据 =
-     * lookhere 真机标定锚点（yaw正=用户转左、pitch正=低头）唯二允许
-     * (x左,y上,z远) 与 (x右,y下,z远) 两解；后者（S1）下 mimic 头不可能反
-     * （rest 朝向与转向语义绑定），与用户实测「我向左转头虚拟人向右转」矛盾
-     * 被排除。纯帧转换 = `(+x, +y, +z)`（x左=用户右=+X_A、y上=Y上、z远=朝
-     * 用户=+Z_A），叠加语义 z 反射后：
-     *
-     * ```
-     * mirror = (+x, +y, −z)   puppet（人偶） = (−x, +y, −z)
-     * ```
-     *
-     * （x 取反的角色与 [mirrorFrame] 相反：两空间 x 轴指向相反。）
+     * 转换 = `mirror: (+x, −y, −z)` / `puppet: (−x, −y, −z)`——由**三轮真机
+     * 报告三角定位**（2026-10-06）：
+     *  - (−x,−y,−z)〔初版误用 Pose 系〕→ 左右转反（用户报告①）⟹ x 必须取 +；
+     *  - (+x,+y,−z)〔二版〕→ 左右对了但俯仰反（用户报告②）⟹ y 必须取 −；
+     *  - rest 朝向在两版下都正确 ⟹ z 取 −。
+     * 换算回矩阵系轴向：x+ = 画面左（用户左转时 forward 的 x 分量为负）、
+     * y+ = 下（低头时 forward 的 y 分量为正）、z+ = 远离相机（rest forward
+     * = −z）。纯帧转换 (+x,−y,+z) + 面对面语义 z 反射 = (+x,−y,−z)。
+     * ⚠ 注意 (x左,y下,z远) 对右手系代数约束不自洽（列叉积反号）——说明规范脸
+     * 模型的 X 轴本身是镜像存储的，**以真机三角定位为准，别按右手系直觉重推**。
      */
     private fun matrixFrame(x: Float, y: Float, z: Float, mirror: Boolean): FloatArray {
-        val v = if (mirror) floatArrayOf(x, y, -z) else floatArrayOf(-x, y, -z)
+        val v = if (mirror) floatArrayOf(x, -y, -z) else floatArrayOf(-x, -y, -z)
         val len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
         if (len < 1e-6f) return v
         v[0] /= len; v[1] /= len; v[2] /= len
@@ -220,22 +217,25 @@ object PoseMimicMath {
     /**
      * **Pose 世界系** → avatar 世界系的单位方向。
      *
-     * 纯帧转换（x右/y下/z朝相机 → X右/Y上/Z朝用户）= `(−x, −y, −z)`；叠加
-     * 面对面模仿的语义 z 反射（用户前伸↔虚拟人前伸）后合并为：
-     *
      * ```
-     * mirror = (−x, −y, +z)   puppet（人偶） = (+x, −y, +z)
+     * mirror = (−x, −y, −z)   puppet（人偶） = (+x, −y, −z)
      * ```
      *
-     * ⚠ z 语义真机实证（2026-10-06）：MP Pose 世界关键点 **z+ = 朝向相机**，
-     * 与 normalized landmarks 文档"z 越小越近"相反。首版按"z+ 远离相机"实现，
-     * 抬臂等冠状面动作全对、手放胸前等深度动作全反（用户肘向前、虚拟人肘
-     * 向后，用户报告「虚拟人的手还在很远处」）——z 号是那次归因的修正；x/y
-     * 由 P1 真机验收（镜像换侧正确）锁死。人偶分支的 y 原为 +y（未随 mirror
-     * 同步），一并修正为与镜像相同的 −y（y 下→Y 上与玩法无关）。
+     * 帧约定（真机 A/B 定稿，2026-10-06 第三轮反馈）：x+ = 画面右 = 用户左、
+     * y+ = 画面下、**z+ = 远离相机**（z 与 normalized landmarks 官网语义一致；
+     * 曾按"z+ 朝相机"翻转过一轮，真机结果「胳膊都跑到身体后面去了」反证
+     * 原符号正确，已回退）。z 取反 = 面对面模仿的语义反射（用户前伸=虚拟人
+     * 前伸）叠加纯帧转换后的合并结果。
+     *
+     * **已知深度局限**：MP Pose 世界关键点的 z 分量精度/比例弱于 x/y
+     * （单目深度主轴）——冠状面动作（抬臂）精确，深度重度动作（手放胸前=
+     * 肘向前折）解算出的前倾分量偏浅，虚拟人的手到不了胸口。符号已锁死；
+     * 幅度问题属数据质量，标定协议见 docs/mimic-skill-feasibility.md §5.2
+     * （`mimic_pose` 探针看胸前提腕时 z_A 分量是否显著小于几何预期，确认后
+     * 再考虑深度增益，不盲调）。
      */
     private fun mirrorFrame(x: Float, y: Float, z: Float, mirror: Boolean): FloatArray {
-        val v = if (mirror) floatArrayOf(-x, -y, z) else floatArrayOf(x, -y, z)
+        val v = if (mirror) floatArrayOf(-x, -y, -z) else floatArrayOf(x, -y, -z)
         val len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
         if (len < 1e-6f) return v
         v[0] /= len; v[1] /= len; v[2] /= len
@@ -256,11 +256,10 @@ object PoseMimicMath {
         fun put(i: Int, x: Float, y: Float, z: Float, vis: Float = 0.9f) {
             pts[i] = PLandmark(x, y, z, vis)
         }
-        // 头：y 越小越高（MP y 向下）；z 越大越近相机（鼻尖略近；Pose 系
-        // z+ = 朝向相机，真机实证见 mirrorFrame doc）
-        put(NOSE, 0f, -0.62f, 0.08f)
-        put(LEFT_EYE, 0.03f, -0.65f, 0.08f)
-        put(RIGHT_EYE, -0.03f, -0.65f, 0.08f)
+        // 头：y 越小越高（MP y 向下）；z 越小越近相机（鼻尖略近）
+        put(NOSE, 0f, -0.62f, -0.08f)
+        put(LEFT_EYE, 0.03f, -0.65f, -0.08f)
+        put(RIGHT_EYE, -0.03f, -0.65f, -0.08f)
         put(LEFT_EAR, 0.08f, -0.62f, 0f)
         put(RIGHT_EAR, -0.08f, -0.62f, 0f)
         put(LEFT_SHOULDER, 0.2f, -0.35f, 0f)
@@ -305,15 +304,15 @@ object PoseMimicMath {
                 arm(-1, 0.22f, -0.62f, 0f, 0.26f, -0.88f, 0f)
             }
             "forward" -> {
-                arm(+1, 0.2f, -0.35f, 0.25f, 0.2f, -0.35f, 0.45f)
-                arm(-1, 0.2f, -0.35f, 0.25f, 0.2f, -0.35f, 0.45f)
+                arm(+1, 0.2f, -0.35f, -0.25f, 0.2f, -0.35f, -0.45f)
+                arm(-1, 0.2f, -0.35f, -0.25f, 0.2f, -0.35f, -0.45f)
             }
             // P2 躯干预设（观察躯干/锁骨通道的方向语义）：用户向自己左侧倾 /
-            // 右侧倾 / 前倾（鞠躬）/ 向左转身（左肩前移；前移=朝相机=+z）
+            // 右侧倾 / 前倾（鞠躬）/ 向左转身（左肩前移；前移=朝相机=−z）
             "lean_left" -> torso(Triple(0.35f, -0.32f, 0f), Triple(-0.05f, -0.42f, 0f))
             "lean_right" -> torso(Triple(0.05f, -0.42f, 0f), Triple(-0.35f, -0.32f, 0f))
-            "bow" -> torso(Triple(0.2f, -0.28f, 0.22f), Triple(-0.2f, -0.28f, 0.22f))
-            "turn_left" -> torso(Triple(0.1f, -0.35f, 0.2f), Triple(-0.25f, -0.35f, -0.1f))
+            "bow" -> torso(Triple(0.2f, -0.28f, -0.22f), Triple(-0.2f, -0.28f, -0.22f))
+            "turn_left" -> torso(Triple(0.1f, -0.35f, -0.2f), Triple(-0.25f, -0.35f, 0.1f))
             else -> return null
         }
         return mimicPoseFromLandmarks(pts, timestampMs, mirror)
