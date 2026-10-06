@@ -31,11 +31,21 @@
 
 - Android Studio（AGP 8.13+ / Kotlin 2.0+），`minSdk 29`
 - `:corelib` 含 NDK 原生构建，装好 NDK 后 Gradle 自动编译
-- 当前以**源码模块**方式集成（Maven 发布见文末路线图）
 
 ### 1. 集成模块
 
-把 `corelib/`、`avatar-ai-adapter/`、`avatar-orchestrator/` 三个目录拷入（或 git submodule 引入）你的工程：
+**方式 A：Maven 依赖（推荐）**——三个库模块已发布到 Maven Central：
+
+```kotlin
+// 你的 app/build.gradle.kts
+dependencies {
+    implementation("io.github.hufeiya:corelib:0.1.0")                 // 渲染底座
+    implementation("io.github.hufeiya:avatar-orchestrator:0.1.0")     // 会话编排（含 AIAvatarSdk 门面）
+    // io.github.hufeiya:avatar-ai-adapter 会作为 orchestrator 的传递依赖自动引入
+}
+```
+
+**方式 B：源码集成**——把 `corelib/`、`avatar-ai-adapter/`、`avatar-orchestrator/` 三个目录拷入（或 git submodule 引入）你的工程：
 
 ```kotlin
 // settings.gradle.kts
@@ -198,8 +208,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity
 
 ## Roadmap（接口优化方向）
 
-1. **Maven 发布**：四模块补 `maven-publish`，支持 `implementation("…")` 一行依赖，摆脱源码集成。
-
+~~1. Maven 发布~~ ✅ 已完成（`io.github.hufeiya` 三库模块，见 §1；上传链路见 `tools/publish-central.py` 头注）
 ~~2. 高阶门面 `AIAvatarSdk`~~ ✅ 已完成（见快速开始 §4 方式 A）
 ~~3. 非 Compose View 入口 `AvatarSurfaceView`~~ ✅ 已完成（见快速开始 §2）
 ~~4. 内置默认 IBL~~ ✅ 已完成（`AvatarConfig()` 零资产开箱即亮）
