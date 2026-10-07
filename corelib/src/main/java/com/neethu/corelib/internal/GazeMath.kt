@@ -114,8 +114,17 @@ internal object GazeMath {
 
     /**
      * Unit direction reached from [forward] by rotating [yaw] about +Y and then
-     * rising by [pitch] — the exact inverse of [signedYawPitch] (up to float
-     * noise), so a (yaw, pitch) pair round-trips through both.
+     * **rising by [pitch] from [forward]'s own elevation** — the exact inverse
+     * of [signedYawPitch] for ANY forward, not just horizontal ones.
+     *
+     * **历史坑（SimpleDemo 头部疯转根因）**：旧实现把结果高度直接写成
+     * `sin(pitch)`，等价于把相对俯仰角当绝对仰角——signedYawPitch 返回的是
+     * `φt − φf`（相对），这里却建出仰角 `pitch`（丢了 forward 自身的 φf）。
+     * forward 一旦离开水平（模型抬头/低头、rest 姿态带俯仰），写盘的修正量
+     * 就多转 φf，视线闭环增益 >1 自激成 ±90° 周期振荡（走马灯式缓慢疯转）。
+     * 主 App 里 IDLE 动画每帧重写头/颈掩掉了它；无动画场景（SimpleDemo、
+     * idle_off）即触发。修法 = 结果仰角取 `φf + pitch`，任意 forward 下与
+     * signedYawPitch 精确互逆。
      */
     fun dirFromYawPitch(forward: FloatArray, yaw: Float, pitch: Float): FloatArray {
         val fh = horLen(forward)
@@ -124,8 +133,9 @@ internal object GazeMath {
         val c = cos(yaw); val s = sin(yaw)
         val dx = fx * c + fz * s
         val dz = -fx * s + fz * c
-        val cp = cos(pitch)
-        return normalize3(floatArrayOf(dx * cp, sin(pitch), dz * cp))
+        val elev = asinSafe(forward[1].coerceIn(-1f, 1f)) + pitch
+        val cp = cos(elev)
+        return normalize3(floatArrayOf(dx * cp, sin(elev), dz * cp))
     }
 
     /**

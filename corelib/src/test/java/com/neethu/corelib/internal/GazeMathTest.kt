@@ -52,6 +52,57 @@ class GazeMathTest {
     }
 
     @Test
+    fun `yawPitch and dirFromYawPitch round-trip for pitched forwards`() {
+        // 回归（SimpleDemo 头部疯转根因）：forward 不水平时旧实现把相对俯仰
+        // 角当绝对仰角用，写盘修正量多转 φf，视线闭环自激成 ±90° 振荡。
+        // 任意 forward 仰角下都必须与 signedYawPitch 精确互逆。
+        val deg = (PI.toFloat() / 180f)
+        for (elevDeg in intArrayOf(-60, -35, -15, 0, 15, 35, 60)) {
+            val f = GazeMath.normalize3(
+                floatArrayOf(0.1f, kotlin.math.sin(elevDeg * deg), kotlin.math.cos(elevDeg * deg))
+            )
+            for (t in listOf(
+                FWD_Z,
+                GazeMath.normalize3(floatArrayOf(0.5f, 0.1f, 0.85f)),
+                GazeMath.normalize3(floatArrayOf(-0.3f, 0.45f, 0.84f)),
+                GazeMath.normalize3(floatArrayOf(0.2f, -0.5f, 0.84f)),
+            )) {
+                val yp = GazeMath.signedYawPitch(f, t)
+                val back = GazeMath.dirFromYawPitch(f, yp[0], yp[1])
+                assertVec(t, back, 1e-3f)
+            }
+        }
+    }
+
+    @Test
+    fun `corrected step moves forward toward the target without overshoot`() {
+        // 闭环稳定性不变量： quatFromTo(forward, dir) 施加后，脸朝向与目标的
+        // 夹角必须单调变小——旧实现在 forward 抬头/低头时反向过冲（增益>1），
+        // 正是 SimpleDemo 头部疯转的直接成因
+        val target = GazeMath.normalize3(floatArrayOf(0.05f, 0.08f, 1f))
+        val deg = (PI.toFloat() / 180f)
+        for (elevDeg in intArrayOf(-60, -30, 30, 60)) {
+            var forward = GazeMath.normalize3(
+                floatArrayOf(0f, kotlin.math.sin(elevDeg * deg), kotlin.math.cos(elevDeg * deg))
+            )
+            val err0 = GazeMath.signedYawPitch(forward, target)
+            for (step in 1..8) {
+                val yp = GazeMath.signedYawPitch(forward, target)
+                val dir = GazeMath.dirFromYawPitch(
+                    forward,
+                    yp[0] * 0.65f, yp[1] * 0.65f, // head 增益份额
+                )
+                forward = GazeMath.normalize3(GazeMath.rotateVector(GazeMath.quatFromTo(forward, dir), forward))
+                val err = GazeMath.signedYawPitch(forward, target)
+                assertTrue(
+                    "elev=$elevDeg step=$step |err| grew: ${abs(err[1])} vs ${abs(err0[1])}",
+                    abs(err[1]) <= abs(err0[1]) + 1e-4f,
+                )
+            }
+        }
+    }
+
+    @Test
     fun `quatFromTo identity for equal vectors`() {
         val q = GazeMath.quatFromTo(FWD_Z, FWD_Z)
         assertVec(floatArrayOf(0f, 0f, 0f, 1f), q)
