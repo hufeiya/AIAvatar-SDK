@@ -14,6 +14,12 @@ import com.neethu.aiadapter.api.TagExtractor
  * <act:wave>
  * <cam:close_up>
  * ```
+ * Tag names accept any Unicode letters, not just ASCII: Chinese models
+ * occasionally invent CJK names off-vocabulary (真机踩过 `<emo:轻笑>`), and an
+ * ASCII-only name class let those segments fall through to speech. The
+ * extractor only owns the *shape* — unknown names are resolved downstream
+ * (中文别名表回 canonical / morph 直驱 / 静默丢弃), never leaked as text.
+ *
  * Incremental semantics inherited from its predecessor
  * [MarkerEmotionExtractor]: a tag split across deltas is buffered until
  * complete; an unterminated '<' tail holds text back instead of leaking
@@ -24,20 +30,23 @@ class InlineTagExtractor : TagExtractor {
 
     private val buffer = StringBuilder()
 
+    /** Tag name = Unicode letters/underscore lead + letters/digits/underscore (CJK included). */
+    private val tagName = """[\p{L}_][\p{L}\p{N}_]*"""
+
     private val emotionTag = Regex(
-        """<\s*emo\s*:\s*([A-Za-z_][A-Za-z0-9_]*)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*>""",
+        """<\s*emo\s*:\s*($tagName)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*>""",
         RegexOption.IGNORE_CASE,
     )
     private val actionTag = Regex(
-        """<\s*act\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*>""",
+        """<\s*act\s*:\s*($tagName)\s*>""",
         RegexOption.IGNORE_CASE,
     )
     private val cameraTag = Regex(
-        """<\s*cam\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*>""",
+        """<\s*cam\s*:\s*($tagName)\s*>""",
         RegexOption.IGNORE_CASE,
     )
     private val legacyEmotionTag = Regex(
-        """<\|emotion\s*:\s*([A-Za-z_][A-Za-z0-9_]*)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*\|>""",
+        """<\|emotion\s*:\s*($tagName)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*\|>""",
         RegexOption.IGNORE_CASE,
     )
 

@@ -364,6 +364,10 @@
   - **README 同步**：快速开始 §2 补 AvatarSurfaceView 段、§4 改双方式（A=门面/B=裸 AvatarSession）、资产表标注内置 IBL、API 速查补门面与渲染入口、Roadmap ②③④ 划✅（①Maven 发布保留）。
 
 - **中文名动画进 LLM 动作目录（2026-10-07，用户需求「把 08_舞蹈与表演 下的闪身步.vrma 和浪子踢球.vrma 加到 AI 调用的动作里」；单测 +5 全量 556 全绿 app169/corelib56/adapter74/orchestrator257 debug 变体；APK 组装含两文件）**：`buildLlmActionCatalog` 原本对全中文名转不出 tag（`sanitizeActionTag` 正则只留 a-z0-9，转出空串即跳过）——新增 `CHINESE_NAME_TAGS` 别名表放行：闪身步→`dodge_step`、浪子踢球→`ball_kick`。tag 必须语义化英文的原因：①协议约定「动作英文名即其含义」，LLM 靠 tag 语义挑动作；②`InlineTagExtractor` 的 `<act:>` 提取正则只认 ASCII，中文 tag 就算进目录也发不出来（⚠ 当日晚间已放宽为 Unicode，见下条，此约束只剩①）。面板显示名不受影响（仍中文原文件名），未登记中文名照旧跳过，别名 tag 与英文名 tag 同走 `seen` 去重；新增 `LlmActionCatalogTest`（英文名回归/别名放行/未登记跳过/外置库别名/去重）。
+
+- **中文仿写标签漏进 TTS 修复（2026-10-07 晚，用户反馈「<emo:轻笑>和 <emo:大笑>怎么被读出来了」；单测 +7 全量 563 全绿 app169/corelib56/adapter78/orchestrator260）**：两级根因两级修。①**提取器只认 ASCII 名**——`InlineTagExtractor` 四条正则的标签名字符类 `[A-Za-z_][A-Za-z0-9_]*`，`<emo:轻笑>` 匹配失败走「非本协议标签」分支整段透传进句块→TTS 朗读；词表是「英文名(中文释义)」形态（`PromptTexts.emotionNames`），中文模型偶尔自造仿写（轻笑/大笑词表里根本没有，全仓库 grep 零命中）。**修**：名字类放宽为 Unicode 字母 `[\p{L}_][\p{L}\p{N}_]*`（emo/act/cam/legacy 四条统一，抽 `tagName` 常量），任何 `<emo:xx>` 形状标签都成 cue 不再漏语音——`<emotional>`/`a < b`/`<b>html</b>` 等 pass-through 语义不变（matchEntire 锚定+前缀限定）。②**未知名在 dispatchCues 白白丢弃**——轻笑既非 canonical 也匹配不到 morph，即使拦下表情也没了。**修**：orchestrator face 包新增 `EmotionAliases`（约 60 个中文别名→13 canonical：轻笑/大笑/微笑→happy、坏笑→smug、面无表情→neutral…），`AvatarSession.dispatchCues` 在 canonical/morph 解析**之前**先 `EmotionAliases.resolve(cue.name)` 让意图生效；键全中文不会遮蔽 ASCII canonical/morph 路径，落空名字原样 lowercase 走老路（unicorn 照旧静默丢弃）。坑：同句内两别名映射到同名（如 轻笑+大笑→happy,happy）会触发 `splitEmotionRun` 同名序列语义（首个+200ms 步进），测 dispatch 层时别名 cue 要各挂一句。测试：InlineTagExtractorTest +4（中文 emo 提取/中文 act+cam/中文跨 delta 缓冲/词表外 ASCII 名仍成 cue）+ 新 `EmotionAliasesTest` +2 + AvatarSessionTagsTest +1（轻笑/大笑→happy、unicorn 丢弃、标签零泄漏进 TTS）。
+
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。

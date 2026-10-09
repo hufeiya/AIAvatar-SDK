@@ -315,6 +315,30 @@ class AvatarSessionTagsTest {
     }
 
     @Test
+    fun `chinese emotion aliases resolve to canonical names`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val session = newSession(llm, tts, RecordingQueue(), FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // 中文模型自造的词表外名字（真机踩过 <emo:轻笑>/<emo:大笑>）：别名表
+        // 回 canonical 生效；unicorn 无别名 → 仍静默丢弃。标签一律不进语音。
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:轻笑>你好。"))
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:大笑:0.9>哈哈。<emo:unicorn:1>"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
+        assertEquals(listOf("happy", "happy"), emotions.map { it.cue.name })
+        assertEquals(0.9f, emotions[1].cue.intensity, 0.001f)
+        assertEquals(listOf("你好。", "哈哈。"), tts.synthesized)
+    }
+
+    @Test
     fun `emotion tags apply when their sentence starts playing, not when streamed`() = runTest {
         val llm = SharedFlowLlm()
         val queue = ManualQueue()

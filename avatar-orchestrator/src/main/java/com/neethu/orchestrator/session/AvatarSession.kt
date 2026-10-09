@@ -27,6 +27,7 @@ import com.neethu.orchestrator.audio.PlaybackQueue
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.chunker.SentenceChunker
+import com.neethu.orchestrator.face.EmotionAliases
 import com.neethu.orchestrator.face.FaceDriver
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.gesture.GestureDriver
@@ -575,7 +576,9 @@ class AvatarSession(
      * 在 LLM 吐出的瞬间执行（反应快，且动作/镜头是持续态，早几秒无妨）；
      * emotion cue 改为挂到其后第一个句子上、开播瞬间才驱动面部——TTS 排队
      * 延迟下"即发即执行"会让表情在出声前就被 3 秒归零吃掉（真机踩过）。
-     * Unknown names are silently dropped, never surfaced as errors.
+     * Unknown names are silently dropped, never surfaced as errors. 中文仿写
+     * （词表外的"轻笑/大笑"类，真机踩过）先过 [EmotionAliases] 回 canonical，
+     * 落表的才走 morph 直驱/静默丢弃。
      */
     private fun dispatchCues(cues: List<TagCue>) {
         for (cue in cues) when (cue) {
@@ -584,7 +587,7 @@ class AvatarSession(
                 // model's actual morph casing (extractor lowercases everything,
                 // morph names are case-sensitive — blinkLeft ≠ blinkleft, §7.10).
                 val fd = faceDriver
-                val canonical = cue.name.lowercase()
+                val canonical = EmotionAliases.resolve(cue.name)
                 val isCanonical = fd != null && canonical in fd.knownEmotionNames
                 val direct = fd?.resolveExpression(cue.name)
                 if (fd == null || isCanonical || direct != null) {

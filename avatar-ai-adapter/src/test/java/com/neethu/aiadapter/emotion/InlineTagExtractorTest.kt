@@ -47,6 +47,48 @@ class InlineTagExtractorTest {
         assertEquals("", r.cleanText)
     }
 
+    // ── CJK tag names（中文模型自造仿写，真机踩过 <emo:轻笑> 漏进 TTS） ──
+
+    @Test
+    fun `chinese emotion names extracted instead of leaking into speech`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("你猜<emo:轻笑>怎么着<emo:大笑:0.8>，嘿嘿")
+        assertEquals("你猜怎么着，嘿嘿", r.cleanText)
+        assertEquals(
+            listOf(TagCue.Emotion("轻笑", 1.0f), TagCue.Emotion("大笑", 0.8f)),
+            r.cues,
+        )
+    }
+
+    @Test
+    fun `chinese action and camera names extracted`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<act:挥手><cam:特写>看这里")
+        assertEquals("看这里", r.cleanText)
+        assertEquals(listOf(TagCue.Action("挥手"), TagCue.Camera("特写")), r.cues)
+    }
+
+    @Test
+    fun `chinese tag split across deltas is buffered`() {
+        val ex = InlineTagExtractor()
+        val r1 = ex.feed("好<emo")
+        assertEquals("好", r1.cleanText)
+        assertEquals(0, r1.cues.size)
+        val r2 = ex.feed(":轻笑>呀")
+        assertEquals("呀", r2.cleanText)
+        assertEquals(TagCue.Emotion("轻笑", 1.0f), r2.cues[0])
+    }
+
+    @Test
+    fun `off-vocabulary ascii emotion name still extracted as cue`() {
+        // 提取器只管形状：词表外的名字（unicorn/excited）必须成 cue 交给下游
+        // 裁决（morph 直驱/静默丢弃），绝不能当普通文字漏给 TTS。
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<emo:excited>哇")
+        assertEquals("哇", r.cleanText)
+        assertEquals(listOf(TagCue.Emotion("excited", 1.0f)), r.cues)
+    }
+
     // ── legacy protocol stays recognized ─────────────────────────────────
 
     @Test
