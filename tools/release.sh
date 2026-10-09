@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # ── AIAvatar-SDK 一键发布 Maven Central ─────────────────────────────────
 # 用法:
-#   tools/release.sh <版本号> [--skip-tests] [--dry-run]
+#   tools/release.sh <版本号> [--skip-tests] [--dry-run] [--no-git]
 # 例:
 #   tools/release.sh 0.1.2               # 完整发布(默认先跑全量单测)
 #   tools/release.sh 0.1.2 --skip-tests  # 跳过单测(急用)
 #   tools/release.sh 0.1.2 --dry-run     # 演练: bump+测试+mavenLocal+bundle,不上传不提交
+#   tools/release.sh 0.1.2 --no-git      # 只发布不动 git(不提交不 tag),供上层编排
+#                                        # (技能 publish-release)调用;SDK_VERSION 已是
+#                                        # 目标版本时同样放行,失败后带同版本号重跑即可
 #
-# 流程: 前置检查(工作区干净/凭据在/版本未发过) → 改 SDK_VERSION → 全量单测
-#       → 提交版本号 → publishToMavenLocal → bundle → 上传 Central Portal
-#       → 盯 repo1 直到三产物可下载(≤45 分钟) → 打 v<版本> tag
+# 流程: 前置检查(工作区干净/凭据在/版本未上过 Central) → 改 SDK_VERSION → 全量单测
+#       → 提交版本号(--no-git 跳过) → publishToMavenLocal → bundle → 上传 Central
+#       Portal → 盯 repo1 直到三产物可下载(≤45 分钟) → 打 v<版本> tag(--no-git 跳过)
 #
 # 凭据: 仓库根 central.properties(gitignored):centralTokenUser/centralTokenPass/
 #       gpgPassphrase(缺了脚本会明确提示),或同名环境变量。
@@ -18,15 +21,17 @@ cd "$(dirname "$0")/.."
 
 SKIP_TESTS=0
 DRY_RUN=0
+NO_GIT=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --skip-tests) SKIP_TESTS=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --no-git) NO_GIT=1 ;;
     *) ARGS+=("$a") ;;
   esac
 done
-[ ${#ARGS[@]} -ge 1 ] || { sed -n '2,14p' "$0"; exit 1; }
+[ ${#ARGS[@]} -ge 1 ] || { sed -n '2,20p' "$0"; exit 1; }
 VERSION="${ARGS[0]}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-._a-zA-Z0-9]+)?$ ]] || { echo "✗ 版本号形如 1.2.3: $VERSION"; exit 1; }
 
@@ -34,14 +39,18 @@ step() { echo; echo "═══ $1 ═══"; }
 
 # ── 前置检查 ────────────────────────────────────────────────────────────
 step "前置检查"
-git diff-index --quiet HEAD -- || { echo "✗ 工作区不干净,先提交/暂存(git status)"; exit 1; }
-grep -q "^SDK_VERSION=$VERSION$" gradle.properties && { echo "✗ gradle.properties 已经是 $VERSION,换一个新版本号"; exit 1; }
+if [ "$DRY_RUN" = "1" ]; then
+  echo "ℹ dry-run:跳过工作区干净检查(演练不要求提交)"
+else
+  git diff-index --quiet HEAD -- || { echo "✗ 工作区不干净,先提交/暂存(git status)"; exit 1; }
+fi
+# SDK_VERSION 允许已等于目标版本(失败重跑场景),是否发过由下面的 Central 在线检查把关
 for a in corelib avatar-ai-adapter avatar-orchestrator; do
   code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
     "https://repo1.maven.org/maven2/io/github/hufeiya/$a/$VERSION/$a-$VERSION.pom")
   [ "$code" = "200" ] && { echo "✗ $a:$VERSION 已在 Maven Central 上,版本必须递增"; exit 1; }
 done
-echo "✓ 版本 $VERSION 未发布过;工作区干净"
+echo "✓ 版本 $VERSION 未发布过;凭据就绪"
 python3 tools/publish-central.py check
 
 # ── 改版本号 ────────────────────────────────────────────────────────────
@@ -72,11 +81,19 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-# ── 提交版本号 ──────────────────────────────────────────────────────────
-step "提交版本号"
-git add gradle.properties
-git commit -q -m "TYPE: chore release v$VERSION(一键发布 tools/release.sh)"
-echo "✓ $(git log --oneline -1 | head -c 60)"
+# ── 提交版本号(--no-git 跳过) ─────────────────────────────────────────
+if [ "$NO_GIT" = "1" ]; then
+  step "跳过 git 提交(--no-git,由上层编排统一提交/打 tag)"
+else
+  step "提交版本号"
+  git add gradle.properties
+  if git diff --cached --quiet; then
+    echo "✓ 版本号已在历史提交中,无需重复提交(失败重跑场景)"
+  else
+    git commit -q -m "TYPE: chore release v$VERSION(一键发布 tools/release.sh)"
+    echo "✓ $(git log --oneline -1 | head -c 60)"
+  fi
+fi
 
 # ── 上传与盯发布 ────────────────────────────────────────────────────────
 step "上传 Central Portal"
@@ -85,9 +102,13 @@ echo "deployment id: $DEPLOY_ID(状态查询: python3 tools/publish-central.py s
 
 step "盯发布确认(repo1)"
 if python3 tools/publish-central.py watch "$VERSION"; then
-  git tag -f "v$VERSION" -m "release v$VERSION"
   echo
-  echo "═══ 发布完成 🎉  版本 $VERSION 已上 Maven Central,tag v$VERSION 已打 ═══"
+  if [ "$NO_GIT" = "1" ]; then
+    echo "═══ 发布完成 🎉  版本 $VERSION 已上 Maven Central(--no-git:未提交未打 tag,由上层编排收尾) ═══"
+  else
+    git tag -f "v$VERSION" -m "release v$VERSION"
+    echo "═══ 发布完成 🎉  版本 $VERSION 已上 Maven Central,tag v$VERSION 已打 ═══"
+  fi
   echo "    集成坐标: implementation(\"io.github.hufeiya:avatar-orchestrator:$VERSION\")"
 else
   echo
