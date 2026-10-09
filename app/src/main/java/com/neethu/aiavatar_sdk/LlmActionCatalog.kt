@@ -11,7 +11,8 @@ const val KEY_IDLE_ANIMATION = "ai_idle_animation"
  *
  * 目录不再硬编码：assets/animations 下的全部 .vrma（内置库，含分类子文件夹，
  * ~330 个）自动生成目录；tag = 文件名转小写下划线并去重，分类名取第一级
- * 子文件夹；外置库文件追加在后。全中文名等转不出 tag 的文件跳过。
+ * 子文件夹；外置库文件追加在后。全中文名等转不出 tag 的文件跳过——除非在
+ * [CHINESE_NAME_TAGS] 里登记了英文别名。
  * 协议块按分类分组列出——模型只见过真实存在的 tag，未知名客户端静默丢弃。
  */
 fun sanitizeActionTag(name: String): String =
@@ -19,6 +20,17 @@ fun sanitizeActionTag(name: String): String =
         .replace("&", "and")
         .replace(Regex("[^a-z0-9]+"), "_")
         .trim('_')
+
+/**
+ * 纯中文文件名 → 英文 tag 别名：sanitizeActionTag 的正则只留 a-z0-9，全中文名
+ * 转出空 tag 会被目录跳过；在此登记后文件照常进 LLM 动作目录。tag 必须是
+ * 语义化英文（协议约定「动作英文名即其含义」，且 <act:> 提取正则只认 ASCII）；
+ * 面板显示名不受影响（仍用原文件名）。未登记的中文名照旧跳过。
+ */
+private val CHINESE_NAME_TAGS = mapOf(
+    "闪身步" to "dodge_step",
+    "浪子踢球" to "ball_kick",
+)
 
 /**
  * 分类在协议块里的展示顺序：对话高频类（打招呼/交流手势/情绪表达）排最前，
@@ -48,9 +60,10 @@ fun buildLlmActionCatalog(
     val entries = ArrayList<ActionEntry>()
     val seen = HashSet<String>()
     fun add(fileName: String, category: String, assetPath: String?, filePath: String?) {
-        val tag = sanitizeActionTag(fileName.removeSuffix(".vrma"))
+        val base = fileName.removeSuffix(".vrma")
+        val tag = sanitizeActionTag(base).ifEmpty { CHINESE_NAME_TAGS[base] ?: "" }
         if (tag.isEmpty() || !seen.add(tag)) return
-        entries += ActionEntry(tag, fileName.removeSuffix(".vrma"), category, assetPath, filePath)
+        entries += ActionEntry(tag, base, category, assetPath, filePath)
     }
     for (rel in assetRelativePaths) {
         val category = if ('/' in rel) rel.substringBefore('/') else "基础动作"

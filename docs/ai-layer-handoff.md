@@ -31,7 +31,7 @@
 | `api/AsrAdapter.kt` + `openai/OpenAiCompatibleAsrAdapter.kt` | 语音输入（任务 4）：`suspend transcribe(audio, mime, config): String`；OpenAI 兼容 `POST {base}/audio/transcriptions`（multipart `model`+`file`，文件名/Content-Type 由 mime 推导，m4a→`audio/mp4`）；language/prompt 缺省不发送（硅基流动只收 file+model，多余字段有 400 风险）；非 2xx 与 200 非 JSON 都带响应预览抛 IOException（A.1 第 11 条同源教训） |
 | `edge/EdgeTtsAdapter.kt` | **Edge-TTS 免费适配器（任务 6，开源友好，无需 baseUrl/Key）**：微软 Edge「大声朗读」WSS 端点（`speech.platform.bing.com/.../edge/v1`），协议逐字对齐开源 edge-tts(python)——`Sec-MS-GEC` 鉴权参数=Windows file time（+11644473600 秒）向下取整 300s ×10⁷ 拼 TrustedClientToken 求 SHA-256 大写（`EdgeTtsDrm`，403 时按服务端 Date 头校时钟偏移重试一次）；文本消息 speech.config→ssml 两连发（XML 转义/控制字符清洗/4096 字节按词界+UTF-8+实体边界切分，上游语义：无空格不硬截断）；服务端 BINARY 前 2 字节大端头长+`Path:audio` 分片顺序拼接，`Path:turn.end` 终结；输出恒 **MP3 24kHz**（`audio-24khz-48kbitrate-mono-mp3`，实测端点**只认这一种** outputFormat），PcmDecoder MediaCodec 路径直解；每条消息 30s 看门狗；空文本/空音频/提前断连/未知 Path 全部带上下文抛 IOException（无 SLA，错误事件必须明确） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
-| `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
+| `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE；名字收 Unicode 字母含中文，未知名下游裁决不漏语音），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
 | `openai/OpenAiCompatibleLlmAdapter.kt` | OkHttp SSE 手解 `data:` 行；`channelFlow + awaitClose{call.cancel()}` 取消即断连 |
 | `openai/OpenAiCompatibleTtsAdapter.kt` | POST `{base}/audio/speech`，response_format 可配（demo 默认 wav） |
@@ -363,6 +363,7 @@
   - **测试坑**：门面 JVM 测试（AIAvatarSdkTest）①`Dispatchers.setMain` 必须像 AvatarSessionSpeakTest 一样设（播放回调走 Main.immediate）；②tearDown 要**先 cancel scope 再 resetMain**——泄漏的 AudioTrackPlaybackQueue 写线程在 Main 卸载后异步派发崩溃，异常被**下一个测试类**（AudioTrackPlaybackQueueTest 的全局 UncaughtExceptionHandler 捕获逻辑）吃走报「writer crashed」，类间污染极难定位；③JVM 测试别传 `modelReady=true`（FaceDriver.start 直触 Choreographer）。
   - **README 同步**：快速开始 §2 补 AvatarSurfaceView 段、§4 改双方式（A=门面/B=裸 AvatarSession）、资产表标注内置 IBL、API 速查补门面与渲染入口、Roadmap ②③④ 划✅（①Maven 发布保留）。
 
+- **中文名动画进 LLM 动作目录（2026-10-07，用户需求「把 08_舞蹈与表演 下的闪身步.vrma 和浪子踢球.vrma 加到 AI 调用的动作里」；单测 +5 全量 556 全绿 app169/corelib56/adapter74/orchestrator257 debug 变体；APK 组装含两文件）**：`buildLlmActionCatalog` 原本对全中文名转不出 tag（`sanitizeActionTag` 正则只留 a-z0-9，转出空串即跳过）——新增 `CHINESE_NAME_TAGS` 别名表放行：闪身步→`dodge_step`、浪子踢球→`ball_kick`。tag 必须语义化英文的原因：①协议约定「动作英文名即其含义」，LLM 靠 tag 语义挑动作；②`InlineTagExtractor` 的 `<act:>` 提取正则只认 ASCII，中文 tag 就算进目录也发不出来（⚠ 当日晚间已放宽为 Unicode，见下条，此约束只剩①）。面板显示名不受影响（仍中文原文件名），未登记中文名照旧跳过，别名 tag 与英文名 tag 同走 `seen` 去重；新增 `LlmActionCatalogTest`（英文名回归/别名放行/未登记跳过/外置库别名/去重）。
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
