@@ -99,6 +99,7 @@ import com.neethu.aiavatar_sdk.MotionSettings
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.QualityPreset
+import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ToneMappingMode
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -837,6 +838,24 @@ private fun QualityPresetContent(
     onSettingsChange: (AvatarRenderSettings) -> Unit,
 ) {
     val s = LocalStrings.current
+    // ── 渲染风格（PBR / MToon）────────────────────────────────────────────
+    SettingsSectionHeader(s.renderModeHeader)
+    SettingsOptionRow(
+        title = s.renderModePbr,
+        subtitle = s.renderModePbrSubtitle,
+        selected = settings.renderMode == RenderMode.PBR
+    ) {
+        onSettingsChange(settings.copy(renderMode = RenderMode.PBR))
+    }
+    SettingsOptionRow(
+        title = s.renderModeMtoon,
+        subtitle = s.renderModeMtoonSubtitle,
+        selected = settings.renderMode == RenderMode.MTOON
+    ) {
+        onSettingsChange(settings.copy(renderMode = RenderMode.MTOON))
+    }
+    SettingsGroupLabel(s.renderModeHint)
+
     // ── 画质预设 ──────────────────────────────────────────────────────────
     SettingsSectionHeader(s.qualityPresetHeader)
     SettingsActionRow(
@@ -847,6 +866,7 @@ private fun QualityPresetContent(
             QualityPreset.LOW.toRenderSettings(
                 settings.iblIntensity,
                 settings.iblRotationDegrees,
+                settings.renderMode,
                 settings.showFps
             )
         )
@@ -859,6 +879,7 @@ private fun QualityPresetContent(
             QualityPreset.MEDIUM.toRenderSettings(
                 settings.iblIntensity,
                 settings.iblRotationDegrees,
+                settings.renderMode,
                 settings.showFps
             )
         )
@@ -871,6 +892,7 @@ private fun QualityPresetContent(
             QualityPreset.HIGH.toRenderSettings(
                 settings.iblIntensity,
                 settings.iblRotationDegrees,
+                settings.renderMode,
                 settings.showFps
             )
         )
@@ -883,6 +905,7 @@ private fun QualityPresetContent(
             QualityPreset.ULTRA.toRenderSettings(
                 settings.iblIntensity,
                 settings.iblRotationDegrees,
+                settings.renderMode,
                 settings.showFps
             )
         )

@@ -6,6 +6,7 @@ import android.util.Log
 import com.neethu.aiavatar_sdk.ui.GuideVariant
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.RenderMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -191,6 +192,21 @@ internal suspend fun executeAiCommand(
                 controller.setAvatarCulling(enabled)
                 if (enabled) "avatar frustum culling ON (bug-compatible: eyeballs can vanish at close range when the head turns)"
                 else "avatar frustum culling OFF (fix: skinned meshes always draw)"
+            }
+            "render_mode" -> {
+                val mode = when (command.arg?.lowercase()) {
+                    "pbr" -> RenderMode.PBR
+                    "mtoon" -> RenderMode.MTOON
+                    null -> throw IllegalArgumentException("render_mode expects 'pbr' or 'mtoon'")
+                    else -> throw IllegalArgumentException("render_mode expects 'pbr' or 'mtoon', got '${command.arg}'")
+                }
+                // 与设置页同一条链路：更新 uiState + controller，
+                // renderMode 变化的模型重载由 AvatarController 驱动
+                val newSettings = uiState.renderSettings.copy(renderMode = mode)
+                uiState.updateRenderSettings(newSettings)
+                controller.updateRenderSettings(newSettings)
+                if (mode == RenderMode.MTOON) "render mode MTOON (cel shading + outline, model reloaded)"
+                else "render mode PBR (model reloaded)"
             }
             "breath" -> when (command.arg?.lowercase()) {
                 "on", "true", "1" -> {

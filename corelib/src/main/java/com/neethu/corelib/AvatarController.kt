@@ -71,6 +71,12 @@ class AvatarController {
     /** Tracks the path currently loaded (or being loaded) to avoid re-loading. */
     private var currentModelPath: String? = null
 
+    /** How [currentModelPath] was loaded (assets vs filesystem), for mode-switch reloads. */
+    private var currentModelIsFile: Boolean = false
+
+    /** Render mode of the currently loaded model (drives the reload on switch). */
+    private var appliedRenderMode: RenderMode = RenderMode.PBR
+
     /**
      * Attach the renderer. Called internally by [AvatarView] during factory.
      */
@@ -104,6 +110,7 @@ class AvatarController {
      * @param forceReload If `true`, re-load even if the same path is already loaded.
      */
     fun loadModel(assetPath: String, forceReload: Boolean = false) {
+        currentModelIsFile = false
         loadModelInternal(assetPath, forceReload) { it.loadModel(assetPath) }
     }
 
@@ -117,6 +124,7 @@ class AvatarController {
      * @param forceReload If `true`, re-load even if the same path is already loaded.
      */
     fun loadModelFromFile(filePath: String, forceReload: Boolean = false) {
+        currentModelIsFile = true
         loadModelInternal(filePath, forceReload) { it.loadModelFromFile(filePath) }
     }
 
@@ -482,7 +490,12 @@ class AvatarController {
      *
      * Every part of [AvatarRenderSettings] is hot-swappable — lighting rig,
      * shadows, SSAO/GTAO, tone mapping, bloom, anti-aliasing and depth of
-     * field take effect immediately without reloading the model.
+     * field take effect immediately without reloading the model — except
+     * [AvatarRenderSettings.renderMode]: switching between [RenderMode.PBR]
+     * and [RenderMode.MTOON] reloads the currently loaded model, because the
+     * MToon outline pass needs its duplicated GLB primitives and the material
+     * swap happens at load time.
+     *
      * [QualityPreset] offers one-click bundles:
      *
      * ```kotlin
@@ -491,6 +504,16 @@ class AvatarController {
      */
     fun updateRenderSettings(settings: AvatarRenderSettings) {
         renderer?.applyRenderSettings(settings)
+        val modeChanged = settings.renderMode != appliedRenderMode
+        appliedRenderMode = settings.renderMode
+        val path = currentModelPath
+        if (modeChanged && path != null) {
+            if (currentModelIsFile) {
+                loadModelFromFile(path, forceReload = true)
+            } else {
+                loadModel(path, forceReload = true)
+            }
+        }
     }
 
     // ── Public API: Interaction ──────────────────────────────────────────

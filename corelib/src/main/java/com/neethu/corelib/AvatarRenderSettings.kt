@@ -54,6 +54,23 @@ enum class AntiAliasingMode {
 }
 
 /**
+ * Material/shading model used to render the avatar model itself.
+ *
+ * [PBR] is the default gltfio metallic-roughness path (studio-lit realism).
+ * [MTOON] swaps every MToon-flagged material of the model (VRM 0.x
+ * `VRM/MToon` shaders and VRM 1.0 `VRMC_materials_mtoon` extensions) to the
+ * three-vrm-compatible MToon cel-shading: toony two-tone diffuse, parametric
+ * rim, matcap, and an inverted-hull outline drawn as duplicated primitives.
+ * Non-MToon materials of the same model keep their PBR look.
+ *
+ * Switching modes reloads the model (material replacement happens at load).
+ */
+enum class RenderMode {
+    PBR,
+    MTOON,
+}
+
+/**
  * Tunable PBR rendering settings for the avatar view.
  *
  * Pass an instance to [AvatarConfig.renderSettings] for the initial state and
@@ -87,6 +104,9 @@ enum class AntiAliasingMode {
  *   Takes full effect only on models whose materials declare the matching
  *   features (e.g. KHR_materials_clearcoat); subsurface skin and anisotropic
  *   hair cannot be switched onto gltfio ubershader materials at runtime.
+ * @property renderMode Avatar material/shading model, see [RenderMode].
+ *   Unlike the other fields this one is NOT hot-swappable: switching reloads
+ *   the model (see [AvatarController.updateRenderSettings]).
  * @property showFps Whether the consuming UI should show a live FPS counter.
  *   The renderer always measures frame rate and reports it via
  *   [AvatarController.fps]; this flag only controls whether the overlay is
@@ -106,6 +126,7 @@ data class AvatarRenderSettings(
     val antiAliasing: AntiAliasingMode = AntiAliasingMode.FXAA,
     val depthOfFieldEnabled: Boolean = false,
     val enhanceMaterials: Boolean = false,
+    val renderMode: RenderMode = RenderMode.PBR,
     val showFps: Boolean = true,
 )
 
@@ -131,13 +152,15 @@ enum class QualityPreset {
     ;
 
     /**
-     * Build the preset's settings. Like [AvatarRenderSettings.iblIntensity]
-     * and [AvatarRenderSettings.iblRotationDegrees], [showFps] is passed
-     * through so applying a preset does not reset user-tuned values.
+     * Build the preset's settings. Like [AvatarRenderSettings.iblIntensity],
+     * [AvatarRenderSettings.iblRotationDegrees] and [AvatarRenderSettings.renderMode],
+     * [showFps] is passed through so applying a preset does not reset
+     * user-tuned values.
      */
     fun toRenderSettings(
         iblIntensity: Float = 13_000f,
         iblRotationDegrees: Float = 0f,
+        renderMode: RenderMode = RenderMode.PBR,
         showFps: Boolean = true,
     ): AvatarRenderSettings = when (this) {
         LOW -> AvatarRenderSettings(
@@ -153,6 +176,7 @@ enum class QualityPreset {
             antiAliasing = AntiAliasingMode.FXAA,
             depthOfFieldEnabled = false,
             enhanceMaterials = false,
+            renderMode = renderMode,
             showFps = showFps,
         )
         MEDIUM -> AvatarRenderSettings(
@@ -169,6 +193,7 @@ enum class QualityPreset {
             antiAliasing = AntiAliasingMode.FXAA,
             depthOfFieldEnabled = false,
             enhanceMaterials = false,
+            renderMode = renderMode,
             showFps = showFps,
         )
         HIGH -> AvatarRenderSettings(
@@ -185,6 +210,7 @@ enum class QualityPreset {
             antiAliasing = AntiAliasingMode.FXAA,
             depthOfFieldEnabled = false,
             enhanceMaterials = false,
+            renderMode = renderMode,
             showFps = showFps,
         )
         ULTRA -> AvatarRenderSettings(
@@ -201,6 +227,7 @@ enum class QualityPreset {
             antiAliasing = AntiAliasingMode.TAA,
             depthOfFieldEnabled = true,
             enhanceMaterials = true,
+            renderMode = renderMode,
             showFps = showFps,
         )
     }

@@ -307,6 +307,7 @@ private fun SharedPreferences.loadRenderSettings(): AvatarRenderSettings {
         antiAliasing = enumValue("render_antiAliasing", defaults.antiAliasing),
         depthOfFieldEnabled = getBoolean("render_depthOfFieldEnabled", defaults.depthOfFieldEnabled),
         enhanceMaterials = getBoolean("render_enhanceMaterials", defaults.enhanceMaterials),
+        renderMode = enumValue("render_renderMode", defaults.renderMode),
         showFps = getBoolean("render_showFps", defaults.showFps),
     )
 }
@@ -327,6 +328,7 @@ private fun SharedPreferences.saveRenderSettings(s: AvatarRenderSettings) {
         .putString("render_antiAliasing", s.antiAliasing.name)
         .putBoolean("render_depthOfFieldEnabled", s.depthOfFieldEnabled)
         .putBoolean("render_enhanceMaterials", s.enhanceMaterials)
+        .putString("render_renderMode", s.renderMode.name)
         .putBoolean("render_showFps", s.showFps)
         .apply()
 }
@@ -934,7 +936,9 @@ private fun DemoScreen(
 
     // Apply render settings to the controller; material enhancements cannot be
     // reverted in place (material params have no read-back), so turning them
-    // off reloads the pristine model.
+    // off reloads the pristine model. The PBR/MToon render-mode switch also
+    // reloads (the MToon outline pass needs duplicated GLB primitives built at
+    // load time) — the reload itself is driven by AvatarController.
     val applyRenderSettings: (AvatarRenderSettings) -> Unit = { new ->
         val materialReverted = uiState.renderSettings.enhanceMaterials && !new.enhanceMaterials
         uiState.updateRenderSettings(new)

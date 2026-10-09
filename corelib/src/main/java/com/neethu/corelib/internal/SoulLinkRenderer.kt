@@ -47,6 +47,7 @@ import com.neethu.corelib.LightingRig
 import com.neethu.corelib.LookAtInfo
 import com.neethu.corelib.MimicInfo
 import com.neethu.corelib.MimicPose
+import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ToneMappingMode
 
 /**
@@ -179,6 +180,14 @@ internal class SoulLinkRenderer(
     private var renderSettings: AvatarRenderSettings = config.renderSettings
     private var colorGrading: ColorGrading? = null
     private var appliedToneMapping: ToneMappingMode? = null
+
+    // MToon (cel shading) active state — built per model load when
+    // [AvatarRenderSettings.renderMode] is MTOON. Owns its GPU resources;
+    // destroyed before the next model load / on engine teardown.
+    private var mtoonFactory: MToonMaterialFactory? = null
+    private var mtoonApplier: MToonApplier? = null
+    /** True when the current model actually got MToon materials (drives the LinearToneMapper override). */
+    private var mtoonActive = false
 
     // Studio light rig entities (0 = not built)
     private var keyLightEntity: Int = 0
@@ -563,6 +572,23 @@ internal class SoulLinkRenderer(
                 }
             }
         }
+
+        // The MToon math ignores scene lights; it takes the key light as a
+        // material parameter instead (direction TOWARD the light).
+        applyMToonKeyLight()
+    }
+
+    /** Push the studio key light into the MToon materials (no-op when inactive). */
+    private fun applyMToonKeyLight() {
+        val applier = mtoonApplier ?: return
+        val dir = normalize(
+            floatArrayOf(
+                KEY_POSITION[0] - KEY_TARGET[0],
+                KEY_POSITION[1] - KEY_TARGET[1],
+                KEY_POSITION[2] - KEY_TARGET[2],
+            )
+        )
+        applier.setKeyLight(dir, MToonApplier.defaultLightColor(KEY_COLOR))
     }
 
     /**
@@ -724,7 +750,11 @@ internal class SoulLinkRenderer(
             enabled = false
         }
 
-        applyToneMapping(settings.toneMapping)
+        // MToon materials output linear color and count on the grading pass
+        // for the sRGB encode (parity with the desktop viewer's Linear setup +
+        // three's NoToneMapping); only applied when the model actually has
+        // MToon materials, so PBR models keep the user's tone mapping.
+        applyToneMapping(if (mtoonActive) ToneMappingMode.LINEAR else settings.toneMapping)
     }
 
     private fun applyToneMapping(mode: ToneMappingMode) {
@@ -835,6 +865,43 @@ internal class SoulLinkRenderer(
         val loadBuffer = GlbBoneCuller.cullUnusedBones(morphPatched)
             ?: morphPatched.also { it.rewind() }
 
+        // Pre-process (MToon mode only): parse the VRM material extensions and
+        // duplicate the MToon primitives so each gets an outline pass slot.
+        // Runs AFTER the bone culler — the culler rewrites joint accessors
+        // shared by primitives, and duplicating first would make it process
+        // the shared accessors twice.
+        var mtoonParse: GlbMToon.ParseResult? = null
+        var finalBuffer = loadBuffer
+        if (renderSettings.renderMode == RenderMode.MTOON) {
+            try {
+                // readJson on a duplicate: leaves loadBuffer's position untouched
+                GlbMToon.readJson(loadBuffer.duplicate())?.let { gltfJson ->
+                    val materials = GlbMToon.parseMaterials(gltfJson)
+                    if (materials.isNotEmpty()) {
+                        val (patched, layouts) = GlbMToon.patchGlb(loadBuffer, gltfJson, materials)
+                        if (layouts.isNotEmpty()) {
+                            finalBuffer = patched
+                            mtoonParse = GlbMToon.ParseResult(
+                                isVrm0 = parseVrmMetaVersion(bytes) == "0",
+                                materials = materials,
+                                meshLayouts = layouts,
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SoulLinkRenderer", "MToon GLB patch failed, falling back to PBR", e)
+                mtoonParse = null
+                finalBuffer = loadBuffer
+            }
+        }
+
+        // MToon GPU resources reference the outgoing asset's renderables —
+        // release them before gltfio destroys the asset.
+        mtoonApplier?.destroy()
+        mtoonApplier = null
+        mtoonActive = false
+
         // Clear old physics and animation state before loading the new model.
         // This prevents the Choreographer from trying to access destroyed entities
         // if the ensuing initialization crashes or throws an exception.
@@ -850,7 +917,7 @@ internal class SoulLinkRenderer(
         animator = null
 
         // Load model into Filament
-        modelViewer.loadModelGlb(loadBuffer)
+        modelViewer.loadModelGlb(finalBuffer)
         modelViewer.transformToUnitCube()
 
         // Get animation controller
@@ -999,6 +1066,22 @@ internal class SoulLinkRenderer(
         // 蒙皮/morph 顶点会离开 gltfio 的绑定姿态静态 culling 盒（眼球丢失
         // 根因，见 [avatarCullingEnabled] 注释）——按当前开关重新应用
         applyAvatarCulling()
+
+        // MToon material swap — must run after the gltfio renderables exist.
+        // The applier parses textures/materials from the ORIGINAL GLB bytes
+        // (identical material JSON; the patched buffer only adds primitives).
+        val parse = mtoonParse
+        if (parse != null) {
+            val factory = mtoonFactory ?: MToonMaterialFactory.create(modelViewer.engine)
+                ?.also { mtoonFactory = it }
+            if (factory != null) {
+                val applier = MToonApplier(modelViewer.engine, modelViewer.asset!!, bytes, parse, factory)
+                applier.apply()
+                mtoonApplier = applier
+                mtoonActive = true
+                applyMToonKeyLight()
+            }
+        }
     }
 
     /** Detects the VRM meta version ("0" or "1") from GLB bytes. */
@@ -1466,6 +1549,11 @@ internal class SoulLinkRenderer(
         stopRendering()
         shotSteering = false
         activeShot = null
+        mtoonApplier?.destroy()
+        mtoonApplier = null
+        mtoonFactory?.destroy()
+        mtoonFactory = null
+        mtoonActive = false
         removeScene()
         sceneResourceLoader?.destroy()
         sceneResourceLoader = null

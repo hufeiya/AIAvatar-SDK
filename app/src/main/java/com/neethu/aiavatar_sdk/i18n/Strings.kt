@@ -342,6 +342,14 @@ class Strings(val lang: Lang) {
     val presetHighSubtitle: String get() = zh("三点布光 · 2048 阴影 · GTAO · ACES + 泛光", "Three-point lighting · 2048 shadows · GTAO · ACES + bloom")
     val presetUltra: String get() = "3A Ultra"
     val presetUltraSubtitle: String get() = zh("4096 阴影 + 接触阴影 · GTAO · TAA · 泛光 + 景深 + 材质增强", "4096 shadows + contact shadows · GTAO · TAA · bloom + DoF + material enhancements")
+    val renderModeHeader: String get() = zh("渲染风格 (Render Style)", "Render style")
+    val renderModePbr: String get() = zh("PBR 写实", "PBR (realistic)")
+    val renderModePbrSubtitle: String get() =
+        zh("金属粗糙度工作流 + 摄影棚布光，写实质感", "Metallic-roughness workflow with studio lighting — realistic look")
+    val renderModeMtoon: String get() = zh("MToon 卡通", "MToon (anime)")
+    val renderModeMtoonSubtitle: String get() =
+        zh("三段式赛璐璐着色 + 描边 + matcap，three-vrm 同款观感", "Three-tone cel shading + outline + matcap, matching the three-vrm look")
+    val renderModeHint: String get() = zh("切换时重新加载当前模型", "Switching reloads the current model")
     val lightingHeader: String get() = zh("光照与环境 (Lighting & IBL)", "Lighting & environment (IBL)")
     val iblIntensity: String get() = zh("IBL 环境光强度", "IBL ambient intensity")
     val iblRotation: String get() = zh("IBL 环境光旋转", "IBL ambient rotation")

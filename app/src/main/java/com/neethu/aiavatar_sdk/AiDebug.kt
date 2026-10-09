@@ -144,6 +144,10 @@ fun aiDebugHelp(): String = """
     |                           disappearing-eyeballs bug: gltfio uses static bind-pose
     |                           culling boxes, so skinned meshes can be wrongly culled
     |                           at close range once the head turns). ON = old behavior.
+    |  render_mode <arg>       pbr/mtoon: avatar shading style. MTOON swaps the model's
+    |                           MToon materials to three-vrm cel shading + inverted-hull
+    |                           outline and forces LinearToneMapping; reloads the model
+    |                           (same path as the settings-page render-style toggle).
     |  breath <arg>            on | off (omit ai_arg = status): procedural breath
     |                           overlay (chest rise + shoulder shrug on the spine/
     |                           shoulder bones, ~15/min). Default ON; speaking
