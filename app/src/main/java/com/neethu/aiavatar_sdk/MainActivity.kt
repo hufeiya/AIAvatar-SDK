@@ -132,8 +132,10 @@ import com.neethu.aiavatar_sdk.skills.isSkillGestureAsset
 import com.neethu.aiavatar_sdk.skills.lookHereAssets
 import com.neethu.aiavatar_sdk.skills.rpsHandAssets
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
@@ -879,12 +881,15 @@ private fun DemoScreen(
     var gestureEndsAtMs by remember { mutableStateOf(0L) }
 
     val expressionList = remember(state) {
-        DemoUiState.resolveExpressions(state)
+        listOf("all") + DemoUiState.resolveExpressions(state)
     }
+    // 「all」表情循环演示的任务；点其他表情/再点 all 时取消。
+    var expressionCycleJob by remember { mutableStateOf<Job?>(null) }
 
     // Load the selected model whenever it changes. 导入模型（filesDir/vrms）按
     // 绝对路径加载，内置模型走 assets——两条入口共用同一渲染管线（loadModelBytes）。
     val loadSelectedModel: (Boolean) -> Unit = { force ->
+        expressionCycleJob?.cancel()
         uiState.selectedExpression = null
         controller.clearAllExpressions()
         val imported = ImportedModelLibrary.modelFile(context, uiState.selectedModel)
@@ -2517,14 +2522,41 @@ private fun DemoScreen(
                 selectedItem = uiState.selectedExpression,
                 onItemClick = { name ->
                     val fd = session?.faceDriver
-                    if (uiState.selectedExpression == name) {
+                    if (name == "all") {
+                        // 「all」= 把全部表情快速循环一遍；循环中再点一次则中止回中性。
+                        expressionCycleJob?.cancel()
+                        if (uiState.selectedExpression == "all") {
+                            if (fd != null) fd.clearManualExpression() else controller.clearAllExpressions()
+                            uiState.selectedExpression = null
+                        } else {
+                            val all = DemoUiState.resolveExpressions(state)
+                            uiState.selectedExpression = "all"
+                            expressionCycleJob = scope.launch {
+                                for (expr in all) {
+                                    if (fd != null) fd.applyManualExpression(expr, 1.0f)
+                                    else {
+                                        controller.clearAllExpressions()
+                                        controller.setExpression(expr, 1.0f)
+                                    }
+                                    delay(1000)
+                                    if (!isActive) return@launch
+                                }
+                                // 循环完回中性并取消高亮（isActive 守卫：用户已点
+                                // 其他表情时不得覆盖新的选中态）。
+                                if (fd != null) fd.clearManualExpression() else controller.clearAllExpressions()
+                                if (isActive) uiState.selectedExpression = null
+                            }
+                        }
+                    } else if (uiState.selectedExpression == name) {
                         // Toggle off — ease back to neutral (face driver) / snap (no session)
+                        expressionCycleJob?.cancel()
                         if (fd != null) fd.clearManualExpression() else controller.clearAllExpressions()
                         uiState.selectedExpression = null
                     } else {
                         // Apply the new expression at full weight. 有 FaceDriver 时走
                         // 手动表情通道：缓动进场（控制器已被驱动器切成 instant 模式，
                         // 直写 setExpression 是一帧闪现——真机踩过），且不自动归零。
+                        expressionCycleJob?.cancel()
                         if (fd != null) {
                             fd.applyManualExpression(name, 1.0f)
                         } else {
