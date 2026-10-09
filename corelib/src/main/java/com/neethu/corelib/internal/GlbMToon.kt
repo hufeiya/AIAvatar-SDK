@@ -2,6 +2,7 @@ package com.neethu.corelib.internal
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.neethu.corelib.RenderMode
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.cos
@@ -141,6 +142,16 @@ internal object GlbMToon {
         }
         return parseV1Materials(json)
     }
+
+    /**
+     * Render mode a fresh model load should use, decided by the model's own
+     * materials: any MToon-convertible material → [RenderMode.MTOON], anything
+     * else (including an unreadable/non-VRM JSON) → [RenderMode.PBR]. Drives
+     * the material-based auto-detection in [SoulLinkRenderer.loadModelBytes];
+     * manual mode overrides bypass it (they reload with autoRenderMode=false).
+     */
+    fun detectRenderMode(json: JsonObject?): RenderMode =
+        if (json == null || parseMaterials(json).isEmpty()) RenderMode.PBR else RenderMode.MTOON
 
     /**
      * Duplicate the MToon primitives of every mesh that is referenced by a

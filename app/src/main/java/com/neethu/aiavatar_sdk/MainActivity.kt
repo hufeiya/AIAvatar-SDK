@@ -107,6 +107,7 @@ import com.neethu.corelib.AvatarState
 import com.neethu.corelib.AvatarView
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
+import com.neethu.corelib.RenderMode
 import com.neethu.corelib.rememberAvatarController
 import com.neethu.aiavatar_sdk.i18n.AppLang
 import com.neethu.aiavatar_sdk.i18n.LocalStrings
@@ -639,6 +640,19 @@ internal class DemoUiState(context: Context) {
     }
 
     /**
+     * 渲染器按模型材质自动判定的渲染模式回写（有 MToon 材质→MToon，没有→PBR）。
+     * 模型已按该模式渲染完成，这里只同步设置页选中态与持久化——不走
+     * [updateRenderSettings] 进 controller，模式已生效无需再触发重载。
+     * 用户在设置页手动改模式仍即时生效（对当前模型），但下次切换模型重新
+     * 按材质判定，此处随之再次回写。
+     */
+    fun syncAutoRenderMode(mode: RenderMode) {
+        if (renderSettings.renderMode != mode) {
+            updateRenderSettings(renderSettings.copy(renderMode = mode))
+        }
+    }
+
+    /**
      * 更新 AI 对话配置并持久化。大模型身份（服务商/模型）变化时同步新开
      * 上下文：协议目录按所配模型钉住（AvatarSession 每上下文只注入一次），
      * 换模型后旧历史里的标签对新模型不再可靠，历史跟着换新。语音/Key 等
@@ -900,6 +914,14 @@ private fun DemoScreen(
     }
     LaunchedEffect(uiState.selectedModel) {
         loadSelectedModel(false)
+    }
+
+    // 渲染风格随模型材质自动判定（有 MToon 材质→MToon，没有→PBR）：渲染器在
+    // 加载里已按判定模式渲染，这里把结果回写设置页选中态与 prefs。手动在设置
+    // 页改模式仍即时生效，但仅对当前模型——下次切换模型重新按材质判定回写。
+    val detectedRenderMode by controller.detectedRenderMode.collectAsState()
+    LaunchedEffect(detectedRenderMode) {
+        detectedRenderMode?.let { uiState.syncAutoRenderMode(it) }
     }
 
     // ── 待机动作：直接挂到渲染控制器，与 AI 会话解耦 ──────────────────────

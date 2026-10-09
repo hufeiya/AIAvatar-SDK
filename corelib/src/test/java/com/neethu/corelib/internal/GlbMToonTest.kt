@@ -2,6 +2,7 @@ package com.neethu.corelib.internal
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.neethu.corelib.RenderMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -105,6 +106,35 @@ class GlbMToonTest {
             v0Json("""[{"shader": "Standard", "floatProperties": {}}]""")
         )
         assertTrue(materials.isEmpty())
+    }
+
+    // ── 材质自动判定（fresh 切模型：有 MToon 材质→MTOON，没有→PBR）────────
+
+    @Test
+    fun `detectRenderMode follows materials`() {
+        val mtoon = GlbMToon.detectRenderMode(
+            v0Json("""[{"shader": "VRM/MToon", "floatProperties": {}}]""")
+        )
+        assertEquals(RenderMode.MTOON, mtoon)
+        // VRM1 扩展同样判定为 MToon
+        val v1 = GlbMToon.detectRenderMode(
+            json("""{"materials": [{"extensions": {"VRMC_materials_mtoon": {}}}]}""")
+        )
+        assertEquals(RenderMode.MTOON, v1)
+    }
+
+    @Test
+    fun `detectRenderMode falls back to pbr without mtoon materials`() {
+        assertEquals(RenderMode.PBR, GlbMToon.detectRenderMode(null))
+        assertEquals(
+            RenderMode.PBR,
+            GlbMToon.detectRenderMode(v0Json("""[{"shader": "Standard", "floatProperties": {}}]""")),
+        )
+        // 纯 PBR 的 VRM1 模型（无扩展）
+        assertEquals(
+            RenderMode.PBR,
+            GlbMToon.detectRenderMode(json("""{"materials": [{"pbrMetallicRoughness": {}}]}""")),
+        )
     }
 
     // ── VRM 1.0 ──────────────────────────────────────────────────────────

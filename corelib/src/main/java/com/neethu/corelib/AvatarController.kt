@@ -63,6 +63,22 @@ class AvatarController {
      */
     val fps: StateFlow<Int> = _fps.asStateFlow()
 
+    private val _detectedRenderMode = MutableStateFlow<RenderMode?>(null)
+
+    /**
+     * Render mode auto-detected from the currently loaded model's materials,
+     * or `null` before the first auto-detected load.
+     *
+     * Fresh model switches ([loadModel] / [loadModelFromFile] without
+     * [forceReload]) follow the model: a model with MToon materials loads as
+     * [RenderMode.MTOON], a model without as [RenderMode.PBR] — regardless of
+     * the mode pushed via [updateRenderSettings] (a manual override applies to
+     * the current model only; the next switch re-detects from materials).
+     * Collect this to keep a settings UI / persistence layer in sync with what
+     * the renderer actually did.
+     */
+    val detectedRenderMode: StateFlow<RenderMode?> = _detectedRenderMode.asStateFlow()
+
     // ── Internal Renderer Binding ────────────────────────────────────────
 
     internal var renderer: SoulLinkRenderer? = null
@@ -83,6 +99,13 @@ class AvatarController {
     internal fun attach(renderer: SoulLinkRenderer) {
         this.renderer = renderer
         renderer.onFpsUpdated = { value -> _fps.value = value }
+        // A material-driven mode switch happens mid-load (the model is already
+        // rendered in the detected mode), so bookkeeping only: keep the reload
+        // trigger in sync and expose the value — no reload, no settings push.
+        renderer.onRenderModeAutoDetected = { mode ->
+            appliedRenderMode = mode
+            _detectedRenderMode.value = mode
+        }
     }
 
     /**
@@ -106,26 +129,35 @@ class AvatarController {
      * The [state] flow will transition:
      * `Idle → Loading → Ready` (or `Error`).
      *
+     * Unless [forceReload] is set (explicit reloads keep the pushed render
+     * mode), the render mode is decided by the model's own materials — see
+     * [detectedRenderMode].
+     *
      * @param assetPath Relative path inside `assets/`, e.g. `"models/avatar.vrm"`.
      * @param forceReload If `true`, re-load even if the same path is already loaded.
      */
     fun loadModel(assetPath: String, forceReload: Boolean = false) {
         currentModelIsFile = false
-        loadModelInternal(assetPath, forceReload) { it.loadModel(assetPath) }
+        loadModelInternal(assetPath, forceReload) {
+            it.loadModel(assetPath, autoRenderMode = !forceReload)
+        }
     }
 
     /**
      * Load a VRM/GLB model from a file on local storage — for models imported
      * at runtime (app data dir) instead of shipped in `assets/`. Same state
      * transitions and idempotency rules as [loadModel]; the idempotency key is
-     * the absolute file path.
+     * the absolute file path. Render-mode auto-detection behaves like in
+     * [loadModel] (file loads via [forceReload] keep the pushed mode).
      *
      * @param filePath Absolute path to the `.vrm`/`.glb` file on the filesystem.
      * @param forceReload If `true`, re-load even if the same path is already loaded.
      */
     fun loadModelFromFile(filePath: String, forceReload: Boolean = false) {
         currentModelIsFile = true
-        loadModelInternal(filePath, forceReload) { it.loadModelFromFile(filePath) }
+        loadModelInternal(filePath, forceReload) {
+            it.loadModelFromFile(filePath, autoRenderMode = !forceReload)
+        }
     }
 
     private fun loadModelInternal(
@@ -495,6 +527,10 @@ class AvatarController {
      * and [RenderMode.MTOON] reloads the currently loaded model, because the
      * MToon outline pass needs its duplicated GLB primitives and the material
      * swap happens at load time.
+     *
+     * A mode pushed here is a manual override: it applies to the currently
+     * loaded model, and the next fresh model switch re-detects the mode from
+     * the new model's materials (see [detectedRenderMode]).
      *
      * [QualityPreset] offers one-click bundles:
      *

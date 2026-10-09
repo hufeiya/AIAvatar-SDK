@@ -349,7 +349,10 @@ class Strings(val lang: Lang) {
     val renderModeMtoon: String get() = zh("MToon 卡通", "MToon (anime)")
     val renderModeMtoonSubtitle: String get() =
         zh("三段式赛璐璐着色 + 描边 + matcap，three-vrm 同款观感", "Three-tone cel shading + outline + matcap, matching the three-vrm look")
-    val renderModeHint: String get() = zh("切换时重新加载当前模型", "Switching reloads the current model")
+    val renderModeHint: String get() = zh(
+        "切换模型时按材质自动选择；此处手动切换仅对当前模型生效",
+        "Auto-selected from model materials on switch; a manual pick applies to the current model only",
+    )
     val lightingHeader: String get() = zh("光照与环境 (Lighting & IBL)", "Lighting & environment (IBL)")
     val iblIntensity: String get() = zh("IBL 环境光强度", "IBL ambient intensity")
     val iblRotation: String get() = zh("IBL 环境光旋转", "IBL ambient rotation")

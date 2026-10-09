@@ -196,6 +196,16 @@ internal class SoulLinkRenderer(
 
     // FPS measurement (reported via onFpsUpdated every FPS_WINDOW_NANOS)
     var onFpsUpdated: ((Int) -> Unit)? = null
+
+    /**
+     * Fired when a fresh model load auto-switched the render mode to match the
+     * model's materials (fresh switches follow the model: MToon materials →
+     * MTOON, otherwise PBR — regardless of the pushed setting). Carries the
+     * mode the model was actually loaded with; the controller relays it so the
+     * app can sync its settings UI/persistence. Manual reloads (pushed mode)
+     * never fire this.
+     */
+    var onRenderModeAutoDetected: ((RenderMode) -> Unit)? = null
     private var fpsFrameCount = 0
     private var fpsWindowStartNanos = 0L
 
@@ -824,12 +834,19 @@ internal class SoulLinkRenderer(
 
     /**
      * Load a VRM/GLB model from assets.
+     *
+     * With [autoRenderMode] (fresh model switches) the render mode is decided
+     * by the model's own materials — MToon materials load as MTOON, anything
+     * else as PBR — overriding the pushed setting and reporting the choice via
+     * [onRenderModeAutoDetected]. Without it (explicit reloads) the pushed
+     * setting wins unchanged.
+     *
      * @throws Exception if the model cannot be loaded.
      */
-    fun loadModel(assetsPath: String) {
+    fun loadModel(assetsPath: String, autoRenderMode: Boolean = false) {
         val assets = surfaceView.context.assets
         assets.open(assetsPath).use { input ->
-            loadModelBytes(input.readBytes())
+            loadModelBytes(input.readBytes(), autoRenderMode)
         }
     }
 
@@ -839,11 +856,11 @@ internal class SoulLinkRenderer(
      * pipeline as [loadModel]; imported models behave exactly like built-ins.
      * @throws Exception if the model cannot be loaded.
      */
-    fun loadModelFromFile(path: String) {
+    fun loadModelFromFile(path: String, autoRenderMode: Boolean = false) {
         val file = java.io.File(path)
         if (!file.isFile) throw java.io.FileNotFoundException("model file not found: $path")
         file.inputStream().use { input ->
-            loadModelBytes(input.readBytes())
+            loadModelBytes(input.readBytes(), autoRenderMode)
         }
     }
 
@@ -852,7 +869,7 @@ internal class SoulLinkRenderer(
      * engine teardown/rebuild, VRM 0.x root flip, expression/springbone/gaze/
      * breath/mimic binding. Shared by [loadModel] and [loadModelFromFile].
      */
-    private fun loadModelBytes(bytes: ByteArray) {
+    private fun loadModelBytes(bytes: ByteArray, autoRenderMode: Boolean) {
         val buffer = ByteBuffer.wrap(bytes)
 
         // Pre-process: inject default morph weights so gltfio uploads morph target
@@ -865,35 +882,45 @@ internal class SoulLinkRenderer(
         val loadBuffer = GlbBoneCuller.cullUnusedBones(morphPatched)
             ?: morphPatched.also { it.rewind() }
 
-        // Pre-process (MToon mode only): parse the VRM material extensions and
-        // duplicate the MToon primitives so each gets an outline pass slot.
+        // Pre-process: parse the VRM material extensions. The parse decides two
+        // things: with [autoRenderMode], whether this fresh load switches the
+        // render mode to match the model (MToon materials → MTOON, else PBR —
+        // the model's own look wins over the pushed setting on every model
+        // switch; manual mode changes reload with autoRenderMode=false and
+        // keep the pushed mode); and — in the effective MTOON mode — which
+        // primitives get duplicated as outline pass slots.
         // Runs AFTER the bone culler — the culler rewrites joint accessors
         // shared by primitives, and duplicating first would make it process
         // the shared accessors twice.
         var mtoonParse: GlbMToon.ParseResult? = null
         var finalBuffer = loadBuffer
-        if (renderSettings.renderMode == RenderMode.MTOON) {
-            try {
-                // readJson on a duplicate: leaves loadBuffer's position untouched
-                GlbMToon.readJson(loadBuffer.duplicate())?.let { gltfJson ->
-                    val materials = GlbMToon.parseMaterials(gltfJson)
-                    if (materials.isNotEmpty()) {
-                        val (patched, layouts) = GlbMToon.patchGlb(loadBuffer, gltfJson, materials)
-                        if (layouts.isNotEmpty()) {
-                            finalBuffer = patched
-                            mtoonParse = GlbMToon.ParseResult(
-                                isVrm0 = parseVrmMetaVersion(bytes) == "0",
-                                materials = materials,
-                                meshLayouts = layouts,
-                            )
-                        }
-                    }
+        try {
+            // readJson on a duplicate: leaves loadBuffer's position untouched
+            val gltfJson = GlbMToon.readJson(loadBuffer.duplicate())
+            if (autoRenderMode) {
+                val detected = GlbMToon.detectRenderMode(gltfJson)
+                if (detected != renderSettings.renderMode) {
+                    renderSettings = renderSettings.copy(renderMode = detected)
+                    onRenderModeAutoDetected?.invoke(detected)
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("SoulLinkRenderer", "MToon GLB patch failed, falling back to PBR", e)
-                mtoonParse = null
-                finalBuffer = loadBuffer
             }
+            val materials = gltfJson?.let { GlbMToon.parseMaterials(it) }
+            if (renderSettings.renderMode == RenderMode.MTOON && !materials.isNullOrEmpty()) {
+                val json = gltfJson ?: error("GLB json unreadable for MToon patch")
+                val (patched, layouts) = GlbMToon.patchGlb(loadBuffer, json, materials)
+                if (layouts.isNotEmpty()) {
+                    finalBuffer = patched
+                    mtoonParse = GlbMToon.ParseResult(
+                        isVrm0 = parseVrmMetaVersion(bytes) == "0",
+                        materials = materials,
+                        meshLayouts = layouts,
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "MToon GLB patch failed, falling back to PBR", e)
+            mtoonParse = null
+            finalBuffer = loadBuffer
         }
 
         // Clear old physics and animation state before loading the new model.
@@ -1085,6 +1112,11 @@ internal class SoulLinkRenderer(
                 mtoonApplier = applier
                 mtoonActive = true
                 applyMToonKeyLight()
+                // The applyViewSettings inside loadEnvironment ran while
+                // mtoonActive was still false, so the MToon LINEAR tone mapping
+                // (mtoonActive drives it, see applyViewSettings) was not yet in
+                // effect — re-apply now that the swap actually happened.
+                applyViewSettings()
             }
         }
     }

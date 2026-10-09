@@ -200,13 +200,14 @@ internal suspend fun executeAiCommand(
                     null -> throw IllegalArgumentException("render_mode expects 'pbr' or 'mtoon'")
                     else -> throw IllegalArgumentException("render_mode expects 'pbr' or 'mtoon', got '${command.arg}'")
                 }
-                // 与设置页同一条链路：更新 uiState + controller，
-                // renderMode 变化的模型重载由 AvatarController 驱动
+                // 与设置页同一条链路（手动覆盖仅对当前模型生效，下次切换
+                // 模型重新按材质自动判定）；renderMode 变化的模型重载由
+                // AvatarController 驱动
                 val newSettings = uiState.renderSettings.copy(renderMode = mode)
                 uiState.updateRenderSettings(newSettings)
                 controller.updateRenderSettings(newSettings)
-                if (mode == RenderMode.MTOON) "render mode MTOON (cel shading + outline, model reloaded)"
-                else "render mode PBR (model reloaded)"
+                if (mode == RenderMode.MTOON) "render mode MTOON (cel shading + outline, model reloaded; manual override until the next model switch)"
+                else "render mode PBR (model reloaded; manual override until the next model switch)"
             }
             "breath" -> when (command.arg?.lowercase()) {
                 "on", "true", "1" -> {
