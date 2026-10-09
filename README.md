@@ -10,11 +10,11 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%2010%2B%20%2F%20API%2029%2B-green.svg?logo=android)](https://developer.android.com)
 [![GitHub release](https://img.shields.io/github/v/release/hufeiya/AIAvatar-SDK?logo=github)](https://github.com/hufeiya/AIAvatar-SDK/releases)
 
-开源 Android 3D 虚拟人 SDK：**Filament PBR 渲染 + 纯客户端 AI 对话（LLM / TTS 直连 OpenAI 兼容 API）+ 端侧口型 / 表情 / 微动作驱动**——没有自建服务端，语音合成、口型同步、情绪表达、视线、呼吸、眨眼全部在端侧完成。
+开源 Android 3D 虚拟人 SDK：**Filament PBR / MToon 渲染 + 纯客户端 AI 对话（LLM / TTS 直连 OpenAI 兼容 API）+ 端侧口型 / 表情 / 微动作驱动**——没有自建服务端，语音合成、口型同步、情绪表达、视线、呼吸、眨眼全部在端侧完成。
 
 | | |
 |---|---|
-| 渲染 | Filament 1.68（PBR）、VRM / GLB 模型、弹簧骨骼物理、IBL 环境光、程序化运镜 |
+| 渲染 | Filament 1.68（PBR 写实 + MToon 卡通，按模型材质自动切换）、VRM / GLB 模型、弹簧骨骼物理、IBL 环境光、程序化运镜 |
 | 对话编排 | LLM 流式 → 智能断句 → 并发 TTS → 顺序播放 → 口型 / 表情全端侧驱动 |
 | 多模态行内标签 | `<emo:joy>` 表情、`<act:wave>` 动作（VRMA）、`<cam:closeup>` 运镜，LLM 直出 |
 | 语音 | TTS：Edge-TTS（**免费无 Key**）/ OpenAI 兼容 / 火山引擎；LLM：任意 OpenAI 兼容端点 |
@@ -24,7 +24,7 @@
 
 | 弹簧骨骼 | 拟人微动作 | 52 表情 |
 |:---:|:---:|:---:|
-| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/2f9d5407-5399-414a-b6fb-6d3c98759b16" /><br>**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
+| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0e0f838b-524c-41eb-adff-7aa9f356ea2d" /><br>**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**程序化运镜**<br>LLM 行内 `<cam:closeup>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
 
 > 注：动图中的商业模型仅供演示，因版权问题不内置在项目内，可导入自己的 VRM 模型使用。
@@ -39,8 +39,25 @@
 - **导入外部 VRM 模型**：文件选择器导入即换人，表情目录自动刷新、对话上下文自动轮换
 - **语音输入三种形态**：按住说话 / 连续聆听（VAD 自动断句）/ 系统 ASR
 - **中英双语**：提示词、默认音色、UI 文案全量 zh / en
+- **MToon 卡通渲染**：VRM 0.x / 1.0 的 MToon 材质自动走赛璐璐卡通管线（两档着色 + 轮廓描边 + Matcap + Rim 光），与 three-vrm 参考渲染逐像素对齐；同一模型的非 MToon 材质仍走 PBR，也可在设置中手动切换
 - **开箱即亮的渲染**：内置 IBL 环境光零资产；Compose（`AvatarView`）与传统 View（`AvatarSurfaceView`）双入口
 - **对话历史持久化**：Room 存储、多上下文管理、人物卡跨会话重建自动重放
+
+## MToon 卡通渲染
+
+写实 PBR 之外，SDK 内置 VRM 标准 MToon 卡通渲染：赛璐璐两档着色、轮廓描边（inverted hull）、Matcap、Rim 光、透明三变体（OPAQUE / MASK / BLEND）、逐贴图 UV 变换全部支持，VRM 0.x 与 VRM 1.0 通吃。渲染模式按模型材质自动判定——带 MToon 材质的模型自动走卡通管线，纯 PBR 模型不受影响；也可通过 `AvatarRenderSettings.renderMode` 手动指定（切换会重载模型）。
+
+MToon 着色器以 three-vrm 的实现为基准移植，并与 three.js + @pixiv/three-vrm v3.5.1 的参考渲染做了多模型逐像素比对：
+
+**VRM 1.0 基线模型 —— 整体 RMSE 0.53 / 255，像素级一致**
+
+<img width="3080" height="1024" alt="Image" src="https://github.com/user-attachments/assets/fe6e0deb-1cc3-4c2c-ace7-5bf008abf034" />
+
+**VRM 0.x 模型（半透明 + 世界坐标轮廓 + 轮廓宽度遮罩）—— RMSE 6.60 / 255，差异集中在发丝边缘**
+
+<img width="3080" height="1024" alt="Image" src="https://github.com/user-attachments/assets/37d55f7d-d3d0-47f0-b8db-44c04eabbedc" />
+
+> 每组图从左到右：three.js + three-vrm 参考渲染 ｜ Filament MToon 渲染 ｜ 差异热图。对比所用模型仅作验证，不随 SDK 分发。
 
 ## 架构
 
@@ -209,7 +226,7 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 ## API 速查
 
 **`AvatarController`**（渲染，corelib）
-`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings`
+`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode`（按模型材质判定的渲染模式）
 
 **渲染入口**（corelib）
 `AvatarView(modifier, controller, config)` Compose · `AvatarSurfaceView(context, attrs, style, config, controller)` 传统 View（生命周期自动绑定 Activity/Fragment，`controller` 属性取控制器）
@@ -229,7 +246,7 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 
 ## Demo 工程
 
-- **`MainActivity`** —— 全功能演示：语音输入（按住说话 / 连续聆听 / 系统 ASR）、视频通话模式（摄像头注视 / 动作模仿 / 表情跟随）、技能（猜拳 / 看这边 / 模仿我）、画质设置、人物卡管理、对话历史。
+- **`MainActivity`** —— 全功能演示：语音输入（按住说话 / 连续聆听 / 系统 ASR）、视频通话模式（摄像头注视 / 动作模仿 / 表情跟随）、技能（猜拳 / 看这边 / 模仿我）、画质与渲染风格（PBR / MToon）设置、人物卡管理、对话历史。
 - **`SimpleDemoActivity`** —— 本 README 的最小接入对照样例：
 
 ```bash
@@ -247,7 +264,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.SimpleDemoActivity
 **渲染与模型格式**
 
 - [Filament](https://github.com/google/filament)（Google）— PBR 渲染引擎，`:corelib` 的渲染底座
-- [three-vrm](https://github.com/pixiv/three-vrm)（pixiv）— VRM 运行时语义的参照实现（表情权重、hips 拖拽、视线等行为对齐）
+- [three-vrm](https://github.com/pixiv/three-vrm)（pixiv）— VRM 运行时语义的参照实现（表情权重、hips 拖拽、视线等行为对齐），MToon 卡通着色器亦以其渲染结果为对齐基准
 - [VRM](https://vrm.dev/)（VRM Consortium）— 开放 3D 虚拟人模型格式与 VRMA 动画规范
 
 **编排与「生命感」算法**

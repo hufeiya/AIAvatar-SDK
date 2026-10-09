@@ -10,11 +10,11 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%2010%2B%20%2F%20API%2029%2B-green.svg?logo=android)](https://developer.android.com)
 [![GitHub release](https://img.shields.io/github/v/release/hufeiya/AIAvatar-SDK?logo=github)](https://github.com/hufeiya/AIAvatar-SDK/releases)
 
-An open-source Android 3D avatar SDK: **Filament PBR rendering + a fully client-side AI conversation stack (LLM / TTS connecting directly to OpenAI-compatible APIs) + on-device lip sync / expressions / micro-motions** — no self-hosted server. Speech synthesis, lip sync, emotional expression, gaze, breathing, and blinking all run on the device.
+An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully client-side AI conversation stack (LLM / TTS connecting directly to OpenAI-compatible APIs) + on-device lip sync / expressions / micro-motions** — no self-hosted server. Speech synthesis, lip sync, emotional expression, gaze, breathing, and blinking all run on the device.
 
 | | |
 |---|---|
-| Rendering | Filament 1.68 (PBR), VRM / GLB models, spring-bone physics, IBL environment lighting, procedural camera work |
+| Rendering | Filament 1.68 (realistic PBR + MToon toon shading, auto-selected per model), VRM / GLB models, spring-bone physics, IBL environment lighting, procedural camera work |
 | Conversation pipeline | Streaming LLM → smart sentence splitting → concurrent TTS → sequential playback → fully on-device lip sync / expressions |
 | Multimodal inline tags | `<emo:joy>` expressions, `<act:wave>` motions (VRMA), `<cam:closeup>` camera shots — emitted directly by the LLM |
 | Voice | TTS: Edge-TTS (**free, no key**) / OpenAI-compatible / Volcano Engine; LLM: any OpenAI-compatible endpoint |
@@ -24,7 +24,7 @@ An open-source Android 3D avatar SDK: **Filament PBR rendering + a fully client-
 
 | Spring Bones | Human-like Micro-motions | 52 Expressions |
 |:---:|:---:|:---:|
-| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/2f9d5407-5399-414a-b6fb-6d3c98759b16" /><br>**Spring-bone physics**<br>Hair, clothes, and accessories sway in real time with movement; dragging the body or breathing ripples everything together | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**Human-like micro-motions**<br>Breathing (faster while speaking), eye saccades, gaze at the lens, natural blinking, and lip sync — all driven on-device | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52-expression driving**<br>ARKit 52 blendshapes + VRM preset emotions, emitted inline by the LLM via `<emo:>`, with automatic fallback when morph targets are missing |
+| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0e0f838b-524c-41eb-adff-7aa9f356ea2d" /><br>**Spring-bone physics**<br>Hair, clothes, and accessories sway in real time with movement; dragging the body or breathing ripples everything together | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**Human-like micro-motions**<br>Breathing (faster while speaking), eye saccades, gaze at the lens, natural blinking, and lip sync — all driven on-device | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52-expression driving**<br>ARKit 52 blendshapes + VRM preset emotions, emitted inline by the LLM via `<emo:>`, with automatic fallback when morph targets are missing |
 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**Character card import**<br>SillyTavern V1 / V2 / V3 PNG cards work with one tap; 18 preset characters built in, with overridable persona and prompts | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**Avatar skills**<br>Rock-Paper-Scissors (local hand play + vision / MediaPipe judging), Look Over Here (head-turn reaction game), Mimic Me (mirror your motion via the camera); the framework is extensible | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**Procedural camera**<br>The LLM emits cinematic shots inline via `<cam:closeup>`; switch between close-up / long shot / orbit in one tag, and observe freely with gestures |
 
 > Note: The commercial models shown in the GIFs are for demonstration only and are not bundled with the project due to copyright restrictions — you can import your own VRM model instead.
@@ -39,8 +39,25 @@ An open-source Android 3D avatar SDK: **Filament PBR rendering + a fully client-
 - **Import external VRM models**: pick a file and swap characters instantly; the expression catalog refreshes automatically and conversation contexts rotate per model
 - **Three voice input modes**: push-to-talk / continuous listening (VAD auto-splitting) / system ASR
 - **Bilingual zh / en**: prompts, default voices, and UI strings fully localized
+- **MToon toon shading**: MToon materials (VRM 0.x / 1.0) automatically render through the cel-shaded pipeline (two-tone shading + outlines + matcap + rim light), pixel-aligned with the three-vrm reference; non-MToon materials of the same model keep their PBR look, and the mode can be switched manually
 - **Bright rendering out of the box**: built-in IBL environment lighting with zero assets; dual entry points for Compose (`AvatarView`) and classic View (`AvatarSurfaceView`)
 - **Persistent chat history**: Room storage, multi-context management, and automatic replay of character cards across session rebuilds
+
+## MToon Toon Shading
+
+Beyond realistic PBR, the SDK ships VRM-standard MToon toon rendering: cel-shaded two-tone diffuse, inverted-hull outlines, matcap, rim light, all three transparency modes (OPAQUE / MASK / BLEND), and per-texture UV transforms — for both VRM 0.x and VRM 1.0. The render mode is auto-detected from the model's materials: models carrying MToon materials render through the toon pipeline, while pure PBR models are untouched; you can also set it manually via `AvatarRenderSettings.renderMode` (switching reloads the model).
+
+The MToon shaders are ported from three-vrm's implementation as the baseline and were verified pixel-by-pixel against three.js + @pixiv/three-vrm v3.5.1 reference renders across multiple models:
+
+**VRM 1.0 baseline model — overall RMSE 0.53 / 255, pixel-level match**
+
+<img width="3080" height="1024" alt="Image" src="https://github.com/user-attachments/assets/fe6e0deb-1cc3-4c2c-ace7-5bf008abf034" />
+
+**VRM 0.x model (transparency + world-space outline + outline width mask) — RMSE 6.60 / 255, differences confined to fine hair strands**
+
+<img width="3080" height="1024" alt="Image" src="https://github.com/user-attachments/assets/37d55f7d-d3d0-47f0-b8db-44c04eabbedc" />
+
+> Each strip, left to right: three.js + three-vrm reference render ｜ Filament MToon render ｜ difference heatmap. The models shown are for verification only and are not distributed with the SDK.
 
 ## Architecture
 
@@ -209,7 +226,7 @@ Lip sync, blinking, breathing, and expression arbitration are driven automatical
 ## API Quick Reference
 
 **`AvatarController`** (rendering, corelib)
-`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings`
+`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode` (render mode auto-detected from the model's materials)
 
 **Render entry points** (corelib)
 `AvatarView(modifier, controller, config)` Compose · `AvatarSurfaceView(context, attrs, style, config, controller)` classic View (lifecycle auto-bound to Activity/Fragment; get the controller via the `controller` property)
@@ -229,7 +246,7 @@ Lip sync, blinking, breathing, and expression arbitration are driven automatical
 
 ## Demo Project
 
-- **`MainActivity`** — full-featured showcase: voice input (push-to-talk / continuous listening / system ASR), video-call mode (camera gaze / motion mimicry / expression mirroring), skills (Rock-Paper-Scissors / Look Over Here / Mimic Me), quality settings, character card management, chat history.
+- **`MainActivity`** — full-featured showcase: voice input (push-to-talk / continuous listening / system ASR), video-call mode (camera gaze / motion mimicry / expression mirroring), skills (Rock-Paper-Scissors / Look Over Here / Mimic Me), quality & render style (PBR / MToon) settings, character card management, chat history.
 - **`SimpleDemoActivity`** — the minimal sample matching this README:
 
 ```bash
@@ -247,7 +264,7 @@ This project's implementation benefits greatly from the following open-source pr
 **Rendering & model formats**
 
 - [Filament](https://github.com/google/filament) (Google) — PBR rendering engine, the rendering foundation of `:corelib`
-- [three-vrm](https://github.com/pixiv/three-vrm) (pixiv) — reference implementation for VRM runtime semantics (expression weights, hips dragging, gaze, and other behaviors aligned with it)
+- [three-vrm](https://github.com/pixiv/three-vrm) (pixiv) — reference implementation for VRM runtime semantics (expression weights, hips dragging, gaze, and other behaviors aligned with it); the MToon toon shader is aligned against its renders as the baseline
 - [VRM](https://vrm.dev/) (VRM Consortium) — the open 3D avatar model format and VRMA animation spec
 
 **Orchestration & "lifelike" algorithms**
