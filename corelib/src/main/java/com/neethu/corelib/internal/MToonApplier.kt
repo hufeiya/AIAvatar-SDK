@@ -32,8 +32,10 @@ import kotlin.math.sqrt
  * the surface — zero per-frame bookkeeping.
  *
  * Owns every GPU resource it creates (textures, material instances, the
- * material set); [destroy] must run before the asset is destroyed — see
- * [SoulLinkRenderer]'s model-load path. Filament's color grading must be on
+ * material set); [destroy] must run AFTER the asset is destroyed — the
+ * renderables hold the instances, and filament's Engine.destroyMaterialInstance
+ * precondition aborts on any still-referenced instance (see
+ * [SoulLinkRenderer]'s model-load path). Filament's color grading must be on
  * LinearToneMapper while these materials are active (they output linear
  * color; the grading pass performs the sRGB encode).
  */

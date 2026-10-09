@@ -896,12 +896,6 @@ internal class SoulLinkRenderer(
             }
         }
 
-        // MToon GPU resources reference the outgoing asset's renderables —
-        // release them before gltfio destroys the asset.
-        mtoonApplier?.destroy()
-        mtoonApplier = null
-        mtoonActive = false
-
         // Clear old physics and animation state before loading the new model.
         // This prevents the Choreographer from trying to access destroyed entities
         // if the ensuing initialization crashes or throws an exception.
@@ -915,6 +909,17 @@ internal class SoulLinkRenderer(
         mimicEngine = null
         springBoneManager = null
         animator = null
+
+        // Free the outgoing model BEFORE the MToon applier: filament refuses
+        // Engine.destroyMaterialInstance while any live renderable still holds
+        // the instance (PreconditionPanic "still in use by Renderable"), and
+        // the MToon instances live on the outgoing asset's renderables.
+        // loadModelGlb destroys the old asset only inside itself — one step
+        // too late (SIGABRT on every MToon→MToon model switch, 2026-10-09).
+        modelViewer.destroyModel()
+        mtoonApplier?.destroy()
+        mtoonApplier = null
+        mtoonActive = false
 
         // Load model into Filament
         modelViewer.loadModelGlb(finalBuffer)
@@ -1549,6 +1554,10 @@ internal class SoulLinkRenderer(
         stopRendering()
         shotSteering = false
         activeShot = null
+        // Same in-use precondition as in loadModelBytes: the avatar's
+        // renderables still hold the MToon material instances, so the model
+        // must go first or destroyMaterialInstance aborts.
+        modelViewer.destroyModel()
         mtoonApplier?.destroy()
         mtoonApplier = null
         mtoonFactory?.destroy()
