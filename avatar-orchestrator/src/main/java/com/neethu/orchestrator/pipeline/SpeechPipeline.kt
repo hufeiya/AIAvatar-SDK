@@ -8,12 +8,15 @@ import com.neethu.orchestrator.audio.PlaybackQueue
 import com.neethu.orchestrator.audio.PcmDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /**
  * Sentence-level speech pipeline — port of AIRI's `createSpeechPipeline`:
@@ -33,6 +36,12 @@ class SpeechPipeline(
     private val queue: PlaybackQueue,
     private val lipSyncProcessor: LipSyncProcessor?,
     private val ttsMaxConcurrent: Int = 4,
+    /**
+     * Where decode + lip-sync analysis run. Defaults to the shared background
+     * pool; JVM tests inject an unconfined dispatcher to keep the original
+     * synchronous sequencing (their fakes + assertions are order-sensitive).
+     */
+    private val heavyWorkDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
 
     interface Listener {
@@ -79,8 +88,20 @@ class SpeechPipeline(
                 semaphore.withPermit {
                     try {
                         val result = tts.synthesize(text, ttsConfig)
-                        val decoded = PcmDecoder.decode(result)
-                        val timeline = lipSyncProcessor?.analyze(decoded.pcm, decoded.sampleRateHz)
+                        // Decode + lip-sync analysis are pure CPU over the whole
+                        // clip (MediaCodec for MP3, an MFCC window sweep for the
+                        // viseme timeline: tens to ~200 ms for a long sentence).
+                        // The parent scope is usually Dispatchers.Main (the render
+                        // Choreographer lives there) — without this switch every
+                        // sentence's arrival stalls the frame loop (measured 60→40
+                        // fps dips on device). ttsMaxConcurrent>1 makes it worse:
+                        // several sentences can decode back-to-back.
+                        val decoded = withContext(heavyWorkDispatcher) {
+                            PcmDecoder.decode(result)
+                        }
+                        val timeline = withContext(heavyWorkDispatcher) {
+                            lipSyncProcessor?.analyze(decoded.pcm, decoded.sampleRateHz)
+                        }
                         onSynthesized(
                             PlaybackItem(
                                 sequence = seq,

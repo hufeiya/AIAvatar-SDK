@@ -159,6 +159,9 @@ class AvatarSessionTagsTest {
             playbackQueue = queue,
             lipSyncProcessor = null,
             gestureDriver = gestures,
+            // decode/lip-sync analysis on the same unconfined dispatcher keeps
+            // the pre-Default synchronous sequencing these assertions rely on
+            heavyWorkDispatcher = UnconfinedTestDispatcher(),
         )
 
     private fun kotlinx.coroutines.test.TestScope.collectInto(

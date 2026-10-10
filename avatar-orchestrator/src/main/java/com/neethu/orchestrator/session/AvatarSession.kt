@@ -37,6 +37,7 @@ import com.neethu.orchestrator.pipeline.SpeechPipeline
 import com.neethu.orchestrator.skill.SkillHost
 import com.neethu.orchestrator.skill.SkillRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,6 +102,11 @@ class AvatarSession(
      * 技能状态机照常运转但能力调用（出动作/抓拍/VAD 调参）全部落空。
      */
     skillHost: SkillHost? = null,
+    /**
+     * TTS 句子的解码 + 口型分析所在线程（默认共享后台池）。生产注入留默认；
+     * JVM 单测传与 scope 同款的 unconfined dispatcher 保持同步时序。
+     */
+    heavyWorkDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
 
     data class Options(
@@ -213,7 +219,8 @@ class AvatarSession(
     val skills: SkillRegistry = SkillRegistry(skillHost) { emit(it) }
 
     private val queue: PlaybackQueue = playbackQueue ?: AudioTrackPlaybackQueue()
-    private val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent)
+    private val pipeline =
+        SpeechPipeline(scope, tts, queue, lipSyncProcessor, options.ttsMaxConcurrent, heavyWorkDispatcher)
     private val extractor: TagExtractor = InlineTagExtractor()
     private val chunker = SentenceChunker(options.chunkerOptions)
     private val store: ConversationStore = store

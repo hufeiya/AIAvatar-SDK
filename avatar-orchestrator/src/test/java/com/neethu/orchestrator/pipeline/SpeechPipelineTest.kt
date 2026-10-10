@@ -50,7 +50,12 @@ class SpeechPipelineTest {
     }
 
     private fun newPipeline(scope: CoroutineScope, tts: TtsAdapter, queue: FakeQueue): SpeechPipeline {
-        val pipeline = SpeechPipeline(scope, tts, queue, lipSyncProcessor = null, ttsMaxConcurrent = 4)
+        val pipeline = SpeechPipeline(
+            scope, tts, queue,
+            lipSyncProcessor = null,
+            ttsMaxConcurrent = 4,
+            heavyWorkDispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher(),
+        )
         // Mirror AvatarSession's wiring: settled playback advances the turn.
         queue.listener = object : PlaybackQueue.Listener {
             override fun onPlaybackStarted(item: PlaybackItem) = Unit
