@@ -88,8 +88,8 @@ MToon 着色器以 three-vrm 的实现为基准移植，并与 three.js + @pixiv
 ```kotlin
 // 你的 app/build.gradle.kts
 dependencies {
-    implementation("io.github.hufeiya:corelib:0.1.2")                 // 渲染底座
-    implementation("io.github.hufeiya:avatar-orchestrator:0.1.2")     // 会话编排（含 AIAvatarSdk 门面）
+    implementation("io.github.hufeiya:corelib:0.1.3")                 // 渲染底座
+    implementation("io.github.hufeiya:avatar-orchestrator:0.1.3")     // 会话编排（含 AIAvatarSdk 门面）
     // io.github.hufeiya:avatar-ai-adapter 会作为 orchestrator 的传递依赖自动引入
 }
 ```
