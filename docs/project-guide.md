@@ -243,7 +243,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 | 人物卡 | 卡片面板 / `import_card` | SillyTavern V1/V2/V3 PNG+JSON 解析；18 预置卡 grid；人设提示词可编辑覆写 | `CharacterCardParser`、`PresetCards*`、`CardLibrary` |
 | 多上下文历史 | 设置→上下文 / `new_context` | Room 持久化；请求带最近 40 条；换 LLM 模型/换 VRM 模型自动轮换上下文 | `RoomConversationStore`、`llmIdentitySignature` |
 | 中英双语 | 设置→语言 | Lang 枚举贯穿；提示词四目录+UI Strings+预置卡翻译；语言变化重建会话不轮换上下文 | `i18n/` 四目录、`Strings.kt` |
-| 智能体工具调用 | 自动（模型请求）/ `tools_call` `observe` | 回合内工具循环（≤3 轮）；内置 get_device_time/get_current_view/observe_camera；工具失败转 isError 回灌；400 自动降级禁用；Qwen3.8 关思考的悬空衔接句→required 静默重试+模板文本解析兜底（⚠ 视觉+工具选型优先 Qwen3-VL-32B/doubao，见矩阵可靠性节） | `agent/ToolRegistry`、`AgentToolCatalog`、`TemplateToolCalls`、`OpenAiCompatibleLlmAdapter` |
+| 智能体工具调用 | 自动（模型请求）/ `tools_call` `observe` | 回合内工具循环（≤3 轮）；内置 get_device_time/get_current_view/observe_camera + P0.5 设备六件（get_device_status/set_flashlight/send_haptic/read_clipboard〔独立开关默认关〕/set_ambience/take_photo）；工具失败转 isError 回灌；400 自动降级禁用；Qwen3.8 关思考的悬空衔接句→required 静默重试+模板文本解析兜底（⚠ 视觉+工具选型优先 Qwen3-VL-32B/doubao，见矩阵可靠性节） | `agent/ToolRegistry`、`AgentToolCatalog`、`TemplateToolCalls`、`AgentDeviceTools`、`OpenAiCompatibleLlmAdapter` |
 | 新手引导 | 未配 Key 冷启动自动弹 | 双受众（CN=硅基流动 / INTL=OpenRouter free+Edge-TTS+系统 ASR），一键配置，点输入框重弹 | `OnboardingGuide` |
 
 ### 3.3 语音输入与感知

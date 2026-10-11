@@ -131,6 +131,54 @@ data class AvatarRenderSettings(
 )
 
 /**
+ * 舞台氛围预设(P0.5 智能体工具 `set_ambience`,docs/agent-tools-expansion.md §2.5):
+ * 现有渲染参数的组合预置,零渲染器改动——只动 [AvatarRenderSettings.lightingRig]/
+ * [AvatarRenderSettings.iblIntensity]/[AvatarRenderSettings.bloomEnabled] 三个字段,
+ * 阴影/AA/色调映射/renderMode 一概不碰(PCSS 软阴影在 Adreno 上是 1-5 FPS 悬崖,
+ * 永不进预设)。
+ *
+ * ⚠预设名按真实效果命名:当前渲染系统没有色温参数(色调映射只有模式选择,IBL
+ * rotation 不等价于暖光),「暖色/赛博」做不到,不承诺。
+ *
+ * 应用方式必须是「当前设置 copy 变换」([applyTo]),不许全量构造——否则用户在
+ * 设置页调过的阴影/AA/renderMode 会被打回默认。
+ */
+enum class AmbiencePreset {
+    /** 摄影棚基准光(现状默认):三灯 STUDIO + 13000 lux,无 bloom。 */
+    STUDIO,
+
+    /** 明亮日光:三灯 STUDIO + 22000 lux,无 bloom。 */
+    BRIGHT,
+
+    /** 昏暗夜话:key + 补光 + 3500 lux,无 bloom。 */
+    DIM,
+
+    /** 单灯聚光舞台感:仅主灯 + 5000 lux,无 bloom。 */
+    SPOTLIGHT,
+
+    /** 暗夜朦胧:仅主灯 + 2500 lux + 轻 bloom(0.25)。 */
+    DREAMY,
+    ;
+
+    /**
+     * 在 [settings] 的副本上只改氛围三字段,其余(阴影/AA/色调映射/renderMode/
+     * enhanceMaterials 等用户调过的值)原样保留。
+     */
+    fun applyTo(settings: AvatarRenderSettings): AvatarRenderSettings = when (this) {
+        STUDIO -> settings.copy(lightingRig = LightingRig.STUDIO, iblIntensity = 13_000f, bloomEnabled = false)
+        BRIGHT -> settings.copy(lightingRig = LightingRig.STUDIO, iblIntensity = 22_000f, bloomEnabled = false)
+        DIM -> settings.copy(lightingRig = LightingRig.KEY_FILL, iblIntensity = 3_500f, bloomEnabled = false)
+        SPOTLIGHT -> settings.copy(lightingRig = LightingRig.KEY_ONLY, iblIntensity = 5_000f, bloomEnabled = false)
+        DREAMY -> settings.copy(
+            lightingRig = LightingRig.KEY_ONLY,
+            iblIntensity = 2_500f,
+            bloomEnabled = true,
+            bloomStrength = 0.25f,
+        )
+    }
+}
+
+/**
  * One-click quality presets built on top of [AvatarRenderSettings].
  *
  * Presets deliberately leave the IBL intensity/rotation untouched so users can

@@ -1343,6 +1343,30 @@ private fun DemoScreen(
         }
     }
 
+    // P0.5 设备工具（docs/agent-tools-expansion.md）：get_device_status /
+    // set_flashlight / send_haptic / read_clipboard / set_ambience / take_photo
+    // 六件统一收进 AgentDeviceTools 注册——MainActivity 只留这一个 effect，
+    // 不再逐个加接线。五个无隐私面工具跟随 agentTools 总开关（关=连 P0 内置
+    // 两件也摘，请求不带 tools 键=纯对话）；read_clipboard 独立开关默认关。
+    // 会话构造后注册 → registry revision 递增 → 协议块自动重钉（既有指纹机制）。
+    // set_ambience 的回写走 applyRenderSettings（设置页同款路径：状态+持久化+
+    // controller 推送；氛围只动灯光三字段，不会触发材质回退重载）。
+    LaunchedEffect(
+        session, uiState.aiPrefs.agentTools, uiState.aiPrefs.readClipboard, uiState.lang,
+    ) {
+        val s = session ?: return@LaunchedEffect
+        AgentDeviceTools.registerAll(
+            session = s,
+            controller = controller,
+            context = context,
+            texts = promptTextsOf(uiState.lang),
+            prefs = uiState.aiPrefs,
+            lifecycle = lifecycleOwner.lifecycle,
+            currentRenderSettings = { controller.currentRenderSettings ?: uiState.renderSettings },
+            onRenderSettingsChange = { applyRenderSettings(it) },
+        )
+    }
+
     // 进出视频模式：进入时补申请相机权限并默认面部特写机位；离开时停相机并把视线交回默认
     LaunchedEffect(uiState.inputMode) {
         if (uiState.inputMode == InputMode.VIDEO) {

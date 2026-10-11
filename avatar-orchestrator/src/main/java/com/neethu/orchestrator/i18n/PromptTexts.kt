@@ -90,10 +90,80 @@ interface PromptTexts {
     /** 无预设机位（自由视角）时 get_current_view 的返回文案。 */
     val toolGetCurrentViewFree: String
 
+    // ── 智能体工具（P0.5 设备工具，docs/agent-tools-expansion.md §2）──
+    val toolGetDeviceStatusDescription: String
+    val toolGetDeviceStatusHint: String
+
+    /** 设备读数整体失败（缝返回 null）时回灌模型的错误文案。 */
+    val toolDeviceStatusUnavailable: String
+
+    /**
+     * 「本体感受」自然语句（模型直接据此组织口语，不需要二次解读）。
+     * [batteryPercent]/[charging]/[temperatureC] 任一可为 null（读不到就跳过
+     * 或降级「未知」，不编数）；[audioRoute] 是归一短语键
+     * （speaker/earpiece/bluetooth/wired/unknown）。
+     */
+    fun toolDeviceStatusResult(
+        batteryPercent: Int?,
+        charging: Boolean?,
+        temperatureC: Float?,
+        audioRoute: String,
+    ): String
+
+    val toolSetFlashlightDescription: String
+    val toolSetFlashlightHint: String
+
+    /** 手电筒开关成功的确认文案（[enabled]=true 打开）。 */
+    fun toolFlashlightDone(enabled: Boolean): String
+
+    /** 缺少布尔参数 enabled 时的错误文案。 */
+    val toolFlashlightArgError: String
+    val toolFlashlightNoFlash: String
+    val toolFlashlightCameraInUse: String
+    val toolFlashlightFailed: String
+
+    val toolSendHapticDescription: String
+    val toolSendHapticHint: String
+
+    /** 震动成功的确认文案（[pattern] 是归一小写键：heartbeat/high_five/purr/gentle_tap）。 */
+    fun toolHapticDone(pattern: String): String
+
+    val toolHapticNoVibrator: String
+    val toolHapticFailed: String
+
+    val toolReadClipboardDescription: String
+    val toolReadClipboardHint: String
+
+    /** 剪贴板为空/非文本——**正常结果**（模型自然转告），不是 isError。 */
+    val toolClipboardEmpty: String
+
+    val toolSetAmbienceDescription: String
+    val toolSetAmbienceHint: String
+
+    /** 氛围切换成功的确认文案（[preset] 是 AmbiencePreset 枚举名大写）。 */
+    fun toolAmbienceApplied(preset: String): String
+    val toolAmbienceFailed: String
+
+    val toolTakePhotoDescription: String
+    val toolTakePhotoHint: String
+
+    /** 拍照成功（[name] 是保存的文件名）。 */
+    fun toolPhotoSaved(name: String): String
+    val toolTakePhotoFailed: String
+
+    /**
+     * 枚举/白名单参数校验失败的错误文案（附合法值列表让模型重试）；
+     * [value] 为空 = 缺少必填参数。
+     */
+    fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String
+
     /**
      * 智能体工具使用说明块（钉在协议块末尾，同一条 system——部分服务商拒绝
      * 多条 system）。[hints] 是 (工具名, 时机提示) 列表；轮数上限写进块里，
-     * 防模型在限额后仍调工具被静默截断而困惑。空工具集时不会被调用。
+     * 防模型在限额后仍调工具被静默截断而困惑。公共尾部固定带一行「具身联动」
+     * 指令（设备状态类返回是你的身体感受，第一人称演绎不播报数值——
+     * docs/agent-tools-expansion.md §1 公理 3，零代码落点全在这行提示词）。
+     * 空工具集时不会被调用。
      */
     fun toolsetBlock(hints: List<Pair<String, String>>, maxRounds: Int): String
 
@@ -244,9 +314,152 @@ object PromptTextsZh : PromptTexts {
 
     override val toolGetCurrentViewFree: String = "自由视角（用户手动控制镜头，无预设机位）"
 
+    // ── 智能体工具（P0.5 设备工具）──
+    override val toolGetDeviceStatusDescription: String =
+        "读取设备的电量/充电/机身温度/声音输出状态(你自己的「本体感受」)。"
+
+    override val toolGetDeviceStatusHint: String =
+        "用户关心手机/设备状态(「我没电了吗」「手机好烫」「戴耳机了吗」),或你想表达" +
+            "自己的身体感受(电量见底/机身发烫/听到耳机插上)时调用。"
+
+    override val toolDeviceStatusUnavailable: String =
+        "现在读不到设备状态(电量/音频服务不可用)。请口头向用户说明你暂时感知不到。"
+
+    override fun toolDeviceStatusResult(
+        batteryPercent: Int?,
+        charging: Boolean?,
+        temperatureC: Float?,
+        audioRoute: String,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (batteryPercent != null) {
+            parts.add(
+                "电量 $batteryPercent%" + when (charging) {
+                    true -> "(正在充电)"
+                    false -> "(未在充电)"
+                    null -> ""
+                },
+            )
+        }
+        parts.add(
+            if (temperatureC != null) {
+                "机身温度约 " + String.format(java.util.Locale.US, "%.1f", temperatureC) + "°C"
+            } else {
+                "机身温度未知"
+            },
+        )
+        parts.add(
+            when (audioRoute) {
+                "bluetooth" -> "声音从蓝牙耳机播出"
+                "wired" -> "声音从有线耳机播出"
+                "speaker" -> "声音从扬声器播出"
+                "earpiece" -> "声音从听筒播出"
+                else -> "音频输出设备未知"
+            },
+        )
+        return parts.joinToString(",")
+    }
+
+    override val toolSetFlashlightDescription: String =
+        "打开或关闭手机手电筒(需要闪光灯硬件)。"
+
+    override val toolSetFlashlightHint: String =
+        "用户需要照明时(「这好黑,帮我照一下」)为用户开灯,照完记得主动关掉;" +
+            "开灯和关灯都必须发起函数调用(enabled=true 开/false 关)——不调用就宣称「已关」是错的," +
+            "不要演关灯;若返回相机被占用(视频模式),口头向用户说明现在开不了。"
+
+    override fun toolFlashlightDone(enabled: Boolean): String =
+        if (enabled) "手电筒已打开。" else "手电筒已关闭。"
+
+    override val toolFlashlightArgError: String =
+        "缺少布尔参数 enabled(true=开,false=关)。请带上该参数重试。"
+
+    override val toolFlashlightNoFlash: String =
+        "这个设备没有闪光灯,开不了手电筒。请口头向用户说明。"
+
+    override val toolFlashlightCameraInUse: String =
+        "相机正被占用(视频模式或刚拍过照),开不了手电筒。请口头向用户说明,可建议退出视频模式后再试。"
+
+    override val toolFlashlightFailed: String =
+        "手电筒开关失败了。请口头向用户说明这次没成功。"
+
+    override val toolSendHapticDescription: String =
+        "给用户发送触觉震动(四档预设:heartbeat/high_five/purr/gentle_tap)。"
+
+    override val toolSendHapticHint: String =
+        "当你想跨越屏幕触到用户时使用——安慰时发 heartbeat(心跳),庆祝/击掌发 high_five," +
+            "撒娇发 purr(呼噜),轻轻提醒发 gentle_tap。偶尔为之才有惊喜,不要每轮都震。"
+
+    override fun toolHapticDone(pattern: String): String = when (pattern) {
+        "heartbeat" -> "已发出心跳般的震动。"
+        "high_five" -> "已击掌震了一下。"
+        "purr" -> "已发出呼噜般的轻震。"
+        "gentle_tap" -> "已轻轻点了两下。"
+        else -> "震动已发送($pattern)。"
+    }
+
+    override val toolHapticNoVibrator: String =
+        "这个设备没有震动马达,发不了触觉。请口头向用户说明。"
+
+    override val toolHapticFailed: String =
+        "震动发送失败了。请口头向用户说明这次没成功。"
+
+    override val toolReadClipboardDescription: String =
+        "读取用户刚复制的文本内容(仅限用户明确要求时调用)。"
+
+    override val toolReadClipboardHint: String =
+        "只有用户明确让你看TA刚复制的内容(长文/快递单号/验证码等)时才调用;" +
+            "用户没有要求就绝不偷看剪贴板。"
+
+    override val toolClipboardEmpty: String =
+        "剪贴板是空的(或内容不是文本)。请自然地告诉用户没读到东西。"
+
+    override val toolSetAmbienceDescription: String =
+        "切换你的舞台灯光氛围预设(studio/bright/dim/spotlight/dreamy)。"
+
+    override val toolSetAmbienceHint: String =
+        "用户想要气氛(「来点气氛!」「准备睡了,把灯调暗吧」)时切换舞台灯光;" +
+            "studio 是基准光,可用来恢复默认。"
+
+    override fun toolAmbienceApplied(preset: String): String =
+        "已切换灯光:" + when (preset) {
+            "STUDIO" -> "摄影棚基准光"
+            "BRIGHT" -> "明亮日光"
+            "DIM" -> "昏暗夜话"
+            "SPOTLIGHT" -> "单灯聚光舞台"
+            "DREAMY" -> "暗夜朦胧"
+            else -> preset
+        } + "。"
+
+    override val toolAmbienceFailed: String =
+        "灯光切换失败(渲染还没就绪)。请口头向用户说明。"
+
+    override val toolTakePhotoDescription: String =
+        "拍一张你(虚拟形象)当前的样子并保存到手机相册 Pictures/AIAvatar。"
+
+    override val toolTakePhotoHint: String =
+        "用户让你拍照/合影/来张写真时调用;可以先用 <act:…> 标签摆好姿势再拍。"
+
+    override fun toolPhotoSaved(name: String): String =
+        "拍好了,已保存到相册:Pictures/AIAvatar/$name。请告诉用户已存好(可在相册里查看)。"
+
+    override val toolTakePhotoFailed: String =
+        "拍照失败(画面没就绪或保存失败)。请口头向用户说明。"
+
+    override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
+        if (value.isBlank()) {
+            "缺少必填参数:请提供 $tool 的取值(合法值:${valid.joinToString("/")})。"
+        } else {
+            "「$value」不是 $tool 的合法参数(合法值:${valid.joinToString("/")}),请只用列表里的值重试。"
+        }
+
     override fun toolsetBlock(hints: List<Pair<String, String>>, maxRounds: Int): String = buildString {
         append("【工具使用说明】\n")
         hints.forEach { (name, hint) -> append("- $name：$hint\n") }
+        append("- 设备状态类工具的返回是你自己的身体感受或真实环境,回答时用第一人称演绎" +
+            "(比如「我摸了下额头,有点烫」),不要播报数值。\n")
+        append("- 凡要真正改变设备/舞台状态(开关手电筒、切换灯光氛围、发震动、拍照),必须发起对应的" +
+            "函数调用——只在台词里说「已做好」不会真的生效,用户看得出来。\n")
         append("- 工具调用每回合最多 $maxRounds 轮，用完请直接回答。\n")
         append("- 行内标签（emo/act/cam）是你说话时的表演层；工具是你获取信息用的，两者不互相替代。\n")
         append("- 需要用工具时立即发起函数调用——不要只说话等待，也不要把调用写成文字" +
@@ -413,9 +626,161 @@ object PromptTextsEn : PromptTexts {
     override val toolGetCurrentViewFree: String =
         "Free view (the user controls the camera manually, no preset shot)"
 
+    // ── Agent tools (P0.5 device tools) — must stay section-aligned with the Chinese version ──
+    override val toolGetDeviceStatusDescription: String =
+        "Read the device's battery/charging/body-temperature/audio-output status (your own body sensations)."
+
+    override val toolGetDeviceStatusHint: String =
+        "Call when the user cares about the phone's state (\"am I out of battery\", \"the phone feels hot\", " +
+            "\"are headphones on\") or when you want to express your own bodily sensations " +
+            "(battery running low, running hot, headphones plugged in)."
+
+    override val toolDeviceStatusUnavailable: String =
+        "Cannot read device status right now (battery/audio services unavailable). " +
+            "Tell the user you can't sense it at the moment."
+
+    override fun toolDeviceStatusResult(
+        batteryPercent: Int?,
+        charging: Boolean?,
+        temperatureC: Float?,
+        audioRoute: String,
+    ): String {
+        val parts = mutableListOf<String>()
+        if (batteryPercent != null) {
+            parts.add(
+                "Battery $batteryPercent%" + when (charging) {
+                    true -> " (charging)"
+                    false -> " (not charging)"
+                    null -> ""
+                },
+            )
+        }
+        parts.add(
+            if (temperatureC != null) {
+                "body temperature around " + String.format(java.util.Locale.US, "%.1f", temperatureC) + "°C"
+            } else {
+                "body temperature unknown"
+            },
+        )
+        parts.add(
+            when (audioRoute) {
+                "bluetooth" -> "sound comes from Bluetooth headphones"
+                "wired" -> "sound comes from wired headphones"
+                "speaker" -> "sound comes from the speaker"
+                "earpiece" -> "sound comes from the earpiece"
+                else -> "audio output unknown"
+            },
+        )
+        return parts.joinToString(", ")
+    }
+
+    override val toolSetFlashlightDescription: String =
+        "Turn the phone's flashlight on or off (requires flash hardware)."
+
+    override val toolSetFlashlightHint: String =
+        "Light things up when the user needs it (\"it's so dark, shine a light for me\"), and turn it off " +
+            "proactively afterwards; BOTH on and off MUST go through the function call (enabled=true on, " +
+            "false off) — claiming it's done without calling is wrong, never act it out; if it reports the " +
+            "camera is busy (video mode), tell the user you can't turn it on right now."
+
+    override fun toolFlashlightDone(enabled: Boolean): String =
+        if (enabled) "Flashlight on." else "Flashlight off."
+
+    override val toolFlashlightArgError: String =
+        "Missing boolean argument 'enabled' (true=on, false=off). Retry with the argument."
+
+    override val toolFlashlightNoFlash: String =
+        "This device has no flash hardware, so the flashlight is unavailable. Tell the user."
+
+    override val toolFlashlightCameraInUse: String =
+        "The camera is busy right now (video mode or a photo was just taken), so the flashlight can't be " +
+            "toggled. Tell the user; they can retry after leaving video mode."
+
+    override val toolFlashlightFailed: String =
+        "Toggling the flashlight failed. Tell the user it didn't work this time."
+
+    override val toolSendHapticDescription: String =
+        "Send a haptic vibration to the user (four presets: heartbeat/high_five/purr/gentle_tap)."
+
+    override val toolSendHapticHint: String =
+        "Use it when you want to reach across the screen and touch the user — heartbeat to comfort, " +
+            "high_five to celebrate, purr when acting cute, gentle_tap for a soft nudge. " +
+            "Occasional use keeps the surprise; never vibrate every turn."
+
+    override fun toolHapticDone(pattern: String): String = when (pattern) {
+        "heartbeat" -> "Sent a heartbeat-like buzz."
+        "high_five" -> "Sent a high-five buzz."
+        "purr" -> "Sent a soft purring vibration."
+        "gentle_tap" -> "Sent two gentle taps."
+        else -> "Vibration sent ($pattern)."
+    }
+
+    override val toolHapticNoVibrator: String =
+        "This device has no vibration motor, so haptics are unavailable. Tell the user."
+
+    override val toolHapticFailed: String =
+        "Sending the vibration failed. Tell the user it didn't work this time."
+
+    override val toolReadClipboardDescription: String =
+        "Read the text the user just copied (only when the user explicitly asks)."
+
+    override val toolReadClipboardHint: String =
+        "Call ONLY when the user explicitly asks you to look at what they just copied (long text, tracking " +
+            "number, code, etc.); never peek at the clipboard uninvited."
+
+    override val toolClipboardEmpty: String =
+        "The clipboard is empty (or its content is not text). Tell the user naturally that nothing was found."
+
+    override val toolSetAmbienceDescription: String =
+        "Switch your stage-lighting ambience preset (studio/bright/dim/spotlight/dreamy)."
+
+    override val toolSetAmbienceHint: String =
+        "Switch the stage lighting when the user wants mood (\"set the vibe!\", \"getting sleepy, dim the " +
+            "lights\"); studio is the baseline and restores the default look."
+
+    override fun toolAmbienceApplied(preset: String): String =
+        "Lighting changed: " + when (preset) {
+            "STUDIO" -> "studio baseline"
+            "BRIGHT" -> "bright daylight"
+            "DIM" -> "dim night-talk"
+            "SPOTLIGHT" -> "single-spotlight stage"
+            "DREAMY" -> "dreamy glow"
+            else -> preset
+        } + "."
+
+    override val toolAmbienceFailed: String =
+        "Changing the lighting failed (renderer not ready). Tell the user."
+
+    override val toolTakePhotoDescription: String =
+        "Take a photo of your (the avatar's) current look and save it to the Pictures/AIAvatar gallery."
+
+    override val toolTakePhotoHint: String =
+        "Call when the user asks for a photo/portrait of you; you can strike a pose with an <act:…> tag first, " +
+            "then shoot."
+
+    override fun toolPhotoSaved(name: String): String =
+        "Photo taken and saved to the gallery: Pictures/AIAvatar/$name. " +
+            "Tell the user it's saved (viewable in the Photos app)."
+
+    override val toolTakePhotoFailed: String =
+        "Taking the photo failed (view not ready or save failed). Tell the user."
+
+    override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
+        if (value.isBlank()) {
+            "Missing required argument: provide one of $tool's valid values (${valid.joinToString(" / ")})."
+        } else {
+            "\"$value\" is not a valid $tool argument (valid values: ${valid.joinToString(" / ")}). " +
+                "Retry with a value from the list."
+        }
+
     override fun toolsetBlock(hints: List<Pair<String, String>>, maxRounds: Int): String = buildString {
         append("[Tool usage]\n")
         hints.forEach { (name, hint) -> append("- $name: $hint\n") }
+        append("- Device-status tools return YOUR own bodily sensations or the real environment: answer in " +
+            "first person (e.g. \"I touched my forehead — it's a bit hot\"), never read out raw numbers.\n")
+        append("- Any real change to device/stage state (flashlight on/off, ambience, vibrations, photos) MUST " +
+            "go through the corresponding function call — merely saying \"done\" in dialogue changes nothing, " +
+            "and the user can tell.\n")
         append("- At most $maxRounds tool rounds per turn; once spent, answer directly.\n")
         append("- Inline tags (emo/act/cam) are your performance layer while speaking; tools are for " +
             "gathering information — neither replaces the other.\n")

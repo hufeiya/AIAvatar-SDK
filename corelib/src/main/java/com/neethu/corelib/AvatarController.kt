@@ -94,6 +94,15 @@ class AvatarController {
     private var appliedRenderMode: RenderMode = RenderMode.PBR
 
     /**
+     * 最近一次经 [updateRenderSettings] 推入的渲染设置;null = 尚未推送过。
+     * 供「基于当前设置做增量变更」的调用方(如氛围预设 set_ambience)取正本
+     * copy——updateRenderSettings 只进不出,没有它就只能全量构造,把用户调过
+     * 的字段打回默认。
+     */
+    var currentRenderSettings: AvatarRenderSettings? = null
+        private set
+
+    /**
      * Attach the renderer. Called internally by [AvatarView] during factory.
      */
     internal fun attach(renderer: SoulLinkRenderer) {
@@ -539,6 +548,7 @@ class AvatarController {
      * ```
      */
     fun updateRenderSettings(settings: AvatarRenderSettings) {
+        currentRenderSettings = settings
         renderer?.applyRenderSettings(settings)
         val modeChanged = settings.renderMode != appliedRenderMode
         appliedRenderMode = settings.renderMode

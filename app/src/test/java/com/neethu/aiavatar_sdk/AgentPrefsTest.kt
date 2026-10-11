@@ -18,12 +18,17 @@ class AgentPrefsTest {
         val p = AiChatPrefs()
         assertTrue("总开关默认开（纯本地工具无隐私面）", p.agentTools)
         assertFalse("摄像头观察默认关（隐私面：模型可主动看画面）", p.observeCamera)
+        assertFalse("剪贴板默认关（P0.5：唯一读用户数据的工具独立定价）", p.readClipboard)
     }
 
     @Test
     fun `identity signature ignores agent toggles`() {
         val base = AiChatPrefs(provider = AiProvider.SILICONFLOW, llmModel = "Qwen/Qwen3.8-27B")
-        val toggled = base.copy(agentTools = !base.agentTools, observeCamera = !base.observeCamera)
+        val toggled = base.copy(
+            agentTools = !base.agentTools,
+            observeCamera = !base.observeCamera,
+            readClipboard = !base.readClipboard,
+        )
         // 工具开关不改变模型能力面 → 不轮换上下文（§11.3，与语音/镜头开关同列）
         assertEquals(llmIdentitySignature(base), llmIdentitySignature(toggled))
         // 模型变化仍然轮换（回归锚）

@@ -523,6 +523,11 @@ internal fun SettingsScreen(
                                 subtitle = s.observeCameraSubtitle,
                                 checked = aiPrefs.observeCamera
                             ) { onAiPrefsChange(aiPrefs.copy(observeCamera = it)) }
+                            SettingsSwitchRow(
+                                title = s.readClipboardTitle,
+                                subtitle = s.readClipboardSubtitle,
+                                checked = aiPrefs.readClipboard
+                            ) { onAiPrefsChange(aiPrefs.copy(readClipboard = it)) }
                         }
                     }
 

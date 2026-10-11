@@ -6,6 +6,7 @@ import com.neethu.aiadapter.model.ChatRole
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.LlmStreamEvent
 import com.neethu.aiadapter.model.ToolSpec
+import com.neethu.corelib.AmbiencePreset
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.i18n.PromptTexts
@@ -13,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -23,14 +25,20 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 /**
- * P0 内置工具目录（docs/agent-feasibility.md §4.4）：工厂函数各返回一个
+ * 内置工具目录（P0：docs/agent-feasibility.md §4.4；P0.5 设备六件：
+ * docs/agent-tools-expansion.md §2）：工厂函数各返回一个
  * (ToolSpec, ToolExecutor) 对，注册方决定挂进哪个 ToolRegistry。
  *
  * - [getDeviceTime] / [getCurrentView]：纯本地、无隐私面，AvatarSession 默认注册。
  * - [observeCamera]：依赖相机帧与视觉模型，隐私敏感，由集成方（demo app）
  *   按设置开关 + 视频模式可用性注册/反注册。
+ * - P0.5 设备工具（[getDeviceStatus]/[setFlashlight]/[sendHaptic]/
+ *   [readClipboard]/[setAmbience]/[takePhoto]）：executor 全依赖 Android API，
+ *   由 demo 的 AgentDeviceTools 统一注册；orchestrator 保持纯 JVM 可测
+ *   （读数/手电/震动/氛围/拍照全是注入的 lambda）。
  *
- * 全部纯 JVM 可测（时钟/机位/抓帧都是注入的 lambda）。
+ * 全部纯 JVM 可测。schema 的参数 description 沿用 observe_camera 惯例
+ * （中文硬编码，弱约束信号）；用户可见文案一律走 [PromptTexts] 双语键。
  */
 object AgentToolCatalog {
 
@@ -39,6 +47,12 @@ object AgentToolCatalog {
         put("properties", buildJsonObject { })
         put("required", buildJsonArray { })
     }
+
+    /** [sendHaptic] 的白名单（与 schema enum 一致，锁单测）。 */
+    internal val HAPTIC_PATTERNS = listOf("heartbeat", "high_five", "purr", "gentle_tap")
+
+    /** [setAmbience] 的白名单（[AmbiencePreset] 枚举名的小写形态，锁单测）。 */
+    internal val AMBIENCE_PRESET_NAMES = listOf("studio", "bright", "dim", "spotlight", "dreamy")
 
     /**
      * `get_device_time`：设备墙钟时间。**刻意不走 SkillHost.nowMs()**——那根缝
@@ -160,6 +174,218 @@ object AgentToolCatalog {
         return spec to executor
     }
 
+    /**
+     * `get_device_status`（P0.5，docs/agent-tools-expansion.md §2.1）：电量/温度/
+     * 充电/音频路由合一的「本体感受」工具。合并为一个无参工具的理由：模型一次
+     * 调用拿全（省一轮工具轮），且这组读数合起来才是完整的身体感受概念。
+     * [status] 缝由 app 填系统读数，返回 null = 整体读不到（错误文案回灌）。
+     * 返回值经 [PromptTexts.toolDeviceStatusResult] 拼成自然语句——模型直接据此
+     * 组织口语，不需要二次解读。
+     */
+    fun getDeviceStatus(
+        texts: PromptTexts,
+        status: () -> DeviceVitals?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "get_device_status",
+            description = texts.toolGetDeviceStatusDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolGetDeviceStatusHint,
+        )
+        val executor = ToolExecutor { _ ->
+            val vitals = status()
+                ?: return@ToolExecutor ToolResult(texts.toolDeviceStatusUnavailable, isError = true)
+            ToolResult(
+                texts.toolDeviceStatusResult(
+                    batteryPercent = vitals.batteryPercent,
+                    charging = vitals.charging,
+                    temperatureC = vitals.temperatureC,
+                    audioRoute = vitals.audioRoute,
+                ),
+            )
+        }
+        return spec to executor
+    }
+
+    /**
+     * `set_flashlight`（§2.2）：一个工具带布尔参（不拆 on/off 两个——hint 聚焦、
+     * Schema 面 ×0.5）。[torch] 缝返回 null = 成功；[TorchFailure] 由 app 层
+     * 归因（无闪光硬件/相机被占用/其他失败），文案在这里统一回灌。
+     */
+    fun setFlashlight(
+        texts: PromptTexts,
+        torch: suspend (enabled: Boolean) -> TorchFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "set_flashlight",
+            description = texts.toolSetFlashlightDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "enabled",
+                            buildJsonObject {
+                                put("type", "boolean")
+                                put("description", "true=打开手电筒,false=关闭")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("enabled")) })
+            },
+            systemHint = texts.toolSetFlashlightHint,
+        )
+        val executor = ToolExecutor { args ->
+            val enabled = boolArg(args, "enabled")
+                ?: return@ToolExecutor ToolResult(texts.toolFlashlightArgError, isError = true)
+            when (torch(enabled)) {
+                null -> ToolResult(texts.toolFlashlightDone(enabled))
+                TorchFailure.NO_FLASH -> ToolResult(texts.toolFlashlightNoFlash, isError = true)
+                TorchFailure.CAMERA_IN_USE -> ToolResult(texts.toolFlashlightCameraInUse, isError = true)
+                TorchFailure.FAILED -> ToolResult(texts.toolFlashlightFailed, isError = true)
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `send_haptic`（§2.3）：四档预设震动（enum 而非自由波形参数——模型不该
+     * 设计波形，预设够用且可锁单测）。[haptic] 缝返回 null = 成功。
+     */
+    fun sendHaptic(
+        texts: PromptTexts,
+        haptic: suspend (pattern: String) -> HapticFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "send_haptic",
+            description = texts.toolSendHapticDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "pattern",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { HAPTIC_PATTERNS.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "heartbeat=心跳(安慰) high_five=击掌(庆祝) purr=呼噜(撒娇) gentle_tap=轻点(提醒)")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("pattern")) })
+            },
+            systemHint = texts.toolSendHapticHint,
+        )
+        val executor = ToolExecutor { args ->
+            val pattern = stringArg(args, "pattern")?.lowercase().orEmpty()
+            if (pattern !in HAPTIC_PATTERNS) {
+                return@ToolExecutor ToolResult(
+                    texts.toolEnumArgInvalid("send_haptic", pattern, HAPTIC_PATTERNS),
+                    isError = true,
+                )
+            }
+            when (haptic(pattern)) {
+                null -> ToolResult(texts.toolHapticDone(pattern))
+                HapticFailure.NO_VIBRATOR -> ToolResult(texts.toolHapticNoVibrator, isError = true)
+                HapticFailure.FAILED -> ToolResult(texts.toolHapticFailed, isError = true)
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `read_clipboard`（§2.4）：唯一「读取用户数据」类工具——注册与否由集成方
+     * 的独立开关决定（demo 默认关）。[clipboard] 缝返回 null = 剪贴板空/非文本,
+     * 是**正常结果**（模型自然转告），不是 isError。
+     */
+    fun readClipboard(
+        texts: PromptTexts,
+        clipboard: suspend () -> String?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "read_clipboard",
+            description = texts.toolReadClipboardDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolReadClipboardHint,
+        )
+        val executor = ToolExecutor { _ -> ToolResult(clipboard() ?: texts.toolClipboardEmpty) }
+        return spec to executor
+    }
+
+    /**
+     * `set_ambience`（§2.5）：舞台氛围预设（enum 白名单校验在这里做，模型写
+     * 了别的词回错误文案附合法值）。[ambience] 缝收到的是已校验的
+     * [AmbiencePreset]，返回 false = 应用失败（如渲染未就绪）。
+     */
+    fun setAmbience(
+        texts: PromptTexts,
+        ambience: suspend (preset: AmbiencePreset) -> Boolean,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "set_ambience",
+            description = texts.toolSetAmbienceDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "preset",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { AMBIENCE_PRESET_NAMES.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "studio=基准光 bright=明亮日光 dim=昏暗夜话 spotlight=单灯聚光 dreamy=暗夜朦胧")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("preset")) })
+            },
+            systemHint = texts.toolSetAmbienceHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "preset")?.lowercase().orEmpty()
+            val preset = AmbiencePreset.entries.firstOrNull { it.name.lowercase() == raw }
+            when {
+                preset == null -> ToolResult(
+                    texts.toolEnumArgInvalid("set_ambience", raw, AMBIENCE_PRESET_NAMES),
+                    isError = true,
+                )
+                ambience(preset) -> ToolResult(texts.toolAmbienceApplied(preset.name))
+                else -> ToolResult(texts.toolAmbienceFailed, isError = true)
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `take_photo`（§2.6）：拍「我」（3D 渲染画面）存进相册。核心 API
+     * [AvatarController.captureFrame] 已存在；v1 不接摆姿势参数（模型可用既有
+     * `<act:>` 标签在自己说话时摆动作，与拍照时序天然同步）。[shoot] 缝返回
+     * 保存的文件名，null = 失败（画面没就绪/保存失败）。
+     */
+    fun takePhoto(
+        texts: PromptTexts,
+        shoot: suspend () -> String?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "take_photo",
+            description = texts.toolTakePhotoDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolTakePhotoHint,
+        )
+        val executor = ToolExecutor { _ ->
+            val name = shoot()
+                ?: return@ToolExecutor ToolResult(texts.toolTakePhotoFailed, isError = true)
+            ToolResult(texts.toolPhotoSaved(name))
+        }
+        return spec to executor
+    }
+
     /** "2026-10-11 21:34 周日 (UTC+8)" 形态；非整时区带分钟（UTC+5:30）。 */
     internal fun formatDeviceTime(epochMs: Long, zone: ZoneId, lang: Lang): String {
         val at = ZonedDateTime.ofInstant(Instant.ofEpochMilli(epochMs), zone)
@@ -187,6 +413,52 @@ object AgentToolCatalog {
         null
     }
 
+    /** Top-level boolean field; accepts JSON boolean or "true"/"false" string, absent/null → null. */
+    private fun boolArg(argumentsJson: String, key: String): Boolean? = try {
+        val obj = kotlinx.serialization.json.Json.parseToJsonElement(argumentsJson) as? kotlinx.serialization.json.JsonObject
+        (obj?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull
+    } catch (_: Exception) {
+        null
+    }
+
     private fun kotlinx.serialization.json.JsonPrimitive.contentOrNull(): String? =
         try { content } catch (_: Exception) { null }
+}
+
+/**
+ * [AgentToolCatalog.getDeviceStatus] 的缝数据：app 层读系统服务填充（纯 JVM
+ * 可测），orchestrator 用 [PromptTexts.toolDeviceStatusResult] 拼成自然语句。
+ * 字段允许 null = 该项读不到（跳过或降级「未知」，不编数——部分 OEM 粘性广播
+ * temperature 恒 0）。
+ */
+data class DeviceVitals(
+    /** 电量百分比 0-100；null = 粘性广播缺失/字段异常。 */
+    val batteryPercent: Int?,
+    /** 充电中（含充满）；null = 充电态读不到。 */
+    val charging: Boolean?,
+    /** 机身温度（摄氏度）；null = OEM 恒 0/读不到。 */
+    val temperatureC: Float?,
+    /** 归一音频路由键：speaker/earpiece/bluetooth/wired/unknown。 */
+    val audioRoute: String,
+)
+
+/** [AgentToolCatalog.setFlashlight] 的缝失败归因；null = 成功。 */
+enum class TorchFailure {
+    /** 设备无闪光灯硬件。 */
+    NO_FLASH,
+
+    /** 相机被占用（视频模式/按需拍照期间）——「错误回灌不炸回合」的标准演出。 */
+    CAMERA_IN_USE,
+
+    /** 其他失败（CameraAccessException 等）。 */
+    FAILED,
+}
+
+/** [AgentToolCatalog.sendHaptic] 的缝失败归因；null = 成功。 */
+enum class HapticFailure {
+    /** 无震动马达（平板常见）。 */
+    NO_VIBRATOR,
+
+    /** 其他失败（效果构造/驱动异常）。 */
+    FAILED,
 }

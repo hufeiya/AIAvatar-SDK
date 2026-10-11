@@ -38,6 +38,13 @@
 - **三层修复**(已实现):①工具说明改祈使句并禁文本式调用(PromptTexts.toolsetBlock,提示词 A/B 迭代:示例反而教会模型模仿文字形态,已删);②会话层「悬空衔接句」检测(`agent/TemplateToolCalls.isDanglingBridgeReply`——≤24 字含看/查动词且无问号)→ `tool_choice:"required"` 静默重试一轮(文字不进 TTS);③`parseTemplateToolCalls` 解析 Qwen 模板文本形态兜底(原生为空时)。修复后真机:间接问法原生调用成功,模型正确转告「打开视频模式我才能看到」。
 - **残余**(已知,低频):长错误回答(「让我看看你那边——嗯……画面里好像…」,超 24 字不判悬空)与自造文本格式仍接不住;用户显式说「用工具看看」100% 触发。**选型建议**:视觉+工具场景优先 `Qwen3-VL-32B-Instruct`(可靠+非思考模型快)或火山 doubao 系;Qwen3.8 用户遇到不调工具时显式说「用工具看看」。
 
+### P0.5 设备工具自然触发的两种新失败形态(2026-10-11 晚真机 2c3769db,DeepSeek-V4-Flash / doubao-seed-2-0-mini)
+
+P0.5 六工具真机验收中发现(P0 的 curl A/B 只测「能不能调用」,自然触发按**意图方向**分解后暴露两类新形态):
+
+1. **DeepSeek-V4-Flash 的「方向不对称」**:信息类(get_device_status)与「开启/切换到」类(开灯/set_ambience dim)稳定原生调用;**「关闭/恢复/表达类」动作(关灯、氛围恢复、拍照、击掌)倾向口头演**——模型在台词里宣称「已关掉/拍好啦」但零函数调用,连干净上下文、显式「用手电筒工具」话术、per-tool hint 与 toolsetBlock 公共尾「必须发起函数调用」提示词两轮加重都压不住(doubao 同场景关灯原生调用成功→有模型差异)。**残余缓解**:悬空衔接句检测只接「单句 ≤24 字就停」形态,整轮叙述接不住(已知残余的推广);后续候选=回合级「宣布了动作但零调用」的 required 重试(成本控制:仅当轮内出现动作动词+工具名相关词时)。**用户侧缓解**:关灯/拍照类话术显式点名工具或换 doubao。
+2. **doubao-seed-2-0-mini 对 set_ambience 确定性文本吐**(3/3):模型输出 `<set_ambience><parameter name="preset">dim</parameter></set_ambience>` 作为**正文文本**——不是 Qwen 的 `<tool_call><function=>` 模板形态(无 wrapper、parameter 用 name 属性),`parseTemplateToolCalls` 不识别→工具意图丢失,且**原文进了断句→TTS 被朗读**(比 Qwen 形态多一层危害)。同模型 set_flashlight 关灯原生调用正常→工具相关。后续=parser 扩展识别该形态+流式侧抑制(在 InlineTagExtractor 层吞掉,防 TTS 泄漏)。
+
 ## 服务商瞬态故障与韧性(2026-10-11 晚实测)
 
 硅基流动当晚多模型间歇抖动(Qwen3-VL 一度 50507 4/5、Qwen3.8 空回复/60s 挂起、半小时后自愈),两类故障不再杀死回合:

@@ -275,6 +275,10 @@ class Strings(val lang: Lang) {
     val observeCameraSubtitle: String get() =
         zh("允许模型在任何模式下主动拍一张照并描述画面（回答「你能看到什么」）；需要相机权限",
             "Let the model take an on-demand photo and describe it in any mode (answers \"what can you see\"); needs camera permission")
+    val readClipboardTitle: String get() = zh("允许读取剪贴板", "Allow reading clipboard")
+    val readClipboardSubtitle: String get() =
+        zh("工具 read_clipboard：仅当用户明确要求看刚复制的内容（长文/快递单号/验证码）时读取，模型绝不偷看；默认关",
+            "Tool read_clipboard: reads copied text only when explicitly asked (long text, tracking number, code); never peeks uninvited; off by default")
 
     val sectionCard: String get() = zh("人物卡 (Character Card · 人设提示词)", "Character Card (persona prompt)")
     val cardNotActive: String get() =

@@ -92,6 +92,46 @@ class PromptTextsI18nTest {
     }
 
     @Test
+    fun `en p05 device tool texts have no chinese`() {
+        val en = PromptTextsEn
+        assertNoCjk("deviceStatus desc", en.toolGetDeviceStatusDescription)
+        assertNoCjk("deviceStatus hint", en.toolGetDeviceStatusHint)
+        assertNoCjk("deviceStatus unavailable", en.toolDeviceStatusUnavailable)
+        assertNoCjk("deviceStatus result", en.toolDeviceStatusResult(43, false, 41.5f, "speaker"))
+        assertNoCjk("deviceStatus result degraded", en.toolDeviceStatusResult(null, null, null, "unknown"))
+        assertNoCjk("flashlight desc", en.toolSetFlashlightDescription)
+        assertNoCjk("flashlight hint", en.toolSetFlashlightHint)
+        assertNoCjk("flashlight done on", en.toolFlashlightDone(true))
+        assertNoCjk("flashlight done off", en.toolFlashlightDone(false))
+        assertNoCjk("flashlight argError", en.toolFlashlightArgError)
+        assertNoCjk("flashlight noFlash", en.toolFlashlightNoFlash)
+        assertNoCjk("flashlight cameraInUse", en.toolFlashlightCameraInUse)
+        assertNoCjk("flashlight failed", en.toolFlashlightFailed)
+        assertNoCjk("haptic desc", en.toolSendHapticDescription)
+        assertNoCjk("haptic hint", en.toolSendHapticHint)
+        for (p in listOf("heartbeat", "high_five", "purr", "gentle_tap")) {
+            assertNoCjk("haptic done $p", en.toolHapticDone(p))
+        }
+        assertNoCjk("haptic noVibrator", en.toolHapticNoVibrator)
+        assertNoCjk("haptic failed", en.toolHapticFailed)
+        assertNoCjk("clipboard desc", en.toolReadClipboardDescription)
+        assertNoCjk("clipboard hint", en.toolReadClipboardHint)
+        assertNoCjk("clipboard empty", en.toolClipboardEmpty)
+        assertNoCjk("ambience desc", en.toolSetAmbienceDescription)
+        assertNoCjk("ambience hint", en.toolSetAmbienceHint)
+        for (p in listOf("STUDIO", "BRIGHT", "DIM", "SPOTLIGHT", "DREAMY")) {
+            assertNoCjk("ambience applied $p", en.toolAmbienceApplied(p))
+        }
+        assertNoCjk("ambience failed", en.toolAmbienceFailed)
+        assertNoCjk("photo desc", en.toolTakePhotoDescription)
+        assertNoCjk("photo hint", en.toolTakePhotoHint)
+        assertNoCjk("photo saved", en.toolPhotoSaved("avatar_1.png"))
+        assertNoCjk("photo failed", en.toolTakePhotoFailed)
+        assertNoCjk("enumArg invalid", en.toolEnumArgInvalid("set_ambience", "cozy", listOf("studio")))
+        assertNoCjk("enumArg missing", en.toolEnumArgInvalid("send_haptic", "", listOf("heartbeat")))
+    }
+
+    @Test
     fun `emotion wordlists match in size`() {
         // 词表与 EmotionBlender.defs 键一一对应的不变量由 SystemPromptAssemblerTest
         // 锁定；这里只锁中英词表本身不漂移（同一批情绪、不同释义）

@@ -54,6 +54,13 @@ data class AiChatPrefs(
      * 生效还需视频模式与相机权限（注册时机见 MainActivity 的接线 effect）。
      */
     val observeCamera: Boolean = false,
+    /**
+     * 允许读取剪贴板（read_clipboard，P0.5 设备工具）：六个里唯一「读取用户
+     * 数据」类，独立开关**默认关**——隐私分级先例：无隐私面跟 agentTools 总
+     * 开关，读数据独立定价（docs/agent-tools-expansion.md §2.4）。身份签名
+     * 刻意不含本开关（与其他工具开关同列：不改变模型能力面，不轮换上下文）。
+     */
+    val readClipboard: Boolean = false,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -126,6 +133,7 @@ private const val KEY_AI_VOICE = "ai_voice"
 private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
 private const val KEY_AI_AGENT_TOOLS = "ai_agent_tools"
 private const val KEY_AI_OBSERVE_CAMERA = "ai_observe_camera"
+private const val KEY_AI_READ_CLIPBOARD = "ai_read_clipboard"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -157,6 +165,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
         agentTools = getBoolean(KEY_AI_AGENT_TOOLS, true),
         observeCamera = getBoolean(KEY_AI_OBSERVE_CAMERA, false),
+        readClipboard = getBoolean(KEY_AI_READ_CLIPBOARD, false),
     )
 }
 
@@ -176,6 +185,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_LLM_CAMERA, p.llmCamera)
         .putBoolean(KEY_AI_AGENT_TOOLS, p.agentTools)
         .putBoolean(KEY_AI_OBSERVE_CAMERA, p.observeCamera)
+        .putBoolean(KEY_AI_READ_CLIPBOARD, p.readClipboard)
         .apply()
 }
 
