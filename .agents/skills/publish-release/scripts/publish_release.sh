@@ -8,15 +8,16 @@
 #   publish_release.sh                    # 两版本都自动递增最后一位(SDK 0.1.1→0.1.2,APK 1.0→1.1)
 #   publish_release.sh 0.2.0              # maven 指定 0.2.0,APK 自动递增
 #   publish_release.sh 0.2.0 1.2          # 两个都指定
-#   publish_release.sh --dry-run          # 全流程演练:改版本+打APK+测试+bundle+生成发布说明,
+#   publish_release.sh --dry-run          # 全流程演练:改版本+打APK+测试+bundle+生成草稿说明,
 #                                         #   不 commit/不上传/不发 Release,结束自动还原工作区
-#   NOTES_FILE=notes.md publish_release.sh 0.2.0   # 用外部文件当发布说明(其余不变)
+#   NOTES_FILE=notes.md publish_release.sh 0.2.0   # 正式发布必带:总结好的发布说明(新特性/问题修复,
+#                                                  #   禁止罗列原始 commit——总结是调用方/模型的活)
 #
-# 流程: 前置检查(工作区/凭据/tag 占用) → 改 4 处版本号(gradle.properties /
+# 流程: 前置检查(工作区/凭据/tag 占用/NOTES_FILE 存在) → 改 4 处版本号(gradle.properties /
 #       app 版本 / 两份 README)→ assembleRelease(快速失败)→ 单条 release commit
 #       → release.sh --no-git(单测→mavenLocal→bundle→上传→盯 repo1 ≤45 分钟)
-#       → tag v<apk版本> → push → 发布说明(上个 tag 以来的 commit)→ 建 GitHub
-#       Release → 上传 APK → 校验 uploaded
+#       → tag v<apk版本> → push → 建 GitHub Release(正文 = NOTES_FILE 原文)→
+#       上传 APK → 校验 uploaded
 #       注意 README 必须在 commit 前改好:release.sh 要求干净工作区,且 tag 快照里
 #       README 才能是新版本号。
 #
@@ -87,6 +88,12 @@ GH_TOKEN=$(grep -E '^GITHUB_TOKEN=' secrets.properties 2>/dev/null | head -1 | c
 _code=$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
   "https://api.github.com/repos/$REPO_SLUG")
 [ "$_code" = "200" ] || die "GitHub API 校验失败(HTTP $_code):token 失效/仓库不可见,更新 secrets.properties 的 GITHUB_TOKEN"
+# 发布说明在前置检查就拦:此时还没动任何东西,补好文件重跑零成本。
+# 不在这里堵,就会像 v1.1 一样把原始 commit 全量罗列进 Release Note(2026-10-11 用户打回)。
+if [ "$DRY_RUN" = "0" ]; then
+  [ -n "${NOTES_FILE:-}" ] || die "正式发布必须带 NOTES_FILE=<总结好的发布说明文件>:按「新特性/问题修复」总结上个 tag 以来的提交,禁止罗列原始 commit(--dry-run 可不带)"
+  [ -f "$NOTES_FILE" ] || die "NOTES_FILE=$NOTES_FILE 不是存在的文件(路径拼错;不设文件不存在时静默回退的路)"
+fi
 echo "✓ 工作区/凭据/tag 均就绪"
 
 # dry-run 随时退出都还原(gradle.properties 由 release.sh --dry-run 自行还原)
@@ -137,7 +144,7 @@ RL=(bash tools/release.sh "$MV_VER" --no-git)
 if [ "$DRY_RUN" = "1" ]; then RL+=("--dry-run"); fi
 if [ "$SKIP_TESTS" = "1" ]; then RL+=("--skip-tests"); fi
 if ! "${RL[@]}"; then
-  die "release.sh 失败。修复后带相同版本号重跑(勿不带参数,会重复递增): bash .agents/skills/publish-release/scripts/publish_release.sh $MV_VER $APK_VER"
+  die "release.sh 失败。修复后带相同版本号+相同 NOTES_FILE 重跑(勿不带参数,会重复递增): NOTES_FILE=<同前> bash .agents/skills/publish-release/scripts/publish_release.sh $MV_VER $APK_VER"
 fi
 
 # ── tag + push ─────────────────────────────────────────────────────────
@@ -150,12 +157,14 @@ else
   echo "✓ main + tag v$APK_VER 已推送"
 fi
 
-# ── 发布说明 ───────────────────────────────────────────────────────────
-step "生成发布说明"
-NOTES="${NOTES_FILE:-/tmp/aiavatar-release-notes-v$APK_VER.md}"
-if [ -n "${NOTES_FILE:-}" ] && [ -f "$NOTES_FILE" ]; then
-  echo "✓ 使用外部发布说明: $NOTES_FILE"
+# ── 发布说明(正文 = NOTES_FILE;自动生成只留给 dry-run 打草稿) ────────
+step "发布说明"
+if [ -n "${NOTES_FILE:-}" ]; then
+  NOTES="$NOTES_FILE"
+  echo "✓ 使用总结版发布说明: $NOTES"
 else
+  # 正式发布走不到这(前置检查已拦);dry-run 生成草稿仅打印参考
+  NOTES="/tmp/aiavatar-release-notes-v$APK_VER.md"
   if [ -n "$LAST_TAG" ]; then
     CHANGES=$(git log "$LAST_TAG"..HEAD --pretty=format:'- %s (%h)' | grep -v 'TYPE: chore release' || true)
   else
@@ -170,7 +179,7 @@ else
 ## 下载
 下方 Assets 的 \`AIAvatar-v$APK_VER-release.apk\` 直接安装;首次启动有新手引导,配一个免费 LLM Key 就能聊(语音输入输出全程免费)。
 
-## 自 ${LAST_TAG:-起点} 以来的提交
+## 自 ${LAST_TAG:-起点} 以来的提交(⚠ 草稿:正式发布前必须总结成「新特性/问题修复」,勿直接上传)
 $CHANGES
 
 ## SDK 坐标
@@ -179,7 +188,7 @@ implementation("io.github.hufeiya:corelib:$MV_VER")
 implementation("io.github.hufeiya:avatar-orchestrator:$MV_VER")
 \`\`\`
 EOF
-  echo "✓ $NOTES"
+  echo "✓ 草稿(仅 dry-run 参考): $NOTES"
 fi
 sed 's/^/  │ /' "$NOTES"
 
