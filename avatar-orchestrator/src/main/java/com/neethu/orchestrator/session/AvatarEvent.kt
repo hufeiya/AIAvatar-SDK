@@ -26,6 +26,15 @@ sealed interface AvatarEvent {
     /** A `<cam:…>` tag switched the preset camera framing. */
     data class CameraChanged(val shot: CameraShot) : AvatarEvent
 
+    /**
+     * 词表外的标签被过滤（绝不进 TTS 语音）：[raw] 是模型原文（如
+     * `<act:laugh:0.5>`），[kind] 是标签家族 `"emo"` / `"act"` / `"cam"`。
+     * 模型偶尔编词表外的名字是常态——发这个事件让集成方/调试面板能看见
+     * 模型实际写了什么，决定是否收进别名表（[EmotionAliases] 治已知，
+     * 本事件发现未知）。
+     */
+    data class UnknownTag(val kind: String, val raw: String) : AvatarEvent
+
     /** The current turn finished to the end (LLM + TTS + playback all drained). */
     data class TurnCompleted(val interrupted: Boolean) : AvatarEvent
 

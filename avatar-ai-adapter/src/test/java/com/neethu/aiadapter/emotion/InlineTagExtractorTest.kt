@@ -13,7 +13,7 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val result = ex.feed("<emo:happy>你好呀")
         assertEquals("你好呀", result.cleanText)
-        assertEquals(listOf(TagCue.Emotion("happy", 1.0f)), result.cues)
+        assertEquals(listOf(TagCue.Emotion("happy", 1.0f, "<emo:happy>")), result.cues)
     }
 
     @Test
@@ -31,19 +31,26 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val r1 = ex.feed("<act:wave>来，握个手！")
         assertEquals("来，握个手！", r1.cleanText)
-        assertEquals(listOf(TagCue.Action("wave")), r1.cues)
+        assertEquals(listOf(TagCue.Action("wave", "<act:wave>")), r1.cues)
 
         ex.reset()
         val r2 = ex.feed("<cam:close_up>看这里")
         assertEquals("看这里", r2.cleanText)
-        assertEquals(listOf(TagCue.Camera("close_up")), r2.cues)
+        assertEquals(listOf(TagCue.Camera("close_up", "<cam:close_up>")), r2.cues)
     }
 
     @Test
     fun `tag names are lowercased`() {
         val ex = InlineTagExtractor()
         val r = ex.feed("<ACT:Wave><CAM:Close_Up><EMO:Happy>")
-        assertEquals(listOf(TagCue.Action("wave"), TagCue.Camera("close_up"), TagCue.Emotion("happy", 1.0f)), r.cues)
+        assertEquals(
+            listOf(
+                TagCue.Action("wave", "<ACT:Wave>"),
+                TagCue.Camera("close_up", "<CAM:Close_Up>"),
+                TagCue.Emotion("happy", 1.0f, "<EMO:Happy>"),
+            ),
+            r.cues,
+        )
         assertEquals("", r.cleanText)
     }
 
@@ -55,7 +62,10 @@ class InlineTagExtractorTest {
         val r = ex.feed("你猜<emo:轻笑>怎么着<emo:大笑:0.8>，嘿嘿")
         assertEquals("你猜怎么着，嘿嘿", r.cleanText)
         assertEquals(
-            listOf(TagCue.Emotion("轻笑", 1.0f), TagCue.Emotion("大笑", 0.8f)),
+            listOf(
+                TagCue.Emotion("轻笑", 1.0f, "<emo:轻笑>"),
+                TagCue.Emotion("大笑", 0.8f, "<emo:大笑:0.8>"),
+            ),
             r.cues,
         )
     }
@@ -65,7 +75,7 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val r = ex.feed("<act:挥手><cam:特写>看这里")
         assertEquals("看这里", r.cleanText)
-        assertEquals(listOf(TagCue.Action("挥手"), TagCue.Camera("特写")), r.cues)
+        assertEquals(listOf(TagCue.Action("挥手", "<act:挥手>"), TagCue.Camera("特写", "<cam:特写>")), r.cues)
     }
 
     @Test
@@ -76,17 +86,54 @@ class InlineTagExtractorTest {
         assertEquals(0, r1.cues.size)
         val r2 = ex.feed(":轻笑>呀")
         assertEquals("呀", r2.cleanText)
-        assertEquals(TagCue.Emotion("轻笑", 1.0f), r2.cues[0])
+        assertEquals(TagCue.Emotion("轻笑", 1.0f, "<emo:轻笑>"), r2.cues[0])
     }
 
     @Test
     fun `off-vocabulary ascii emotion name still extracted as cue`() {
         // 提取器只管形状：词表外的名字（unicorn/excited）必须成 cue 交给下游
-        // 裁决（morph 直驱/静默丢弃），绝不能当普通文字漏给 TTS。
+        // 裁决（别名表/morph 直驱/过滤上报），绝不能当普通文字漏给 TTS。
         val ex = InlineTagExtractor()
         val r = ex.feed("<emo:excited>哇")
         assertEquals("哇", r.cleanText)
-        assertEquals(listOf(TagCue.Emotion("excited", 1.0f)), r.cues)
+        assertEquals(listOf(TagCue.Emotion("excited", 1.0f, "<emo:excited>")), r.cues)
+    }
+
+    // ── act/cam 容忍强度段（模型从 <emo:名字:强度> 习惯性带过来，真机踩过
+    //    <act:laugh:0.5> 因形状不匹配整段漏进 TTS）──
+
+    @Test
+    fun `action tag with intensity is extracted not leaked`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<act:laugh:0.5>哈哈")
+        assertEquals("哈哈", r.cleanText)
+        assertEquals(listOf(TagCue.Action("laugh", "<act:laugh:0.5>")), r.cues)
+    }
+
+    @Test
+    fun `camera tag with intensity is extracted`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<cam:close_up:0.5>看这里")
+        assertEquals("看这里", r.cleanText)
+        assertEquals(listOf(TagCue.Camera("close_up", "<cam:close_up:0.5>")), r.cues)
+    }
+
+    @Test
+    fun `action tag with negative intensity extracted and value dropped`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<act:wave:-1>好")
+        assertEquals("好", r.cleanText)
+        assertEquals(listOf(TagCue.Action("wave", "<act:wave:-1>")), r.cues)
+    }
+
+    @Test
+    fun `act intensity segment split across deltas is buffered`() {
+        val ex = InlineTagExtractor()
+        val r1 = ex.feed("看<act:wave")
+        assertEquals("看", r1.cleanText)
+        val r2 = ex.feed(":0.5>呀")
+        assertEquals("呀", r2.cleanText)
+        assertEquals(listOf(TagCue.Action("wave", "<act:wave:0.5>")), r1.cues + r2.cues)
     }
 
     // ── legacy protocol stays recognized ─────────────────────────────────
@@ -96,7 +143,7 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val r1 = ex.feed("<|emotion:happy|>你好")
         assertEquals("你好", r1.cleanText)
-        assertEquals(TagCue.Emotion("happy", 1.0f), r1.cues[0])
+        assertEquals(TagCue.Emotion("happy", 1.0f, "<|emotion:happy|>"), r1.cues[0])
         ex.reset()
         val r2 = ex.feed("<|emotion:sad:-2|>嗯")
         assertEquals(0.0f, (r2.cues[0] as TagCue.Emotion).intensity, 0.001f)
@@ -112,7 +159,7 @@ class InlineTagExtractorTest {
         assertEquals(0, r1.cues.size)
         val r2 = ex.feed(":angry:0.5>怎么了")
         assertEquals("怎么了", r2.cleanText)
-        assertEquals(TagCue.Emotion("angry", 0.5f), r2.cues[0])
+        assertEquals(TagCue.Emotion("angry", 0.5f, "<emo:angry:0.5>"), r2.cues[0])
     }
 
     @Test
@@ -122,7 +169,10 @@ class InlineTagExtractorTest {
         assertEquals("你看", r1.cleanText)
         val r2 = ex.feed("><cam:full_shot>好")
         assertEquals("好", r2.cleanText)
-        assertEquals(listOf(TagCue.Action("wave"), TagCue.Camera("full_shot")), r1.cues + r2.cues)
+        assertEquals(
+            listOf(TagCue.Action("wave", "<act:wave>"), TagCue.Camera("full_shot", "<cam:full_shot>")),
+            r1.cues + r2.cues,
+        )
     }
 
     @Test
@@ -182,8 +232,8 @@ class InlineTagExtractorTest {
         val r2 = ex.feed("哈<act:nod>好")
         assertEquals("哈哈好", r1.cleanText + r2.cleanText)
         assertEquals(3, r1.cues.size + r2.cues.size)
-        assertEquals(TagCue.Camera("medium_shot"), r1.cues[0])
-        assertEquals(TagCue.Action("nod"), r2.cues[0])
+        assertEquals(TagCue.Camera("medium_shot", "<cam:medium_shot>"), r1.cues[0])
+        assertEquals(TagCue.Action("nod", "<act:nod>"), r2.cues[0])
     }
 
     @Test

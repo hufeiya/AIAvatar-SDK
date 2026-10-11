@@ -583,9 +583,12 @@ class AvatarSession(
      * 在 LLM 吐出的瞬间执行（反应快，且动作/镜头是持续态，早几秒无妨）；
      * emotion cue 改为挂到其后第一个句子上、开播瞬间才驱动面部——TTS 排队
      * 延迟下"即发即执行"会让表情在出声前就被 3 秒归零吃掉（真机踩过）。
-     * Unknown names are silently dropped, never surfaced as errors. 中文仿写
-     * （词表外的"轻笑/大笑"类，真机踩过）先过 [EmotionAliases] 回 canonical，
-     * 落表的才走 morph 直驱/静默丢弃。
+     * Unknown names are filtered out (never spoken) and reported via
+     * [AvatarEvent.UnknownTag]. 模型自造词表外名字是常态：先过
+     * [EmotionAliases]（中文表回 canonical），落空的英文情绪词再兜底（模型
+     * 原生 morph 优先、表只补空缺），动作槽里的情绪词跨类改写成表情
+     * （`<act:laugh>` → happy，真机踩过），仍无处可去的发 UnknownTag 供
+     * 面板/日志定位模型实际写了什么。
      */
     private fun dispatchCues(cues: List<TagCue>) {
         for (cue in cues) when (cue) {
@@ -597,29 +600,59 @@ class AvatarSession(
                 val canonical = EmotionAliases.resolve(cue.name)
                 val isCanonical = fd != null && canonical in fd.knownEmotionNames
                 val direct = fd?.resolveExpression(cue.name)
-                if (fd == null || isCanonical || direct != null) {
+                // 别名兜底排在 canonical/morph 之后只补空缺：模型原生 morph 名
+                // （如 smile）优先于表，表值都是 canonical 名不会遮蔽组合表情。
+                val alias = if (!isCanonical && direct == null) {
+                    EmotionAliases.resolveEmotion(cue.name)
+                } else {
+                    null
+                }
+                if (fd == null || isCanonical || direct != null || alias != null) {
                     pendingEmotions += EmotionCue(
                         when {
+                            alias != null -> alias
                             fd == null || isCanonical -> canonical
                             else -> direct!!
                         },
                         cue.intensity,
                     )
+                } else {
+                    reportUnknownTag("emo", cue.raw)
                 }
             }
             is TagCue.Action -> {
                 val entry = actionCatalog.firstOrNull { it.tag == cue.name }
                 if (gestureDriver?.play(cue.name) == true) {
                     emit(AvatarEvent.ActionStarted(cue.name, entry?.label ?: cue.name))
+                } else {
+                    // 动作槽里的情绪词跨类改写（<act:laugh> → happy）：仅当目录
+                    // 里没这个名字——目录命中但播放失败是资产加载问题，
+                    // GestureDriver 已 Log.w，不算未识别。act 标签无强度，按 1.0。
+                    val emotion = if (entry == null) EmotionAliases.resolveEmotion(cue.name) else null
+                    if (emotion != null) {
+                        pendingEmotions += EmotionCue(emotion, 1f)
+                    } else if (entry == null) {
+                        reportUnknownTag("act", cue.raw)
+                    }
                 }
             }
-            is TagCue.Camera -> dispatchCamera(cue.name)
+            is TagCue.Camera -> dispatchCamera(cue)
         }
     }
 
-    private fun dispatchCamera(name: String) {
+    /** 未识别标签：过滤（不进 TTS）+ Log.w + 事件，三路兜底里负责"可见"。 */
+    private fun reportUnknownTag(kind: String, raw: String) {
+        Log.w("AvatarSession", "${STREAM_PREFIX}unknown $kind tag filtered (not spoken): $raw")
+        emit(AvatarEvent.UnknownTag(kind, raw))
+    }
+
+    private fun dispatchCamera(cue: TagCue.Camera) {
         if (!options.enableLlmCamera) return
-        val shot = CAMERA_SHOTS[name] ?: return
+        val shot = CAMERA_SHOTS[cue.name]
+        if (shot == null) {
+            reportUnknownTag("cam", cue.raw)
+            return
+        }
         controller?.setCameraShot(shot)
         emit(AvatarEvent.CameraChanged(shot))
     }

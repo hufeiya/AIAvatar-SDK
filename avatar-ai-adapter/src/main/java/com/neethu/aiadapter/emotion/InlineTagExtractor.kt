@@ -11,14 +11,21 @@ import com.neethu.aiadapter.api.TagExtractor
  * Recognized tags (case-insensitive; intensity optional, clamped to 0..1):
  * ```
  * <emo:happy>   <emo:happy:0.8>    (legacy: <|emotion:happy:0.8|>)
- * <act:wave>
- * <cam:close_up>
+ * <act:wave>    <act:wave:0.5>
+ * <cam:close_up> <cam:close_up:0.5>
  * ```
+ * act/cam tolerate a trailing intensity segment too: models habitually carry
+ * the `<emo:名字:强度>` habit over (`<act:laugh:0.5>` 真机踩过) and a
+ * single-segment regex let the whole segment fall through to speech. The
+ * value is meaningless for gestures/cameras and dropped.
+ *
  * Tag names accept any Unicode letters, not just ASCII: Chinese models
  * occasionally invent CJK names off-vocabulary (真机踩过 `<emo:轻笑>`), and an
  * ASCII-only name class let those segments fall through to speech. The
  * extractor only owns the *shape* — unknown names are resolved downstream
- * (中文别名表回 canonical / morph 直驱 / 静默丢弃), never leaked as text.
+ * (别名表回 canonical / morph 直驱 / 过滤后发 UnknownTag 事件), never leaked
+ * as text; each cue carries the original segment in [TagCue.raw] for that
+ * downstream reporting.
  *
  * Incremental semantics inherited from its predecessor
  * [MarkerEmotionExtractor]: a tag split across deltas is buffered until
@@ -38,11 +45,11 @@ class InlineTagExtractor : TagExtractor {
         RegexOption.IGNORE_CASE,
     )
     private val actionTag = Regex(
-        """<\s*act\s*:\s*($tagName)\s*>""",
+        """<\s*act\s*:\s*($tagName)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*>""",
         RegexOption.IGNORE_CASE,
     )
     private val cameraTag = Regex(
-        """<\s*cam\s*:\s*($tagName)\s*>""",
+        """<\s*cam\s*:\s*($tagName)(?::\s*(-?[0-9]*\.?[0-9]+))?\s*>""",
         RegexOption.IGNORE_CASE,
     )
     private val legacyEmotionTag = Regex(
@@ -129,13 +136,14 @@ class InlineTagExtractor : TagExtractor {
 
     private fun matchTag(segment: String): TagCue? {
         legacyEmotionTag.matchEntire(segment)?.let {
-            return TagCue.Emotion(it.groupValues[1].lowercase(), intensity(it.groupValues[2]))
+            return TagCue.Emotion(it.groupValues[1].lowercase(), intensity(it.groupValues[2]), segment)
         }
         emotionTag.matchEntire(segment)?.let {
-            return TagCue.Emotion(it.groupValues[1].lowercase(), intensity(it.groupValues[2]))
+            return TagCue.Emotion(it.groupValues[1].lowercase(), intensity(it.groupValues[2]), segment)
         }
-        actionTag.matchEntire(segment)?.let { return TagCue.Action(it.groupValues[1].lowercase()) }
-        cameraTag.matchEntire(segment)?.let { return TagCue.Camera(it.groupValues[1].lowercase()) }
+        // act/cam 的强度段（模型从 <emo:> 习惯性带过来的）无语义，提取即丢
+        actionTag.matchEntire(segment)?.let { return TagCue.Action(it.groupValues[1].lowercase(), segment) }
+        cameraTag.matchEntire(segment)?.let { return TagCue.Camera(it.groupValues[1].lowercase(), segment) }
         return null
     }
 

@@ -38,7 +38,9 @@ import org.junit.Test
  * Multimodal inline-tag dispatch (docs/ai-layer-handoff.md §7): `<cam:…>`,
  * `<act:…>`, `<emo:…>` cues are extracted from the LLM stream (and from
  * speak() greetings), routed to their drivers, stripped from speech, and
- * reflected as [AvatarEvent]s. Unknown names are silently dropped.
+ * reflected as [AvatarEvent]s. Unknown names are filtered out (never spoken)
+ * and reported via [AvatarEvent.UnknownTag]; 情绪词表外自造名先过别名表
+ * （中文/英文），动作槽里的情绪词跨类改写成表情。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AvatarSessionTagsTest {
@@ -217,7 +219,7 @@ class AvatarSessionTagsTest {
     }
 
     @Test
-    fun `unknown action and camera names are silently dropped`() = runTest {
+    fun `unknown action and camera names are filtered and reported`() = runTest {
         val llm = SharedFlowLlm()
         val tts = FakeTts()
         val gestures = FakeGestureDriver()
@@ -235,7 +237,11 @@ class AvatarSessionTagsTest {
         assertEquals(0, gestures.played.size)
         assertEquals(0, events.filterIsInstance<AvatarEvent.ActionStarted>().size)
         assertEquals(0, events.filterIsInstance<AvatarEvent.CameraChanged>().size)
+        // 未识别标签绝不进语音；带原文上报 UnknownTag 供面板/日志定位
         assertEquals(listOf("好。"), tts.synthesized)
+        val unknown = events.filterIsInstance<AvatarEvent.UnknownTag>()
+        assertEquals(listOf("act", "cam"), unknown.map { it.kind })
+        assertEquals(listOf("<act:backflip>", "<cam:drone_shot>"), unknown.map { it.raw })
     }
 
     @Test
@@ -307,7 +313,8 @@ class AvatarSessionTagsTest {
         collectInto(session, events)
 
         session.send("你好")
-        // unicorn 不是规范情绪、也查不到模型支持 → 静默；happy 是规范情绪 → 通过
+        // unicorn 不是规范情绪、别名表查不到、模型也没这个 morph → 过滤+上报；
+        // happy 是规范情绪 → 通过。标签一律不进语音。
         llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:unicorn:1><emo:happy:0.5>好。"))
         llm.stream.tryEmit(LlmStreamEvent.Finish(null))
         testScheduler.runCurrent()
@@ -315,6 +322,9 @@ class AvatarSessionTagsTest {
         val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
         assertEquals(listOf("happy"), emotions.map { it.cue.name })
         assertEquals(listOf("好。"), tts.synthesized)
+        val unknown = events.filterIsInstance<AvatarEvent.UnknownTag>()
+        assertEquals(listOf("emo"), unknown.map { it.kind })
+        assertEquals(listOf("<emo:unicorn:1>"), unknown.map { it.raw })
     }
 
     @Test
@@ -329,7 +339,7 @@ class AvatarSessionTagsTest {
 
         session.send("你好")
         // 中文模型自造的词表外名字（真机踩过 <emo:轻笑>/<emo:大笑>）：别名表
-        // 回 canonical 生效；unicorn 无别名 → 仍静默丢弃。标签一律不进语音。
+        // 回 canonical 生效；unicorn 无别名 → 过滤+上报。标签一律不进语音。
         llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:轻笑>你好。"))
         llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:大笑:0.9>哈哈。<emo:unicorn:1>"))
         llm.stream.tryEmit(LlmStreamEvent.Finish(null))
@@ -339,6 +349,81 @@ class AvatarSessionTagsTest {
         assertEquals(listOf("happy", "happy"), emotions.map { it.cue.name })
         assertEquals(0.9f, emotions[1].cue.intensity, 0.001f)
         assertEquals(listOf("你好。", "哈哈。"), tts.synthesized)
+        assertEquals(listOf("<emo:unicorn:1>"), events.filterIsInstance<AvatarEvent.UnknownTag>().map { it.raw })
+    }
+
+    @Test
+    fun `english emotion aliases resolve to canonical names`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val session = newSession(llm, tts, RecordingQueue(), FakeGestureDriver())
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // 英文模型自造词（词表只有 happy 没有 laugh/excited）：英文表回
+        // canonical 生效，强度保留；改写成功不算未识别，不发 UnknownTag。
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:laugh:0.6>哈哈。"))
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<emo:excited>哇。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
+        assertEquals(listOf("happy", "happy"), emotions.map { it.cue.name })
+        assertEquals(0.6f, emotions[0].cue.intensity, 0.001f)
+        assertEquals(listOf("哈哈。", "哇。"), tts.synthesized)
+        assertEquals(0, events.filterIsInstance<AvatarEvent.UnknownTag>().size)
+    }
+
+    @Test
+    fun `act tag carrying an emotion word remaps to the emotion`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val gestures = FakeGestureDriver()
+        val session = newSession(llm, tts, RecordingQueue(), gestures)
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // 真机踩过的原案 <act:laugh:0.5>：形状层容忍强度段 → 不漏语音；
+        // "laugh" 不在动作目录 → 按情绪词表跨类改写成 happy（act 无强度，按 1.0）
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:laugh:0.5>哈哈，被你发现了！"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("哈哈，被你发现了！"), tts.synthesized)
+        assertEquals(0, gestures.played.size)
+        val emotions = events.filterIsInstance<AvatarEvent.EmotionChanged>()
+        assertEquals(listOf("happy"), emotions.map { it.cue.name })
+        assertEquals(1.0f, emotions[0].cue.intensity, 0.001f)
+        // 改写成功 ≠ 未识别：不发 UnknownTag
+        assertEquals(0, events.filterIsInstance<AvatarEvent.UnknownTag>().size)
+    }
+
+    @Test
+    fun `action tag with trailing intensity plays the gesture`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val gestures = FakeGestureDriver()
+        val session = newSession(llm, tts, RecordingQueue(), gestures)
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        // 目录内的动作带强度段：强度对动作无语义，丢弃后正常开播
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:wave:0.7>你好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("wave"), gestures.played)
+        assertEquals(0, events.filterIsInstance<AvatarEvent.UnknownTag>().size)
+        assertEquals(listOf("你好。"), tts.synthesized)
     }
 
     @Test

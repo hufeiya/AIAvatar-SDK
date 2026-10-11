@@ -3,8 +3,11 @@ package com.neethu.aiavatar_sdk
 /**
  * 对话字幕面板的行与纯逻辑（用户消息 + 虚拟人流式回复同列展示，可滚动回看，
  * 自动贴底）。抽成纯函数便于 JVM 单测——面板本身在 MainActivity.AiChatBar。
+ *
+ * [ChatRole.SYSTEM] 是面板内的元信息行（如未识别标签过滤提示），永不并入
+ * 相邻行、渲染端以弱化样式区分——它不是对话内容，是给定位问题看的。
  */
-enum class ChatRole { USER, AVATAR }
+enum class ChatRole { USER, AVATAR, SYSTEM }
 
 data class ChatLine(val role: ChatRole, val text: String)
 

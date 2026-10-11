@@ -1,16 +1,18 @@
 package com.neethu.orchestrator.face
 
 /**
- * 中文情绪别名 → canonical 情绪名（[EmotionBlender.defs] 键集）。
+ * 情绪别名 → canonical 情绪名（[EmotionBlender.defs] 键集），中英两表。
  *
  * 协议词表是「英文名(中文释义)」形态（PromptTexts.emotionNames），规则虽然写明
- * 「一个字都不要改」，中文模型偶尔仍会按中文语感自造仿写（真机踩过
- * `<emo:轻笑>`/`<emo:大笑>`——词表里没有"笑"类情绪）。提取器按 Unicode 字母
- * 提取一切 `<emo:xx>` 形状的标签后，这类名字走不到 canonical 也匹配不到
- * morph，在 dispatchCues 被静默丢弃。先过这张表让意图生效：轻笑→happy 等。
+ * 「一个字都不要改」，模型偶尔仍会自造词表外的名字：中文按中文语感仿写（真机
+ * 踩过 `<emo:轻笑>`/`<emo:大笑>`——词表里没有"笑"类情绪），英文则写高频情绪
+ * 词（`<emo:laugh>`，甚至误挂进动作槽 `<act:laugh:0.5>`）。提取器按 Unicode
+ * 字母提取一切 `<emo:xx>` 形状的标签后，这类名字走不到 canonical 也匹配不到
+ * morph，在 dispatchCues 被丢弃。先过这两张表让意图生效：轻笑/laugh→happy 等。
  *
- * 键全部是中文，canonical 名与模型 morph 名都是 ASCII，先查别名不会遮蔽任何
- * 已有解析路径；别名落空的名字原样返回（lowercase 归一，与旧行为一致）。
+ * 消费顺序（dispatchCues）：canonical 组合优先 → 模型原生 morph 直驱次之 →
+ * 别名表最后只补空缺，所以两表都不会遮蔽模型真实支持的名字。别名落空的名字
+ * 原样返回（lowercase 归一，与旧行为一致）。
  */
 object EmotionAliases {
 
@@ -53,4 +55,44 @@ object EmotionAliases {
     /** 中文别名→canonical；其余名字原样返回（lowercase 归一）。 */
     fun resolve(name: String): String =
         zhToCanonical[name.lowercase()] ?: name.lowercase()
+
+    /**
+     * 英文自造词 → canonical。模型会把词表外的英文情绪词塞进标签，还常把
+     * 情绪词误挂进动作槽（真机踩过 `<act:laugh:0.5>`——"laugh"既不在动作
+     * 目录、也不在 13 情绪词表里）。键一律小写（提取器已统一 lowercase）；
+     * 消费方 [com.neethu.orchestrator.session.AvatarSession.dispatchCues]
+     * 在 canonical/morph 解析落空后才查这张表——模型原生 morph 名（如
+     * smile）优先，表不遮蔽。joy/fun/sorrow 与 corelib VrmExpressionManager
+     * 的 VRM 0.x legacy 别名对齐。
+     */
+    val enToCanonical: Map<String, String> = buildMap {
+        fun group(names: List<String>, canonical: String) = names.forEach { put(it, canonical) }
+        // happy：笑类/愉悦类全部归 happy，轻重由强度表达
+        group(listOf("laugh", "laughing", "laughter", "giggle", "giggling", "chuckle",
+            "chuckling", "smile", "smiling", "grin", "grinning", "joy", "joyful",
+            "cheerful", "delighted", "amused", "excited", "glad"), "happy")
+        group(listOf("cry", "crying", "sob", "sobbing", "tears", "sorrow", "sadness",
+            "unhappy", "disappointed", "disappointment", "gloomy", "heartbroken",
+            "depressed"), "sad")
+        group(listOf("mad", "anger", "rage", "furious", "annoyed", "irritated"), "angry")
+        group(listOf("surprise", "shocked", "astonished", "astounded", "startled",
+            "stunned"), "surprised")
+        group(listOf("thinking", "pensive", "pondering"), "think")
+        group(listOf("calm", "serene", "relieved", "content", "fun"), "relaxed")
+        group(listOf("smirk", "smirking", "proud", "triumphant"), "smug")
+        group(listOf("embarrassed", "blush", "blushing", "timid"), "shy")
+        group(listOf("anxious", "nervous", "scared", "afraid", "fear", "uneasy",
+            "apprehensive"), "worried")
+        group(listOf("puzzled", "perplexed", "baffled", "bewildered"), "confused")
+        group(listOf("tired", "exhausted", "drowsy", "yawn", "yawning"), "sleepy")
+        group(listOf("resolute", "determination"), "determined")
+    }
+
+    /**
+     * 任意语言别名→canonical；不在表中的名字返回 null。供英文兜底与跨类
+     * 改写（动作槽里的情绪词）用——与 [resolve] 的「落空原样返回」语义区分
+     * 开，消费方需要区分「映射到了 canonical」和「没映射」。
+     */
+    fun resolveEmotion(name: String): String? =
+        zhToCanonical[name.lowercase()] ?: enToCanonical[name.lowercase()]
 }

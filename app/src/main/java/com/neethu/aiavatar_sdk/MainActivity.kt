@@ -1137,6 +1137,18 @@ private fun DemoScreen(
                         shotLabel = ev.shot.label(uiState.lang)
                         chatLog("CameraChanged ${ev.shot.name}")
                     }
+                    is AvatarEvent.UnknownTag -> {
+                        // 词表外标签被过滤（不进 TTS）：面板灰字显示模型原文，
+                        // 定位"模型实际写了什么、该不该收进别名表"全靠它
+                        val next = ChatTranscript.append(
+                            chatLines.toList(),
+                            ChatRole.SYSTEM,
+                            uiState.strings().transcriptUnknownTag(ev.raw),
+                        )
+                        chatLines.clear()
+                        chatLines.addAll(next)
+                        chatLog("UnknownTag[${ev.kind}] ${ev.raw}")
+                    }
                     is AvatarEvent.TurnCompleted -> {
                         chatLog("TurnCompleted subtitleLen=${chatLines.lastOrNull { it.role == ChatRole.AVATAR }?.text?.length ?: 0}")
                         // 需求 6:视频模式回合结束(语音+手势都到点)自动回面部特写
@@ -2843,11 +2855,17 @@ private fun AiChatBar(
                 ) {
                     chatLines.forEach { line ->
                         val user = line.role == ChatRole.USER
+                        val system = line.role == ChatRole.SYSTEM
                         Text(
                             text = if (user) "${s.transcriptUserPrefix}${line.text}" else line.text,
-                            color = if (user) Color(0xFF9ED8FF) else Color.White,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
+                            color = when {
+                                user -> Color(0xFF9ED8FF)
+                                // SYSTEM=元信息行（未识别标签过滤提示等），弱化区分
+                                system -> Color(0xFF9E9E9E)
+                                else -> Color.White
+                            },
+                            fontSize = if (system) 11.sp else 13.sp,
+                            lineHeight = if (system) 15.sp else 18.sp,
                             modifier = Modifier.padding(vertical = 1.dp)
                         )
                     }

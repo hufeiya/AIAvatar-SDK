@@ -31,7 +31,7 @@
 | `api/AsrAdapter.kt` + `openai/OpenAiCompatibleAsrAdapter.kt` | 语音输入（任务 4）：`suspend transcribe(audio, mime, config): String`；OpenAI 兼容 `POST {base}/audio/transcriptions`（multipart `model`+`file`，文件名/Content-Type 由 mime 推导，m4a→`audio/mp4`）；language/prompt 缺省不发送（硅基流动只收 file+model，多余字段有 400 风险）；非 2xx 与 200 非 JSON 都带响应预览抛 IOException（A.1 第 11 条同源教训） |
 | `edge/EdgeTtsAdapter.kt` | **Edge-TTS 免费适配器（任务 6，开源友好，无需 baseUrl/Key）**：微软 Edge「大声朗读」WSS 端点（`speech.platform.bing.com/.../edge/v1`），协议逐字对齐开源 edge-tts(python)——`Sec-MS-GEC` 鉴权参数=Windows file time（+11644473600 秒）向下取整 300s ×10⁷ 拼 TrustedClientToken 求 SHA-256 大写（`EdgeTtsDrm`，403 时按服务端 Date 头校时钟偏移重试一次）；文本消息 speech.config→ssml 两连发（XML 转义/控制字符清洗/4096 字节按词界+UTF-8+实体边界切分，上游语义：无空格不硬截断）；服务端 BINARY 前 2 字节大端头长+`Path:audio` 分片顺序拼接，`Path:turn.end` 终结；输出恒 **MP3 24kHz**（`audio-24khz-48kbitrate-mono-mp3`，实测端点**只认这一种** outputFormat），PcmDecoder MediaCodec 路径直解；每条消息 30s 看门狗；空文本/空音频/提前断连/未知 Path 全部带上下文抛 IOException（无 SLA，错误事件必须明确） |
 | `api/LipSyncProcessor.kt` | `analyze(pcm16, sampleRate): VisemeTimeline`（**离线时间线**，帧 ≈64ms 一帧） |
-| `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名>/<cam:机位>` + 老协议 `<|emotion:..|>`（IGNORE_CASE；名字收 Unicode 字母含中文，未知名下游裁决不漏语音），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀 |
+| `emotion/InlineTagExtractor.kt` | 流式标签过滤：`<emo:名:强度>/<act:名[:强度]>/<cam:机位[:强度]>` + 老协议 `<|emotion:..|>`（IGNORE_CASE；名字收 Unicode 字母含中文，未知名下游裁决不漏语音；act/cam 容忍尾部强度段——模型从 `<emo:>` 习惯性带过来，值无语义提取即丢），跨 delta 缓冲半截标签、尾部 holdback（64 字符上限）、"裸 `<` 在真标签前"防吞段、flush 只丢疑似标签前缀；每个 cue 带 `raw` 原文段供下游过滤上报 |
 | `model/ChatTypes.kt` | ChatMessage/LlmConfig/LlmStreamEvent/TtsConfig/TtsResult/TtsAudioFormat |
 | `openai/OpenAiCompatibleLlmAdapter.kt` | OkHttp SSE 手解 `data:` 行；`channelFlow + awaitClose{call.cancel()}` 取消即断连 |
 | `openai/OpenAiCompatibleTtsAdapter.kt` | POST `{base}/audio/speech`，response_format 可配（demo 默认 wav） |
@@ -378,6 +378,8 @@
 
 - **VRM 0.x 模型说话不动嘴修复（2026-10-10，用户反馈「内置的 4705834820915235427.vrm 说话时嘴型不会动」；真机验证：`list expressions` 全新集合、`set_expression aa` 截图嘴张开、send_chat 说话三连拍口型变化+眨眼正常；单测 +9 全量 588 全绿 app169/corelib81/adapter78/orchestrator260，本次只动了 corelib）**：根因在 corelib `VrmExpressionManager` 的 VRM 0.x 解析——直接拿 `blendShapeGroups[].presetName` 当表达式名，而 0.x 规范的元音 preset 名是**单字母** `a/i/u/e/o`（眨眼分侧是 `blink_l/blink_r`），SDK 全链路（VowelDriver 五元音、EmotionBlender 组合、FaceDriver 的 send 门槛）说的是 1.0 规范名 `aa/ih/ou/ee/oh`——名字全对不上被逐 morph 静默丢弃，嘴完全不动（内置三模型里 10.vrm/Asuna 都是 VRM 1.0 所以没暴露）。修=三件套全在 `parseExpressions`（纯 JSON 静态函数，从 parseFromGlb 抽出可 JVM 单测）：①0.x→1.0 preset 名归一表（three-vrm-core 加载时同款行为）：`a→aa, i→ih, u→ou, e→ee, o→oh, blink_l→blinkLeft, blink_r→blinkRight`（neutral/blink/angry/fun/joy/sorrow/lookUp 系两规范同名，不进表）；②`presetName=unknown` 回退到组名时**转小写**（原样保留 "Surprised" 大小写永远匹配不到任何 lowercase 消费方）；③`joy→happy, sorrow→sad, fun→relaxed` 的 **canonical 情绪别名，只在模型缺 canonical 名时补**（共享同一 binds 实例；放解析层而不是往 EmotionBlender 组合里加 fallback morph，是为了杜绝「模型两套名字都有」时同脸双 morph 满强度叠发）。导入的 0.x 模型（走同一 parseFromGlb）自动获益。坑 15 记入了测量陷阱之外的本次解析陷阱。
 
+- **标签兜底三层修复（2026-10-11，用户反馈「大模型返回的标签并不精准，还是会朗读出来，比如 <act:laugh:0.5>」；方案三层=层0形状兜底+层1表驱动关键词改写+层2过滤可见，用户拍板「层0+层2必做，层1做表驱动最小版」；单测 +11 全量 599 全绿 debug变体 app170/corelib81/adapter82/orchestrator266）**：`<act:laugh:0.5>` 朗读出来的直接根因不是「名字不认识」而是**形状不匹配**——`InlineTagExtractor` 的 actionTag/cameraTag 正则只认单段 `<act:名>`（只有 emo 有可选强度段），带强度段整段 matchEntire 失败走「非本协议标签」分支原样透传进 TTS；而形状合法的标签哪怕名字完全胡写也从不朗读（未知名 dispatchCues 裁决丢弃）。三层修：①**形状兜底（根因）**：act/cam 正则补可选强度段（emo 同款 `(?::\s*(-?[0-9]*\.?[0-9]+))?`），值对动作/镜头无语义提取即丢——不管名字认不认识，形状是标签就绝不进语音；②**表驱动改写**：`EmotionAliases` 新增英文自造词表 `enToCanonical`（~80 词：laugh/laughing/excited/giggle→happy、crying/tears→sad、mad/rage→angry、shocked→surprised、tired→sleepy 等，joy/fun/sorrow 与 corelib 0.x legacy 别名对齐）+ 统一入口 `resolveEmotion`（zh+en 两表，返回 null 区分「没映射」，供跨类改写复用）；dispatchCues 消费顺序 canonical 组合 → morph 直驱 → 别名表**只补空缺**（模型原生 morph 名如 smile 优先于表，表不遮蔽）；**跨类改写**：`<act:laugh>` 动作目录未命中时按情绪词表转成 `EmotionCue(happy, 1.0)` 挂句开播（act 无强度按 1.0；目录命中但播放失败是资产加载问题，GestureDriver 已 Log.w，不算未识别）；③**过滤可见**：`TagCue` 三变体加 `raw` 原文段（带默认值向后兼容）+ 新 `AvatarEvent.UnknownTag(kind, raw)`（kind=emo/act/cam）+ `reportUnknownTag`（Log.w `[InfoStreamDectect]` 前缀）；demo：`ChatRole` 加 SYSTEM 元信息行（`ChatTranscript.append` 永不并入相邻行），聊天面板灰字小号显示「⚠ 未识别标签已过滤（不朗读）：<原文>」，事件流同时打 UnknownTag 日志。测试：InlineTagExtractorTest +4（act/cam 强度段不漏语音/负强度值丢弃/强度段跨 delta 缓冲）+ 既有 cue 相等断言全补 raw；EmotionAliasesTest +3（英文表命中/resolveEmotion 双表入口与 null 语义/两表值集锁死 canonical 键集）；AvatarSessionTagsTest 改 2（未识别从静默改为过滤+上报断言）+3（英文别名生效/act 情绪词跨类改写=用户原案端到端/act 带强度段正常播手势）；ChatTranscriptTest +1（SYSTEM 行不并入相邻行）。
+
 ## 三、关键设计决策（改代码前必读）
 
 1. **口型走离线时间线，不做实时 tap**：TTS 解码后一次性 `analyze()` 出时间线，播放时按 AudioTrack 时钟采样 + VowelDriver 状态机逐帧平滑。比 AIRI 的 AudioWorklet 实时分析更稳、无黑盒依赖。若要改口型手感，调 `VowelDriver` 常量区。
@@ -404,6 +406,7 @@
 13. **filament `Engine.destroyMaterialInstance` 在实例仍被任何活着的 renderable 引用时 precondition abort（SIGABRT）**：MToon 下切角色必崩的根因——`loadModelBytes` 原顺序是先 `mtoonApplier.destroy()`（旧实例还挂在旧资产的 renderable 上）后 `loadModelGlb`（内部才 destroyModel）。abort message 形如 `destroying MaterialInstance "MToonSurface" which is still in use by Renderable (entity=351, instance=2, index=0)`。修=重载/onDestroy 都是**先 `modelViewer.destroyModel()`（摘掉持实例的 renderable）再 destroy applier**；只有旧模型也是 MToon（applier 非空）的切换才触发，所以是"经常"而非"必现"。纹理没有同款 in-use 扫描，实例先于纹理销毁的顺序别再反过来。
 14. **帧率测量两个假象**：①`dumpsys gfxinfo` 对本应用永远 0~5 帧——Filament 直渲 SurfaceView 自持 EGL context,完全绕过 gfxinfo 统计的 HWUI 管线;测帧率只能用应用自身的 fps 统计（`ai_cmd state` 的 fps= 字段,500ms 窗口均值）。②MIUI 锁屏/灭屏时 renderer 走 onPause 停帧,但主线程 `ai_cmd` 照样响应、FaceDriver 的 Choreographer 回调照跑——锁屏下测到 fps=0 先解锁再下结论。
 15. **VRM 0.x 与 1.0 的表情 preset 名不同表**：0.x 元音是单字母 `a/i/u/e/o`、分侧眨眼是 `blink_l/blink_r`，1.0 是 `aa/ih/ou/ee/oh`、`blinkLeft/blinkRight`；SDK 全链路只说 1.0 名。corelib `VrmExpressionManager.parseExpressions` 已做归一 + `joy/sorrow/fun`→`happy/sad/relaxed` 的缺位别名（见第二节 2026-10-10 条目），排查表情问题时先看 `ai_cmd list expressions` 的实际名字集合，别假设模型名=协议名。
+16. **三类标签的正则形状不对称，排查「标签被朗读」先查形状再查名字**：emo 一直允许 `:强度` 段而 act/cam 原本只认单段——模型会把 `<emo:名:强度>` 的习惯带进 `<act:laugh:0.5>`，形状不匹配整段透传进 TTS（2026-10-11 已修，act/cam 同款容忍强度段）。未知名（形状对但词表外）会被过滤不朗读，但要知道模型写了什么得看 UnknownTag 事件（聊天面板灰字 / `[InfoStreamDectect] UnknownTag` 日志）——别再猜「它到底发了什么标签」。
 
 ## 五、测试与 API 配置现状
 
@@ -601,13 +604,13 @@ data class ActionEntry(val tag: String, val label: String, val assetPath: String
 
 - **外置动画库**（445 个）开启时按文件名关键词匹配（greeting→wave、acknowledg→nod、thank→thank…），无匹配回落内置 assetPath（assets 始终在包内，手动面板隐藏不影响加载）。
 - `session.actionCatalog` 是公开可注入属性——SDK 集成者可换自己的目录；目录为空时协议块不出动作段。
-- prompt 里模型只见真实名字 + 客户端未知名静默丢弃 = 双保险。
+- prompt 里模型只见真实名字 + 客户端未识别过滤并上报（`AvatarEvent.UnknownTag` 带原文，不进语音）= 双保险。
 
 ### 7.3 协议细节决策（每条都影响可用性）
 
 1. **跨 delta 缓冲**照搬现有实现：标签可能被 SSE 拦腰截断（`<emo:hap` + `py:0.8>`），尾部未闭合 `<` holdback + 64 字符上限（病态输入防卡死）语义原样继承。
 2. **历史记录保留原始标签**（`replyBuffer` append 原始 delta）：模型在上下文里看到自己上一轮的标签用法 = 免费 few-shot 自我示范，协议遵循率显著更高。字幕 UI 拿的本来就是 clean text。**这是刻意设计，勿当 bug 修掉。**
-3. **未知名静默丢弃**：情绪（EmotionBlender.apply 未知名 return）、动作（目录查不到不播）、机位（映射表查不到不动）——不发错误事件，LLM 偶尔编名字是常态。
+3. **未知名过滤不读 + 上报**：情绪（canonical/morph/别名表都落空）、动作（目录查不到且不是情绪词）、机位（映射表查不到）——一律不进 TTS 语音（形状已在提取器拦下），发 `AvatarEvent.UnknownTag(kind, raw)` + Log.w；demo 聊天面板以 SYSTEM 灰字行显示原文，方便定位模型实际写了什么。别名改写成功（如 `<act:laugh>`→happy）不算未识别、不发该事件。
 4. **解析器对"正文裸 `<` 在真标签前"要防泄漏**：`a < b <emo:happy> c` 这种片段必须不能把真标签当普通文本透传（实现：段匹配失败时若段内还有下一个 `<`，只透传到该 `<` 并从那里重新评估）。
 5. **密度兜底节流**（可选后置）：同名情绪 ~800ms 内重复忽略，防低质量模型每句刷标签。真机看遵循率再定。
 
@@ -682,7 +685,7 @@ LLM SSE delta
 
 **② 表情全量暴露**：`<emo:>` 统一词表 = 7 标准情绪 + 模型全部可用表情原名（`FaceDriver.availableExpressions`，模型加载后捕获）。两条新链路：
 - `EmotionBlender.applyInternal` 未知名回退：`Def(listOf(name to 1f), 0.25f)` 单 morph 直驱——同款 easeInOutCubic + 3s 自动回 neutral，眨眼保持/微表情都由此实现；
-- `FaceDriver.resolveExpression`：大小写不敏感还原 morph 名（解析器统一小写 cue，morph 名大小写敏感——见 A.1 第 18 条）；`AvatarSession` 分派预过滤：规范情绪直通、可解析名直驱、其余静默丢弃。
+- `FaceDriver.resolveExpression`：大小写不敏感还原 morph 名（解析器统一小写 cue，morph 名大小写敏感——见 A.1 第 18 条）；`AvatarSession` 分派预过滤：规范情绪直通、可解析名直驱、其余过别名表（中文/英文）兜底、仍落空过滤并上报 UnknownTag。
 
 **③ IDLE 待机**：`VrmaAnimationEngine` 加 idle 槽（`setIdleAnimation` + `idleTakeover/idleAnchor` 相位锚定）——一次性动作播完或 `stop()` 自动切 idle 循环；`consumeIdleSwap()` 供 renderer 重置弹簧骨骼；无 idle 回落 rest pose。API：`controller.setVrmaIdleAnimation(FromFile)/clearVrmaIdleAnimation`；orchestrator：`session.idleAction` → `GestureDriver.setIdle`；app：默认自动选（`IDLE_PREFERENCE`：Idle Stand Looking Around 优先）+ 动画面板长按换待机 + `ai_idle_animation` 持久化 + `ai_cmd set_idle/idle_off`。
 

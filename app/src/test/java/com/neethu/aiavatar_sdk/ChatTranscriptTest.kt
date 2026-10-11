@@ -52,6 +52,18 @@ class ChatTranscriptTest {
     }
 
     @Test
+    fun `system meta lines never merge with neighbors`() {
+        // 元信息行（未识别标签过滤提示）：不并入虚拟人流式行，后续回复也从新行起
+        val lines = ChatTranscript.append(emptyList(), ChatRole.AVATAR, "回复")
+        val withMeta = ChatTranscript.append(lines, ChatRole.SYSTEM, "⚠ 未识别标签已过滤：<act:laugh:0.5>")
+        assertEquals(2, withMeta.size)
+        assertEquals(ChatRole.SYSTEM, withMeta[1].role)
+        val after = ChatTranscript.append(withMeta, ChatRole.AVATAR, "下一句")
+        assertEquals(3, after.size)
+        assertEquals("下一句", after[2].text)
+    }
+
+    @Test
     fun `empty text is a no-op returning same instance`() {
         assertSame(user, ChatTranscript.append(listOf(user), ChatRole.AVATAR, "").let { it[0] })
         assertTrue(ChatTranscript.append(emptyList(), ChatRole.USER, "").isEmpty())

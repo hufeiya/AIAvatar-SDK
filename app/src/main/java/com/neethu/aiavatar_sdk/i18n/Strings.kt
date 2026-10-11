@@ -91,6 +91,10 @@ class Strings(val lang: Lang) {
     val phaseThinking: String get() = zh("思考中", "Thinking")
     val phaseSpeaking: String get() = zh("说话中", "Speaking")
     val transcriptUserPrefix: String get() = zh("我：", "Me: ")
+
+    /** 聊天面板的元信息行：词表外标签被过滤（不进 TTS），显示原文方便定位。 */
+    fun transcriptUnknownTag(raw: String): String =
+        zh("⚠ 未识别标签已过滤（不朗读）：$raw", "⚠ Unknown tag filtered (not spoken): $raw")
     val sendA11y: String get() = zh("发送", "Send")
     val interruptA11y: String get() = zh("打断", "Interrupt")
     val toggleInputModeA11y: String get() = zh("切换输入模式", "Switch input mode")
