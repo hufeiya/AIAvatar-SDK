@@ -26,7 +26,7 @@ class ChatProvidersTest {
             sf.llmModels,
         )
         assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.defaultLlmModel)
-        assertEquals("fnlp/MOSS-TTSD-v0.5", sf.defaultTtsModel)
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B", sf.defaultTtsModel)
         assertEquals("FunAudioLLM/CosyVoice2-0.5B", sf.voicePrefix)
         assertEquals("anna", sf.defaultVoice)
 

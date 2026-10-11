@@ -55,10 +55,12 @@ enum class ChatProvider(
             "Qwen/Qwen3-VL-32B-Instruct",
         ),
         ttsModels = listOf(
-            "fnlp/MOSS-TTSD-v0.5",
             "FunAudioLLM/CosyVoice2-0.5B",
+            "fnlp/MOSS-TTSD-v0.5",
         ),
-        defaultTtsModel = "fnlp/MOSS-TTSD-v0.5",
+        // 默认 CosyVoice2（2026-10-11 用户实测反馈：MOSS-TTSD 断句不精准太拉胯）；
+        // 显式选过 MOSS 的存量用户不受影响（resolveTtsModel 只在清单外/留空落默认）
+        defaultTtsModel = "FunAudioLLM/CosyVoice2-0.5B",
         voicePrefix = "FunAudioLLM/CosyVoice2-0.5B",
         voices = listOf("alex", "anna", "bella", "benjamin", "charles", "claire"),
         defaultVoice = "anna",

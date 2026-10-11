@@ -25,8 +25,8 @@ class AiProvidersTest {
             sf.llmModels,
         )
         assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.defaultLlmModel)
-        assertEquals(listOf("fnlp/MOSS-TTSD-v0.5", "FunAudioLLM/CosyVoice2-0.5B"), sf.ttsModels)
-        assertEquals("fnlp/MOSS-TTSD-v0.5", sf.defaultTtsModel)
+        assertEquals(listOf("FunAudioLLM/CosyVoice2-0.5B", "fnlp/MOSS-TTSD-v0.5"), sf.ttsModels)
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B", sf.defaultTtsModel)
         assertEquals("anna", sf.defaultVoice)
         assertEquals(listOf("alex", "anna", "bella", "benjamin", "charles", "claire"), sf.voices)
 
@@ -103,7 +103,7 @@ class AiProvidersTest {
         )
         // 反向：火山的值落到硅基流动默认
         assertEquals("deepseek-ai/DeepSeek-V4-Flash", resolveLlmModel(AiProvider.SILICONFLOW, "doubao-seed-2-1-pro-260915"))
-        assertEquals("fnlp/MOSS-TTSD-v0.5", resolveTtsModel(AiProvider.SILICONFLOW, "seed-tts-2.0"))
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B", resolveTtsModel(AiProvider.SILICONFLOW, "seed-tts-2.0"))
         assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", resolveVoice(AiProvider.SILICONFLOW, "zh_male_m191_uranus_bigtts"))
     }
 
