@@ -1,0 +1,9 @@
+{
+  "name": "aiavatar-model-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AIAvatar-SDK assets 内置 VRM 模型 / VRMA 动作的本地网页查看器(基于 three-vrm)",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

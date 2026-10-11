@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VRM 资产查看器 · AIAvatar-SDK</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧍</text></svg>">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three.module.js",
+        "three/addons/": "/vendor/addons/",
+        "@pixiv/three-vrm": "/vendor/three-vrm.module.js",
+        "@pixiv/three-vrm-animation": "/vendor/three-vrm-animation.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header id="topbar">
+    <div id="brand" title="VRM 资产查看器">🧍<span>资产查看器</span></div>
+    <nav id="breadcrumb" aria-label="目录导航"></nav>
+    <div id="toolbar">
+      <select id="typeFilter" title="按类型筛选">
+        <option value="all">全部类型</option>
+        <option value="model">模型 (.vrm)</option>
+        <option value="anim">动作 (.vrma)</option>
+      </select>
+      <input id="search" type="search" placeholder="搜索全部资产名…" autocomplete="off" spellcheck="false">
+      <button id="refreshBtn" title="刷新列表">⟳</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="gridWrap">
+      <div id="gridHead">
+        <span id="gridSummary"></span>
+      </div>
+      <div id="grid" class="grid"></div>
+      <div id="emptyState" hidden>
+        <p>这个文件夹里没有 .vrm / .vrma 资产</p>
+        <button id="emptyBack">返回上一级</button>
+      </div>
+    </section>
+
+    <aside id="stage">
+      <div id="canvasHost"></div>
+      <div id="modelBadge" hidden></div>
+      <div id="animBar" hidden>
+        <span id="animName"></span>
+        <span class="anim-bar-actions">
+          <button id="stopAnimBtn">⏹ 停止</button>
+          <button id="resetCamBtn">📷 重置视角</button>
+        </span>
+      </div>
+      <div id="stageHint">左侧点击模型查看 / 点击动作播放</div>
+      <div id="loadingOverlay" hidden><div class="spinner"></div><span id="loadingText">加载中…</span></div>
+    </aside>
+  </main>
+
+  <div id="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
