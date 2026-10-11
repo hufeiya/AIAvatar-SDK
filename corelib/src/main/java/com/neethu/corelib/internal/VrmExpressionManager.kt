@@ -27,6 +27,36 @@ internal class VrmExpressionManager(
         private const val CHUNK_TYPE_JSON = 0x4E4F534A // "JSON"
 
         /**
+         * VRM 0.x blendShape presetName → VRM 1.0 canonical expression name
+         * (three-vrm-core's VRMExpressionLoaderPlugin does the same rename on
+         * load). The whole SDK pipeline speaks 1.0 names — lip-sync visemes
+         * drive `aa/ih/ou/ee/oh`, emotion combos and the blink engine likewise
+         * use canonical spellings — so a 0.x model kept verbatim (`a/i/u/e/o`,
+         * `blink_l/blink_r`) had its visemes silently dropped by every
+         * consumer's expression gate: the model opened no mouth while speaking
+         * (内置 4705834820915235427.vrm 实测). Presets whose names are already
+         * identical in both specs (neutral/blink/angry/fun/joy/sorrow,
+         * lookUp/lookDown/lookLeft/lookRight) are absent on purpose.
+         */
+        private val VRM0_PRESET_TO_VRM1: Map<String, String> = mapOf(
+            "a" to "aa", "i" to "ih", "u" to "ou", "e" to "ee", "o" to "oh",
+            "blink_l" to "blinkLeft", "blink_r" to "blinkRight",
+        )
+
+        /**
+         * Legacy VRM preset emotion names → the canonical emotion names the
+         * orchestrator's emotion defs target. Applied model-adaptively: an
+         * alias is registered ONLY when the canonical name is absent and the
+         * legacy name present, so a model can never end up with two live
+         * expressions driving the same face at full strength (unlike a fixed
+         * per-morph fallback in the emotion combos, which would double-fire on
+         * models that carry both spellings).
+         */
+        private val LEGACY_EMOTION_ALIASES: Map<String, String> = mapOf(
+            "joy" to "happy", "sorrow" to "sad", "fun" to "relaxed",
+        )
+
+        /**
          * Scale an expression's binds so its strongest bind reaches weight 1.0.
          *
          * Every consumer of expressions (lip-sync visemes, emotion blends, the
@@ -42,6 +72,111 @@ internal class VrmExpressionManager(
             val max = binds.maxOfOrNull { it.weight } ?: return binds
             if (max <= 0f || max >= 0.999f) return binds
             return binds.map { it.copy(weight = it.weight / max) }
+        }
+
+        /**
+         * Pure expression-table builder (no renderer, no Log — unit-testable
+         * on the JVM): both VRM versions' parsing, 0.x→1.0 preset-name
+         * unification and the legacy-emotion aliasing all live here.
+         */
+        internal fun parseExpressions(json: JsonObject): Map<String, VrmExpression> {
+            val ext = json.getAsJsonObject("extensions")
+            val nodes = json.getAsJsonArray("nodes")
+            val meshes = json.getAsJsonArray("meshes")
+
+            val parsed = mutableMapOf<String, VrmExpression>()
+
+            // ── VRM 1.0: VRMC_vrm.expressions ────────────────────────────
+            ext?.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("expressions")?.let { expressions ->
+                // Parse both preset and custom expressions
+                for (category in listOf("preset", "custom")) {
+                    expressions.getAsJsonObject(category)?.entrySet()?.forEach { (name, element) ->
+                        val exprObj = element.asJsonObject
+                        val binds = normalizeBindWeights(parseMorphTargetBindsV1(exprObj, nodes, meshes))
+                        if (binds.isNotEmpty()) {
+                            parsed[name] = VrmExpression(name, binds)
+                        }
+                    }
+                }
+            }
+
+            // ── VRM 0.x: VRM.blendShapeMaster.blendShapeGroups ───────────
+            if (parsed.isEmpty()) {
+                ext?.getAsJsonObject("VRM")
+                    ?.getAsJsonObject("blendShapeMaster")
+                    ?.getAsJsonArray("blendShapeGroups")?.forEach { groupEl ->
+                        val group = groupEl.asJsonObject
+                        // Use presetName first, fall back to name (lowercased:
+                        // every consumer — emotion defs, LLM cues, the viseme
+                        // channel — speaks lowercase, and a verbatim fallback
+                        // like "Surprised" could never be hit by any of them)
+                        val presetName = group.get("presetName")?.asString?.lowercase()
+                        val name = if (!presetName.isNullOrBlank() && presetName != "unknown") {
+                            VRM0_PRESET_TO_VRM1[presetName] ?: presetName
+                        } else {
+                            group.get("name")?.asString?.lowercase() ?: return@forEach
+                        }
+
+                        val binds = normalizeBindWeights(parseMorphTargetBindsV0(group))
+                        if (binds.isNotEmpty()) {
+                            parsed[name] = VrmExpression(name, binds)
+                        }
+                    }
+            }
+
+            // ── Legacy emotion presets → canonical emotion names ─────────
+            // Only fills the gaps (see [LEGACY_EMOTION_ALIASES]); the aliased
+            // expression shares the same binds as its source.
+            for ((legacy, canonical) in LEGACY_EMOTION_ALIASES) {
+                if (canonical !in parsed && legacy in parsed) {
+                    parsed[canonical] = parsed.getValue(legacy)
+                }
+            }
+
+            return parsed
+        }
+
+        /**
+         * Parse morphTargetBinds from VRM 1.0 expression object.
+         * Schema: { morphTargetBinds: [{ node: int, index: int, weight: float }] }
+         * node → nodes[node].mesh gives the mesh index.
+         */
+        private fun parseMorphTargetBindsV1(
+            exprObj: JsonObject,
+            nodes: com.google.gson.JsonArray?,
+            meshes: com.google.gson.JsonArray?
+        ): List<MorphTargetBind> {
+            val binds = mutableListOf<MorphTargetBind>()
+            exprObj.getAsJsonArray("morphTargetBinds")?.forEach { bindEl ->
+                val bind = bindEl.asJsonObject
+                val nodeIndex = bind.get("node")?.asInt ?: return@forEach
+                val morphIndex = bind.get("index")?.asInt ?: return@forEach
+                val weight = bind.get("weight")?.asFloat ?: 1.0f
+
+                // Resolve node index → mesh index
+                val meshIndex = nodes?.get(nodeIndex)?.asJsonObject?.get("mesh")?.asInt ?: return@forEach
+
+                binds.add(MorphTargetBind(meshIndex, morphIndex, weight))
+            }
+            return binds
+        }
+
+        /**
+         * Parse morph target binds from VRM 0.x blendShapeGroup.
+         * Schema: { binds: [{ mesh: int, index: int, weight: float(0–100) }] }
+         */
+        private fun parseMorphTargetBindsV0(group: JsonObject): List<MorphTargetBind> {
+            val binds = mutableListOf<MorphTargetBind>()
+            group.getAsJsonArray("binds")?.forEach { bindEl ->
+                val bind = bindEl.asJsonObject
+                val meshIndex = bind.get("mesh")?.asInt ?: return@forEach
+                val morphIndex = bind.get("index")?.asInt ?: return@forEach
+                // VRM 0.x uses 0–100 range, normalize to 0.0–1.0
+                val weight = (bind.get("weight")?.asFloat ?: 100f) / 100f
+
+                binds.add(MorphTargetBind(meshIndex, morphIndex, weight))
+            }
+            return binds
         }
     }
 
@@ -105,94 +240,8 @@ internal class VrmExpressionManager(
             return
         }
 
-        val ext = json.getAsJsonObject("extensions")
-        val nodes = json.getAsJsonArray("nodes")
-        val meshes = json.getAsJsonArray("meshes")
-
-        val parsed = mutableMapOf<String, VrmExpression>()
-
-        // ── VRM 1.0: VRMC_vrm.expressions ────────────────────────────
-        ext?.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("expressions")?.let { expressions ->
-            // Parse both preset and custom expressions
-            for (category in listOf("preset", "custom")) {
-                expressions.getAsJsonObject(category)?.entrySet()?.forEach { (name, element) ->
-                    val exprObj = element.asJsonObject
-                    val binds = normalizeBindWeights(parseMorphTargetBindsV1(exprObj, nodes, meshes))
-                    if (binds.isNotEmpty()) {
-                        parsed[name] = VrmExpression(name, binds)
-                        Log.d(TAG, "VRM1.0 expression '$name': ${binds.size} binds")
-                    }
-                }
-            }
-        }
-
-        // ── VRM 0.x: VRM.blendShapeMaster.blendShapeGroups ───────────
-        if (parsed.isEmpty()) {
-            ext?.getAsJsonObject("VRM")
-                ?.getAsJsonObject("blendShapeMaster")
-                ?.getAsJsonArray("blendShapeGroups")?.forEach { groupEl ->
-                    val group = groupEl.asJsonObject
-                    // Use presetName first, fall back to name
-                    val presetName = group.get("presetName")?.asString?.lowercase()
-                    val name = if (!presetName.isNullOrBlank() && presetName != "unknown") {
-                        presetName
-                    } else {
-                        group.get("name")?.asString ?: return@forEach
-                    }
-
-                    val binds = normalizeBindWeights(parseMorphTargetBindsV0(group))
-                    if (binds.isNotEmpty()) {
-                        parsed[name] = VrmExpression(name, binds)
-                        Log.d(TAG, "VRM0.x expression '$name': ${binds.size} binds")
-                    }
-                }
-        }
-
-        expressions = parsed
-        Log.i(TAG, "Parsed ${parsed.size} expressions: ${parsed.keys.joinToString()}")
-    }
-
-    /**
-     * Parse morphTargetBinds from VRM 1.0 expression object.
-     * Schema: { morphTargetBinds: [{ node: int, index: int, weight: float }] }
-     * node → nodes[node].mesh gives the mesh index.
-     */
-    private fun parseMorphTargetBindsV1(
-        exprObj: JsonObject,
-        nodes: com.google.gson.JsonArray?,
-        meshes: com.google.gson.JsonArray?
-    ): List<MorphTargetBind> {
-        val binds = mutableListOf<MorphTargetBind>()
-        exprObj.getAsJsonArray("morphTargetBinds")?.forEach { bindEl ->
-            val bind = bindEl.asJsonObject
-            val nodeIndex = bind.get("node")?.asInt ?: return@forEach
-            val morphIndex = bind.get("index")?.asInt ?: return@forEach
-            val weight = bind.get("weight")?.asFloat ?: 1.0f
-
-            // Resolve node index → mesh index
-            val meshIndex = nodes?.get(nodeIndex)?.asJsonObject?.get("mesh")?.asInt ?: return@forEach
-
-            binds.add(MorphTargetBind(meshIndex, morphIndex, weight))
-        }
-        return binds
-    }
-
-    /**
-     * Parse morph target binds from VRM 0.x blendShapeGroup.
-     * Schema: { binds: [{ mesh: int, index: int, weight: float(0–100) }] }
-     */
-    private fun parseMorphTargetBindsV0(group: JsonObject): List<MorphTargetBind> {
-        val binds = mutableListOf<MorphTargetBind>()
-        group.getAsJsonArray("binds")?.forEach { bindEl ->
-            val bind = bindEl.asJsonObject
-            val meshIndex = bind.get("mesh")?.asInt ?: return@forEach
-            val morphIndex = bind.get("index")?.asInt ?: return@forEach
-            // VRM 0.x uses 0–100 range, normalize to 0.0–1.0
-            val weight = (bind.get("weight")?.asFloat ?: 100f) / 100f
-
-            binds.add(MorphTargetBind(meshIndex, morphIndex, weight))
-        }
-        return binds
+        expressions = parseExpressions(json)
+        Log.i(TAG, "Parsed ${expressions.size} expressions: ${expressions.keys.joinToString()}")
     }
 
     // ── Asset Binding ────────────────────────────────────────────────────
