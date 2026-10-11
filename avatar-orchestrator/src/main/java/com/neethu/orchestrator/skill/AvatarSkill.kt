@@ -83,4 +83,12 @@ interface AvatarSkill {
 
     /** 调试命令（ai_cmd skill <id> <arg>）；返回给 adb 的结果行。 */
     fun debugCommand(arg: String?, ctx: SkillContext): String? = null
+
+    /**
+     * 本技能提供给 LLM 的工具（P0 工具调用缝，docs/agent-feasibility.md §4.7）。
+     * 注册进 session 的工具注册表后，模型不用等激活词就能直接调用（例如猜拳
+     * 的「帮我判一下这局」）。空列表（默认）= 不注册任何工具，现有三个技能
+     * 零破坏。同名工具后注册者覆盖。
+     */
+    fun tools(): List<Pair<com.neethu.aiadapter.model.ToolSpec, com.neethu.orchestrator.agent.ToolExecutor>> = emptyList()
 }

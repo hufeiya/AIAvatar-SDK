@@ -101,6 +101,14 @@ internal class AiChatDebugHooks(
     val mimicForce: (String?) -> String = { "mimic not wired in this screen" },
     /** ai_cmd mimic_face on|off：表情车道开关（P2 表情模仿 A/B）。 */
     val setMimicFace: (String?) -> String = { "mimic not wired in this screen" },
+    /** ai_cmd tools_list：工具注册表快照（挂会话后可用）。 */
+    val toolsList: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd tools_call <name> [json]：手工执行工具（绕 LLM——真机 A/B 的关键入口，挂起）。 */
+    val toolsCall: suspend (String, String?) -> String = { _, _ ->
+        "AI chat not wired in this screen"
+    },
+    /** ai_cmd agent_state：智能体工具状态快照（注册表/最近调用/禁用模型/上限配置）。 */
+    val agentState: () -> String = { "AI chat not wired in this screen" },
 )
 
 /**
@@ -389,6 +397,25 @@ internal suspend fun executeAiCommand(
                 // 身体通道问题的隔离开关（off=只模仿身体，表情留在情绪通道）
                 chat.setMimicFace(command.arg?.lowercase())
             }
+            "tools_list" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.toolsList()
+            }
+            "tools_call" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // 手工执行绕开 LLM——「模型会不会调、调得对不对」之前先验工具本身
+                val (toolName, json) = parseToolsCallArg(command.arg)
+                chat.toolsCall(toolName, json)
+            }
+            "observe" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                // 等价 tools_call observe_camera：抓帧 + 视觉描述全链真机验证
+                chat.toolsCall("observe_camera", command.arg?.trim()?.ifEmpty { null } ?: "{}")
+            }
+            "agent_state" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.agentState()
+            }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
             )
@@ -401,6 +428,19 @@ internal suspend fun executeAiCommand(
 }
 
 // ── Command handlers ─────────────────────────────────────────────────────
+
+/**
+ * tools_call 的 ai_arg 解析（纯函数可测）：`"<name> [json]"` 空格分隔，
+ * JSON 缺省 `"{}"`。非法（无工具名）抛 [IllegalArgumentException]。
+ */
+internal fun parseToolsCallArg(arg: String?): Pair<String, String> {
+    val spec = arg?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw IllegalArgumentException(
+            "tools_call expects ai_arg = tool name (see ai_cmd tools_list), " +
+                "optionally followed by a JSON arguments object"
+        )
+    return spec.substringBefore(' ').trim() to spec.substringAfter(' ', "").trim().ifEmpty { "{}" }
+}
 
 private fun describeState(controller: AvatarController, uiState: DemoUiState): String {
     val lookAt = controller.getCameraLookAt()

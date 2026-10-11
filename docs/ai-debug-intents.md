@@ -82,6 +82,10 @@
 | `mimic_pose` | — | 最近解算的镜像方向集（虚拟人世界系单位向量 + 数据年龄）。**符号标定探针**：在模仿激活态做 T-pose——用户左臂应读出 `Lu=(1,0,0)`（驱动虚拟人**右**臂）、用户右臂 `Ru=(-1,0,0)`；双臂前伸 z=+1（指观察者）。任一轴与推导不符改 `PoseMimicMath.mirrorFrame` + 已知答案单测。无数据时提示前置条件（可用 `mimic_force` 替代探路） |
 | `mimic_force` | `ai_arg`= tpose \| left_up \| right_up \| both_up \| forward \| lean_left \| lean_right \| bow \| turn_left \| off（省略=查状态） | **注入合成姿态**（在 MediaPipe 坐标里搭骨架后走与真实检测**完全相同**的解算路径）：免相机/免技能激活直接驱动渲染引擎。用途：①镜像标定——`left_up` 后人眼看虚拟人抬的是哪只手（应抬它自己的右手）；②P2 躯干标定——`lean_left`/`lean_right`/`bow` 看躯干倾斜方向、`turn_left` 看转身方向，方向错了改 `PoseMimicMath.mirrorFrame`；③引擎 A/B（退场缓动/单发 VRMA 让路/与呼吸视线共存）。`off` 撤销注入、引擎缓动回待机 |
 | `mimic_face` | `ai_arg`= on \| off（省略=查状态） | P2 表情车道开关（默认 on）：52 ARKit blendshapes → 模型 morph 名映射（`MimicFaceMapper`，ARKit 命名模型直配、VRM 预设模型走别名降级）→ FaceDriver 表情通道。**所有权规则**：说话期嘴部让给口型（jawOpen 等归零）、用户的真实眨眼替代自动眨眼、情绪通道整体让位（blender 状态保留、断供即接回）。off=只模仿身体，表情留在情绪通道——排查表情 vs 身体问题的隔离开关 |
+| `tools_list` | — | 输出 LLM 工具注册表（P0 智能体工具调用，docs/agent-feasibility.md）：工具名清单（内置 `get_device_time`/`get_current_view` 恒在；`observe_camera` 按「智能体工具调用 + 摄像头观察 + 视频模式 + 相机权限 + 视觉模型」五条件挂载）+ agent 状态快照（总开关/轮数上限/超时/最近调用/被禁用模型） |
+| `tools_call` | `ai_arg`=`<工具名> [JSON参数]` | **手工执行一个工具**（绕开 LLM）：先验工具本身再 A/B 模型的工具选择，`ai_arg` 形态 `observe_camera {"description":"杯子"}`（空格分隔，JSON 缺省 `{}`）；未知名返回可用清单 |
+| `observe` | `ai_arg`=可选 JSON | 等价 `tools_call observe_camera`：**任何模式按需拍一张**（视频模式用常驻抓拍环；其他模式自动开相机拍完即关，可带 `lens`:front=拍自己(默认)/back=拍环境）→ 视觉模型描述 → 回灌文本（需摄像头观察开关 + 视觉模型 + 相机权限；未授权返回喂给模型的错误文案） |
+| `agent_state` | — | 智能体工具状态单行快照：总开关/轮数上限/单工具超时/注册表清单/最近一轮工具调用/因「不支持工具」400 被禁用的模型（禁用后本会话不再带 tools 请求） |
 
 文件名参数不必带扩展名：`load_model AvatarDone` 等价于 `load_model AvatarDone.glb`；
 表情名不区分大小写。

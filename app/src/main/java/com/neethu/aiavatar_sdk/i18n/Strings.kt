@@ -95,6 +95,10 @@ class Strings(val lang: Lang) {
     /** 聊天面板的元信息行：词表外标签被过滤（不进 TTS），显示原文方便定位。 */
     fun transcriptUnknownTag(raw: String): String =
         zh("⚠ 未识别标签已过滤（不朗读）：$raw", "⚠ Unknown tag filtered (not spoken): $raw")
+
+    /** 聊天面板的元信息行：模型正在调用工具（等待原因可视化，docs/agent-feasibility.md §4.11）。 */
+    fun transcriptToolCall(name: String): String =
+        zh("🔍 正在调用工具 $name…", "🔍 Calling tool $name…")
     val sendA11y: String get() = zh("发送", "Send")
     val interruptA11y: String get() = zh("打断", "Interrupt")
     val toggleInputModeA11y: String get() = zh("切换输入模式", "Switch input mode")
@@ -263,6 +267,14 @@ class Strings(val lang: Lang) {
     val llmCameraSubtitle: String get() =
         zh("允许模型用 <cam:…> 标签切换视角；关闭后模型不再动你的取景",
             "Let the model switch framing with <cam:…> tags; when off the model never moves your camera")
+    val agentToolsTitle: String get() = zh("智能体工具调用", "Agent tool calling")
+    val agentToolsSubtitle: String get() =
+        zh("让模型调用工具获取信息（查时间/看镜头画面等）；关闭后回到纯对话",
+            "Let the model call tools to gather info (device time, camera view, …); off = plain chat only")
+    val observeCameraTitle: String get() = zh("摄像头观察工具", "Camera observation tool")
+    val observeCameraSubtitle: String get() =
+        zh("允许模型在任何模式下主动拍一张照并描述画面（回答「你能看到什么」）；需要相机权限",
+            "Let the model take an on-demand photo and describe it in any mode (answers \"what can you see\"); needs camera permission")
 
     val sectionCard: String get() = zh("人物卡 (Character Card · 人设提示词)", "Character Card (persona prompt)")
     val cardNotActive: String get() =

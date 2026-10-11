@@ -46,4 +46,16 @@ sealed interface AvatarEvent {
 
     /** 技能进度事件（激活/出拳/判定/退场…），skill/ 框架经 SkillContext.event 发出。 */
     data class SkillEvent(val skillId: String, val detail: String) : AvatarEvent
+
+    /**
+     * 模型发起了一个工具调用（P0 工具调用循环）。字幕可显示「🔍 …」——让用户
+     * 感知等待原因（工具执行 + 续流有数秒空档，docs/agent-feasibility.md §9.4）。
+     */
+    data class ToolCallStarted(val name: String) : AvatarEvent
+
+    /** 一轮工具调用全量（观测：模型一次请求了哪些工具，顺序执行）。 */
+    data class ToolCallsIssued(val names: List<String>) : AvatarEvent
+
+    /** 单个工具执行完毕（[isError]=失败结果已回灌模型，回合不失败）。 */
+    data class ToolCallFinished(val name: String, val isError: Boolean) : AvatarEvent
 }

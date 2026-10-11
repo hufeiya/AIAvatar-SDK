@@ -16,9 +16,17 @@ import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.model.LlmStreamEvent
 import com.neethu.aiadapter.model.LlmUsage
 import com.neethu.aiadapter.model.TtsConfig
+import com.neethu.aiadapter.model.ToolCallRequest
+import com.neethu.aiadapter.model.ToolSpec
+import com.neethu.aiadapter.openai.isToolRelatedError
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
+import com.neethu.orchestrator.agent.AgentToolCatalog
+import com.neethu.orchestrator.agent.ToolExecutor
+import com.neethu.orchestrator.agent.ToolRegistry
+import com.neethu.orchestrator.agent.isDanglingBridgeReply
+import com.neethu.orchestrator.agent.parseTemplateToolCalls
 import com.neethu.orchestrator.i18n.PromptTexts
 import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
@@ -152,6 +160,21 @@ class AvatarSession(
          * 建议设置。
          */
         val recentTurnLimit: Int? = null,
+        /**
+         * 智能体工具调用总开关（docs/agent-feasibility.md §4.5）：关闭后请求
+         * 永不带 tools 键、工具循环短路，行为与非 agent 会话逐字节一致。
+         * 注册表为空时开启也是天然 no-op。
+         */
+        val agentToolsEnabled: Boolean = true,
+        /** 工具轮数上限：模型连续请求工具的最大轮数（语音场景每轮都是真金白银的延迟）。 */
+        val agentMaxToolRounds: Int = 3,
+        /** 单工具执行超时（超时转 isError 结果回灌模型，不炸回合）。 */
+        val toolTimeoutMs: Long = 10_000L,
+        /**
+         * SDK 集成者的内置工具注入位：构造时注册进 [tools]。demo 的
+         * observe_camera 走注册表手动 register/unregister（隐私开关控制）。
+         */
+        val tools: List<Pair<ToolSpec, ToolExecutor>> = emptyList(),
     )
 
     /** LLM request parameters; must be set before [send]. */
@@ -210,13 +233,23 @@ class AvatarSession(
         }
 
     /**
+     * LLM 可调用的工具注册表（docs/agent-feasibility.md §4.4）：P0 内置
+     * get_device_time / get_current_view（默认注册，纯本地无隐私面）+ 集成者
+     * 经 [Options.tools] 注入的 + app/技能运行时 register 的。开启
+     * [Options.agentToolsEnabled] 且注册表非空时，请求携带 tools 并进入工具
+     * 循环；注册表为空 = 请求体与既有形态逐字节一致（零行为变化）。
+     */
+    val tools: ToolRegistry = ToolRegistry(options.toolTimeoutMs)
+
+    /**
      * 技能注册表（docs/rps-skill-feasibility.md §4.2）：app 喂事件
      * （语音文本/VAD 时机/相机手势），session 喂回合结果
      * （[onTurnCompleted 钩子在 send]/interrupt），每轮组请求时读
      * [SkillRegistry.activeDirective]。技能经能力缝反向调用本会话
      * （[playGestureFile]/[speak]/[send]）——host 实现持有 session 引用即可。
+     * 技能的工具缝（[AvatarSkill.tools]）也经它挂进上面的注册表。
      */
-    val skills: SkillRegistry = SkillRegistry(skillHost) { emit(it) }
+    val skills: SkillRegistry = SkillRegistry(skillHost, tools) { emit(it) }
 
     private val queue: PlaybackQueue = playbackQueue ?: AudioTrackPlaybackQueue()
     private val pipeline =
@@ -269,6 +302,15 @@ class AvatarSession(
     init {
         lipSyncProcessor?.let { lsp ->
             if (lsp is WlipsyncLipSyncProcessor) faceDriver?.setPhonemeLayout(lsp.vowelLayout)
+        }
+        // P0 内置工具（纯本地无隐私面，默认开）：时钟与当前机位；集成者注入的
+        // options.tools 随后（同名覆盖内置）。agentToolsEnabled=false 时注册表
+        // 保持为空——请求体与非 agent 会话逐字节一致。
+        if (options.agentToolsEnabled) {
+            AgentToolCatalog.getDeviceTime(texts).let { (spec, exec) -> tools.register(spec, exec) }
+            AgentToolCatalog.getCurrentView(texts) { controller?.getActiveCameraShot() }
+                .let { (spec, exec) -> tools.register(spec, exec) }
+            options.tools.forEach { (spec, exec) -> tools.register(spec, exec) }
         }
         pipeline.listener = object : SpeechPipeline.Listener {
         override fun onSentenceFailed(sequence: Int, text: String, error: Throwable) {
@@ -417,21 +459,140 @@ class AvatarSession(
             var usage: LlmUsage? = null
             try {
                 val built = buildRequestMessages(images, contextFirstTurn)
-                llmAdapter.streamChat(built.messages, llmCfg).collect { event ->
-                    when (event) {
-                        is LlmStreamEvent.TextDelta -> {
-                            if (ttfbMs < 0) ttfbMs = SystemClock.elapsedRealtime() - turnStartMs
-                            handleDelta(event.text, ttsCfg)
+                // 工具循环（docs/agent-feasibility.md §4.5）：文本增量照旧走既有
+                // 断句/TTS/口型流水（跨轮句序号连续，语音无感）；模型请求工具时
+                // 在「流结束」与「回合完成」之间插入「执行→结果回灌→再请求」，
+                // 最多 agentMaxToolRounds 轮。工具消息只活在当前回合的请求里，
+                // 回合结束 store 仍只存 user+assistant 全量 raw 文本。
+                val messages = built.messages.toMutableList()
+                var round = 0
+                var emptyRetries = 0
+                while (true) {
+                    val roundTextStart = replyBuffer.length
+                    val roundCleanStart = cleanBuffer.length
+                    val useTools = options.agentToolsEnabled &&
+                        !toolsDisabledModels.contains(modelKey(llmCfg)) &&
+                        !tools.isEmpty()
+                    val roundCfg = if (useTools) llmCfg.copy(tools = tools.list()) else llmCfg
+                    var sawText = false
+                    var sawToolCall = false
+                    var finish: LlmStreamEvent.Finish? = null
+                    try {
+                        finish = streamRound(
+                            llmAdapter, messages, roundCfg, ttsCfg, round,
+                            onFirstDelta = {
+                                sawText = true
+                                if (ttfbMs < 0) ttfbMs = SystemClock.elapsedRealtime() - turnStartMs
+                            },
+                            onToolCall = { sawToolCall = true },
+                        )
+                    } catch (t: Throwable) {
+                        // 工具相关 400 自动降级（抄 airi llm.ts:63-84）：立即以无
+                        // tools 配置重发一次（文本照常），并按 modelKey 缓存禁用，
+                        // 本会话不再尝试。只在「本轮还没吐过文本」时降级重发——
+                        // 已有可见输出重发会复读。
+                        if (useTools && !sawText && !sawToolCall && isToolRelatedError(t)) {
+                            toolsDisabledModels += modelKey(llmCfg)
+                            Log.w(
+                                "AvatarSession",
+                                "${STREAM_PREFIX}tool-related error → tools disabled for ${llmCfg.model}, retrying without tools: ${t.message}",
+                            )
+                            extractor.reset()
+                            chunker.reset()
+                            finish = streamRound(
+                                llmAdapter, messages, llmCfg, ttsCfg, round,
+                                onFirstDelta = { if (ttfbMs < 0) ttfbMs = SystemClock.elapsedRealtime() - turnStartMs },
+                                onToolCall = {},
+                            )
+                        } else {
+                            throw t
                         }
-                        is LlmStreamEvent.Finish -> usage = event.usage
-                        is LlmStreamEvent.Error -> throw event.throwable
+                    }
+                    usage = finish.usage
+                    // LLM 流成功走完 = 人设/协议确实送达了模型 → 才标记「已发送」。
+                    // 失败/被打断走不到这里，下一轮自动重发完整身份块（用户需求：
+                    // 第一次没发送成功，人设/协议下一次不能省略）。只按首轮提交
+                    // （身份块只随首轮请求携带；工具轮失败不影响已送达的事实）。
+                    if (round == 0) built.identityBlock?.let { identitySentBlock = it }
+                    var toolCalls = finish.toolCalls
+                    // 悬空衔接句补救（Qwen3.8 关思考实测 ~50% 只说「让我看看……」不发
+                    // 调用，docs/agent-provider-matrix.md）：用 tool_choice=required
+                    // 静默重试一轮（textSink 静默——required 下服务端可能把 Qwen 模板
+                    // 的 <tool_call> 文本当 delta 吐出，绝不能进 TTS），原生调用与
+                    // 模板文本解析双路兜底；重试仍无调用则按原回复正常收尾。
+                    if (toolCalls.isEmpty() && useTools && round == 0 &&
+                        isDanglingBridgeReply(cleanBuffer.substring(roundCleanStart))
+                    ) {
+                        Log.i(
+                            PROMPT_TAG,
+                            "$STREAM_PREFIX dangling bridge reply, retrying with tool_choice=required",
+                        )
+                        val retryText = StringBuilder()
+                        val retryFinish = streamRound(
+                            llmAdapter, messages, roundCfg.copy(toolChoice = "required"), ttsCfg, round,
+                            onFirstDelta = {}, onToolCall = {}, textSink = retryText,
+                        )
+                        val retryCalls = retryFinish.toolCalls.ifEmpty {
+                            parseTemplateToolCalls(retryText.toString())
+                        }
+                        if (retryCalls.isNotEmpty()) {
+                            finish = retryFinish
+                            usage = retryFinish.usage
+                            toolCalls = retryCalls
+                            logChunked(PROMPT_TAG, "TOOL retry", "recovered ${retryCalls.map { it.name }} from required round")
+                        }
+                    }
+                    if (toolCalls.isEmpty() || !useTools) {
+                        // 空回复补救（2026-10-11 真机实测：服务商偶发 200 但 0 字——
+                        // completion 全进思考通道，用户听到死寂；工具轮之后的续答轮
+                        // 同样会中招）：整回合零可见输出且本轮没请求工具时，原样重发
+                        // 一次（messages 已含历史与工具结果，重发即续答重试）。
+                        if (replyBuffer.isEmpty() && toolCalls.isEmpty() && emptyRetries < 1) {
+                            emptyRetries++
+                            Log.w(
+                                "AvatarSession",
+                                "$STREAM_PREFIX empty reply (completion=${usage?.completionTokens ?: -1}), retrying once",
+                            )
+                            continue
+                        }
+                        break
+                    }
+                    round++
+                    if (round > options.agentMaxToolRounds) {
+                        // 轮数用尽：直接 break，已有文本照常收尾（上限写进了协议
+                        // 块的工具说明里，正常情况下模型自己不会越线）
+                        Log.w("AvatarSession", "${STREAM_PREFIX}tool round limit (${options.agentMaxToolRounds}) reached, breaking")
+                        break
+                    }
+                    emit(AvatarEvent.ToolCallsIssued(toolCalls.map { it.name }))
+                    lastToolCalls = toolCalls.map { it.name }
+                    // assistant 投影用 raw 文本片段（含标签）——与 store 回放形态一致。
+                    messages += ChatMessage(
+                        ChatRole.ASSISTANT,
+                        replyBuffer.substring(roundTextStart),
+                        toolCalls = toolCalls,
+                    )
+                    logChunked(
+                        PROMPT_TAG,
+                        "TOOL round=$round",
+                        "calls=[${toolCalls.joinToString(", ") { it.name }}] args=[${toolCalls.joinToString(", ") { it.argumentsJson }}]",
+                    )
+                    // 顺序执行（不并行）：多工具并发会有竞态观感，且保证 tool_call_id 对位
+                    for (call in toolCalls) {
+                        val result = tools.invoke(call.name, call.argumentsJson)
+                        Log.i(
+                            PROMPT_TAG,
+                            "$STREAM_PREFIX TOOL round=$round ${call.name}(${call.argumentsJson.take(200)})" +
+                                " → isError=${result.isError} ${result.content.take(200)}",
+                        )
+                        emit(AvatarEvent.ToolCallFinished(call.name, result.isError))
+                        messages += ChatMessage(
+                            ChatRole.TOOL,
+                            result.content.take(MAX_TOOL_RESULT_CHARS),
+                            toolCallId = call.id,
+                        )
                     }
                 }
-                // LLM 流成功走完 = 人设/协议确实送达了模型 → 才标记「已发送」。
-                // 失败/被打断走不到这里，下一轮自动重发完整身份块（用户需求：
-                // 第一次没发送成功，人设/协议下一次不能省略）。精简轮不携带身份
-                // 块（null），不动已提交的状态。
-                built.identityBlock?.let { identitySentBlock = it }
                 val streamMs = SystemClock.elapsedRealtime() - turnStartMs
                 // Drain the extractor tail, then any chunker remainder.
                 val tail = extractor.flush()
@@ -452,7 +613,7 @@ class AvatarSession(
                 Log.i(
                     PROMPT_TAG,
                     "${STREAM_PREFIX}=== RESPONSE model=${llmCfg.model} raw=${replyBuffer.length}ch clean=${cleanBuffer.length}ch " +
-                        "ttfb=${ttfbMs}ms stream=${streamMs}ms${usagePart(usage)} ===",
+                        "ttfb=${ttfbMs}ms stream=${streamMs}ms toolRounds=$round${usagePart(usage)} ===",
                 )
                 logChunked(PROMPT_TAG, "RESPONSE raw", replyBuffer.toString())
                 logChunked(PROMPT_TAG, "RESPONSE clean", cleanBuffer.toString())
@@ -567,6 +728,70 @@ class AvatarSession(
     }
 
     // ── Turn internals ────────────────────────────────────────────────────
+
+    /**
+     * 采集一轮 LLM 流：文本增量走既有 handleDelta 流水（标签→断句→TTS），
+     * 工具调用增量只发观测事件；返回该轮的 Finish 载荷（含累积完成的
+     * tool_calls）。正常情况下 flow 以 Finish 事件收尾，理论上不进入兜底。
+     *
+     * [textSink] 非空 = 静默轮：文本增量只进该缓冲，**不进** extractor/断句/TTS
+     * （required 重试轮的服务端可能把 Qwen 模板的 `<tool_call>` 文本当 delta 吐
+     * 出来，绝不能朗读，见 [parseTemplateToolCalls]）。
+     */
+    private suspend fun streamRound(
+        adapter: LlmAdapter,
+        messages: List<ChatMessage>,
+        cfg: LlmConfig,
+        ttsCfg: TtsConfig,
+        round: Int,
+        onFirstDelta: () -> Unit,
+        onToolCall: () -> Unit,
+        textSink: StringBuilder? = null,
+    ): LlmStreamEvent.Finish {
+        var finish: LlmStreamEvent.Finish? = null
+        adapter.streamChat(messages, cfg).collect { event ->
+            when (event) {
+                is LlmStreamEvent.TextDelta -> {
+                    val sink = textSink
+                    if (sink != null) {
+                        sink.append(event.text)
+                    } else {
+                        onFirstDelta()
+                        handleDelta(event.text, ttsCfg)
+                    }
+                }
+                is LlmStreamEvent.ToolCallStarted -> {
+                    onToolCall()
+                    emit(AvatarEvent.ToolCallStarted(event.name))
+                }
+                // 参数增量：进度观测用，回合层无需逐片处理
+                is LlmStreamEvent.ToolCallArguments -> Unit
+                is LlmStreamEvent.Finish -> finish = event
+                is LlmStreamEvent.Error -> throw event.throwable
+            }
+        }
+        return finish ?: LlmStreamEvent.Finish(null, null, emptyList()).also {
+            Log.w("AvatarSession", "${STREAM_PREFIX}round $round stream ended without Finish")
+        }
+    }
+
+    /** 工具相关 400 后的禁用缓存（provider+model；本会话内不再尝试工具）。 */
+    private val toolsDisabledModels = mutableSetOf<String>()
+
+    /** 最近一轮工具调用（观测快照用）。 */
+    @Volatile private var lastToolCalls: List<String> = emptyList()
+
+    /** 调试快照：智能体工具状态（ai_cmd agent_state 的正本）。单行。 */
+    fun agentSnapshot(): String = buildString {
+        append("agentTools=${options.agentToolsEnabled}")
+        append(" maxToolRounds=${options.agentMaxToolRounds}")
+        append(" toolTimeoutMs=${options.toolTimeoutMs}")
+        append(" tools=[${tools.list().joinToString(", ") { it.name }}]")
+        append(" lastToolCalls=[${lastToolCalls.joinToString(", ")}]")
+        append(" disabledModels=[${toolsDisabledModels.joinToString(", ")}]")
+    }
+
+    private fun modelKey(cfg: LlmConfig): String = "${cfg.baseUrl}|${cfg.model}"
 
     private fun handleDelta(delta: String, ttsCfg: TtsConfig) {
         replyBuffer.append(delta)
@@ -780,6 +1005,7 @@ class AvatarSession(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
                 "view=${viewLine ?: "n/a"} skill=${skillLine?.length ?: 0}ch " +
+                "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",
         )
@@ -816,29 +1042,58 @@ class AvatarSession(
      * 返回协议文本；null = 协议关闭或目录为空。
      */
     private fun pinnedProtocolText(): String? {
+        val full = composeProtocolText() ?: return null
+        if (full != pinnedProtocol) {
+            pinnedProtocol = full
+            Log.i(
+                "AvatarSession",
+                "$STREAM_PREFIX protocol pinned: ${full.length} chars, " +
+                    "cameras=${currentCameraTags().size}, " +
+                    "actions=${currentActionGroups().sumOf { it.second.size }}, " +
+                    "directExpr=${currentDirectExpressions().size}" +
+                    (if (options.agentToolsEnabled && !tools.isEmpty()) ", tools=${tools.list().size}" else ""),
+            )
+        }
+        return full
+    }
+
+    /**
+     * 协议块全文合成（钉住层与设置页只读展示共用）：多模态标签目录 + 工具使用
+     * 说明段（§4.8，同一条 system——部分服务商拒绝多条 system）。工具集合或
+     * hint 变化 → 文本变化 → 原地重钉（历史保留，前缀缓存语义不破坏）。
+     * null = 协议关闭或两段皆空。
+     */
+    private fun composeProtocolText(): String? {
         if (!options.protocolInstructions) return null
         val block = options.assembler.multimodalProtocolBlock(
             cameras = currentCameraTags(),
             actionGroups = currentActionGroups(),
             directExpressions = currentDirectExpressions(),
         )
-        if (block.isBlank()) return null
-        if (block != pinnedProtocol) {
-            pinnedProtocol = block
-            Log.i(
-                "AvatarSession",
-                "${STREAM_PREFIX}protocol pinned: ${block.length} chars, " +
-                    "cameras=${currentCameraTags().size}, " +
-                    "actions=${currentActionGroups().sumOf { it.second.size }}, " +
-                    "directExpr=${currentDirectExpressions().size}",
-            )
-        }
-        return block
+        val toolset = toolsetBlockText()
+        return listOfNotNull(block.takeIf { it.isNotBlank() }, toolset)
+            .joinToString("\n\n")
+            .ifBlank { null }
+    }
+
+    /**
+     * 工具使用说明块（§4.8）：非空 systemHint 聚合渲染；空注册表/总开关关闭
+     * 时为 null（协议块不含工具段，与既有形态一致）。
+     */
+    private fun toolsetBlockText(): String? {
+        if (!options.agentToolsEnabled) return null
+        val hints = tools.systemHints()
+        if (hints.isEmpty()) return null
+        return texts.toolsetBlock(hints, options.agentMaxToolRounds)
     }
 
     /** 实际发送的历史条数（观测点用）：null 上限 = 全量。 */
     private fun trimmedSent(history: List<ChatMessage>): Int =
         options.recentTurnLimit?.let { minOf(it, history.size) } ?: history.size
+
+    /** REQUEST 头行的 tools 段：本轮将携带的工具数；总开关关闭恒 0。 */
+    private fun requestToolCount(): Int =
+        if (options.agentToolsEnabled) tools.list().size else 0
 
     /** RESPONSE 头行的 token 用量段：`tok: prompt=A cached=B completion=C`，未上报时缺省。 */
     private fun usagePart(usage: LlmUsage?): String = when (usage) {
@@ -853,13 +1108,9 @@ class AvatarSession(
      * 上下文开始时模型收到的。
      */
     fun protocolBlock(): String {
-        // Sections of the protocol block that cannot run are omitted so the
-        // prompt never advertises a tag the session would drop.
-        return options.assembler.multimodalProtocolBlock(
-            cameras = currentCameraTags(),
-            actionGroups = currentActionGroups(),
-            directExpressions = currentDirectExpressions(),
-        )
+        // 与钉住层同源（composeProtocolText）：设置页看到的 = 上下文开始时模型
+        // 收到的（含工具使用说明段）。
+        return composeProtocolText().orEmpty()
     }
 
     private fun currentCameraTags(): List<Pair<String, String>> =
@@ -907,6 +1158,9 @@ class AvatarSession(
 
         /** 问答链路日志的统一前缀（用户 grep 用，覆盖提示词/回复/实时播放事件）。 */
         private const val STREAM_PREFIX = "[InfoStreamDectect] "
+
+        /** 工具结果回灌的最大字符数：VLM 描述/检索类结果可能爆上下文（截断不炸轮）。 */
+        internal const val MAX_TOOL_RESULT_CHARS = 4_000
 
         /**
          * 每轮请求恒带的身份/任务/表达纪律前言（[Options.identityPreamble]

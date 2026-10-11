@@ -1,5 +1,8 @@
 package com.neethu.orchestrator.skill
 
+import com.neethu.aiadapter.model.ToolSpec
+import com.neethu.orchestrator.agent.ToolExecutor
+import com.neethu.orchestrator.agent.ToolRegistry
 import com.neethu.orchestrator.session.AvatarEvent
 
 /**
@@ -12,21 +15,30 @@ import com.neethu.orchestrator.session.AvatarEvent
  *
  * 广播语义：事件发给全部注册技能，激活与否由技能内部状态守门；[activeDirective]
  * 取第一个激活技能的指令。主线程调用（app scope/main dispatcher）。
+ *
+ * 工具缝（docs/agent-feasibility.md §4.7）：注册技能时把它的 [AvatarSkill.tools]
+ * 挂进 [ToolRegistry]（同名后注册覆盖）；技能**转激活**时重挂、退场/被顶替/
+ * 反注册时摘除——工具广告位跟随激活态。null registry（headless）整条缝静默。
  */
 class SkillRegistry(
     host: SkillHost?,
+    private val tools: ToolRegistry? = null,
     private val emit: (AvatarEvent) -> Unit = {},
 ) {
     private val skills = LinkedHashMap<String, AvatarSkill>()
     private val effectiveHost: SkillHost = host ?: NopSkillHost
+    /** skillId → 该技能已注册的 (spec, executor) 对（摘除时校验所有权，防同名误伤）。 */
+    private val skillTools = LinkedHashMap<String, List<Pair<ToolSpec, ToolExecutor>>>()
 
     /** 同 id 覆盖注册（会话重建后重注册同一实例是常态）。 */
     fun register(skill: AvatarSkill) {
         skills[skill.id] = skill
+        // 静默技能也可能直接处于激活态（重注册同一实例）：按当前状态决定挂不挂
+        if (skill.isActive) hookSkillTools(skill)
     }
 
     fun unregister(id: String) {
-        skills.remove(id)
+        skills.remove(id)?.let { unhookSkillTools(it) }
     }
 
     fun find(id: String): AvatarSkill? = skills[id]
@@ -53,8 +65,13 @@ class SkillRegistry(
         val after = skills.values.filter { it.isActive }
         if (after.size > 1) {
             val keep = after.lastOrNull { it !in before } ?: after.first()
-            for (skill in after) if (skill !== keep) skill.onExit(contextFor(skill))
+            for (skill in after) if (skill !== keep) {
+                skill.onExit(contextFor(skill))
+                unhookSkillTools(skill)
+            }
         }
+        // 激活态变化跟随工具广告位：新激活的挂上（退场的已在上面摘除）
+        for (skill in after) if (skill !in before) hookSkillTools(skill)
         return consumed
     }
 
@@ -101,6 +118,7 @@ class SkillRegistry(
         for (skill in skills.values) {
             if (!skill.isActive) continue
             skill.onExit(contextFor(skill))
+            unhookSkillTools(skill)
             n++
         }
         return if (n == 0) "no active skill" else "deactivated $n skill(s)"
@@ -110,6 +128,23 @@ class SkillRegistry(
     fun debug(id: String, arg: String?): String {
         val skill = skills[id] ?: return "no skill registered as '$id' (registered: ${skills.keys})"
         return skill.debugCommand(arg, contextFor(skill)) ?: "$id: no debug handler for '$arg'"
+    }
+
+    private fun hookSkillTools(skill: AvatarSkill) {
+        val registry = tools ?: return
+        val list = skill.tools()
+        if (list.isEmpty()) return
+        skillTools[skill.id] = list
+        list.forEach { (spec, executor) -> registry.register(spec, executor) }
+    }
+
+    private fun unhookSkillTools(skill: AvatarSkill) {
+        val registry = tools ?: return
+        val list = skillTools.remove(skill.id) ?: return
+        list.forEach { (spec, _) ->
+            // 只摘本技能注册的那份：同名被后来者覆盖后不再归它所有
+            if (registry.find(spec.name) == spec) registry.unregister(spec.name)
+        }
     }
 
     private fun contextFor(skill: AvatarSkill): SkillContext =

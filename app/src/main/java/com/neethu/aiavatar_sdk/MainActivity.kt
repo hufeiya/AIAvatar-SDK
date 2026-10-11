@@ -113,6 +113,9 @@ import com.neethu.aiavatar_sdk.i18n.AppLang
 import com.neethu.aiavatar_sdk.i18n.LocalStrings
 import com.neethu.aiavatar_sdk.i18n.Strings
 import com.neethu.aiavatar_sdk.i18n.resolveAppLang
+import com.neethu.aiadapter.model.LlmConfig
+import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
+import com.neethu.orchestrator.agent.AgentToolCatalog
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.SystemPromptAssembler
@@ -1149,6 +1152,21 @@ private fun DemoScreen(
                         chatLines.addAll(next)
                         chatLog("UnknownTag[${ev.kind}] ${ev.raw}")
                     }
+                    is AvatarEvent.ToolCallStarted -> {
+                        // 工具执行 + 续流有数秒空档（§9.4）：面板灰字显示等待原因
+                        val next = ChatTranscript.append(
+                            chatLines.toList(),
+                            ChatRole.SYSTEM,
+                            uiState.strings().transcriptToolCall(ev.name),
+                        )
+                        chatLines.clear()
+                        chatLines.addAll(next)
+                        chatLog("ToolCallStarted ${ev.name}")
+                    }
+                    is AvatarEvent.ToolCallsIssued ->
+                        chatLog("ToolCallsIssued ${ev.names}")
+                    is AvatarEvent.ToolCallFinished ->
+                        chatLog("ToolCallFinished ${ev.name} isError=${ev.isError}")
                     is AvatarEvent.TurnCompleted -> {
                         chatLog("TurnCompleted subtitleLen=${chatLines.lastOrNull { it.role == ChatRole.AVATAR }?.text?.length ?: 0}")
                         // 需求 6:视频模式回合结束(语音+手势都到点)自动回面部特写
@@ -1253,6 +1271,76 @@ private fun DemoScreen(
         if (uiState.inputMode != InputMode.VIDEO || !cameraGranted) return emptyList()
         if (!isVisionLlm(uiState.aiPrefs.provider, uiState.aiPrefs.llmModel)) return emptyList()
         return listOfNotNull(videoTracker.snapshotDataUrl())
+    }
+
+    // ── 智能体工具接线（P0，docs/agent-feasibility.md §4.4/§4.6）───────────
+    // observe_camera 的注册条件 = 总开关 + 摄像头观察开关 + 视觉模型（描述请求
+    // 需要真看图的模型）。⚠ 视频模式/相机权限**不在注册条件里**（§4.4 方案 A
+    // 的设计：没画面时工具照样在，执行返回明确错误文本，模型口头告知用户
+    // 「打开视频模式我才能看到」——注册条件收太紧会让模型只能调
+    // get_current_view 然后如实回答"看不到"，用户无从知道差什么，真机踩过）。
+    // 切换即 register/unregister，工具集合变化 → 协议块自动重钉（指纹机制）。
+    // get_device_time / get_current_view 是纯本地工具，会话构造时已默认注册。
+    LaunchedEffect(
+        session, uiState.aiPrefs.agentTools, uiState.aiPrefs.observeCamera,
+        uiState.aiPrefs.llmModel, uiState.lang,
+    ) {
+        val s = session ?: return@LaunchedEffect
+        val enable = uiState.aiPrefs.agentTools &&
+            uiState.aiPrefs.observeCamera &&
+            isVisionLlm(uiState.aiPrefs.provider, uiState.aiPrefs.llmModel)
+        if (enable && s.tools.find("observe_camera") == null) {
+            val p = uiState.aiPrefs
+            val visionModel = resolveLlmModel(p.provider, p.llmModel)
+            // 描述请求与主对话同端点同 Key（视觉模型已由 isVisionLlm 门控）
+            val visionLlm = OpenAiCompatibleLlmAdapter(p.provider.baseUrl, p.apiKeyFor(p.provider))
+            val (spec, executor) = AgentToolCatalog.observeCamera(
+                llm = visionLlm,
+                visionConfig = {
+                    LlmConfig(
+                        baseUrl = p.provider.baseUrl,
+                        apiKey = p.apiKeyFor(p.provider),
+                        model = visionModel,
+                        extraBody = llmExtraBody(p.provider, visionModel),
+                    )
+                },
+                // 取帧缝（用户需求：任何模式都能按需拍一张）：视频模式常驻环已有帧
+                // 直接用（不抢用户的机位）；其他模式按需开相机拍一张、用完即关
+                // （系统状态栏有相机使用指示；无预览不弹 PiP）。未授权相机返回
+                // null → 模型收到「需要相机权限」的错误文案并口头转告。
+                snapshot = { lensHint ->
+                    videoTracker.snapshotDataUrl()?.let { return@observeCamera it }
+                    if (!cameraGranted) return@observeCamera null
+                    val lens = when (lensHint?.lowercase()) {
+                        "back", "rear", "环境" -> CameraSelector.LENS_FACING_BACK
+                        else -> CameraSelector.LENS_FACING_FRONT
+                    }
+                    val frame = withContext(Dispatchers.Main) {
+                        try {
+                            videoTracker.start(lifecycleOwner, lens)
+                        } catch (e: Exception) {
+                            Log.w("AvatarSession", "on-demand camera start failed: ${e.message}")
+                            return@withContext null
+                        }
+                        // 等第一帧进环（分析线程 ~0.5s/帧）
+                        val deadline = SystemClock.elapsedRealtime() + 4_000
+                        var f: String? = null
+                        while (f == null && SystemClock.elapsedRealtime() < deadline) {
+                            delay(200)
+                            f = videoTracker.snapshotLatestDataUrl()
+                        }
+                        // 非视频模式用完即关（隐私：不留常驻相机）
+                        if (uiState.inputMode != InputMode.VIDEO) videoTracker.stop()
+                        f
+                    }
+                    frame
+                },
+                texts = promptTextsOf(uiState.lang),
+            )
+            s.tools.register(spec, executor)
+        } else if (!enable) {
+            s.tools.unregister("observe_camera")
+        }
     }
 
     // 进出视频模式：进入时补申请相机权限并默认面部特写机位；离开时停相机并把视线交回默认
@@ -2156,6 +2244,24 @@ private fun DemoScreen(
                 if (arg != null && arg != "status") mimicFaceEnabled = new
                 "mimic face lane = ${if (mimicFaceEnabled) "on" else "off"} " +
                     "(blendshapes→FaceDriver; body lane unaffected)"
+            },
+            toolsList = {
+                val s = session
+                    ?: return@AiChatDebugHooks "no session (configure the AI service first)"
+                "tools=${s.tools.list().map { it.name }} " + s.agentSnapshot().substringAfter("agentTools=")
+            },
+            toolsCall = { name, json ->
+                val s = session
+                    ?: return@AiChatDebugHooks "no session (configure the AI service first)"
+                if (s.tools.find(name) == null) {
+                    "unknown tool: $name (available: ${s.tools.list().map { it.name }})"
+                } else {
+                    val result = s.tools.invoke(name, json ?: "{}")
+                    "${if (result.isError) "ERROR" else "OK"} $name → ${result.content.take(400)}"
+                }
+            },
+            agentState = {
+                session?.agentSnapshot() ?: "no session (configure the AI service first)"
             },
         )
     }

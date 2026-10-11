@@ -3,7 +3,20 @@ package com.neethu.aiadapter.model
 import kotlinx.serialization.json.JsonObject
 
 /** Conversation message roles following the OpenAI chat-completions convention. */
-enum class ChatRole { SYSTEM, USER, ASSISTANT }
+enum class ChatRole { SYSTEM, USER, ASSISTANT, TOOL }
+
+/**
+ * A tool call the model requested (P0 tool calling). [id] is the server-generated
+ * `call_xxx` id that must be echoed back on the matching `role=tool` message;
+ * [argumentsJson] is the fully accumulated arguments string — possibly invalid
+ * JSON, the executor owns the error handling (a parse failure feeds back as an
+ * error result instead of failing the turn).
+ */
+data class ToolCallRequest(
+    val id: String,
+    val name: String,
+    val argumentsJson: String,
+)
 
 /** A single conversation message sent to / received from an LLM. */
 data class ChatMessage(
@@ -18,6 +31,29 @@ data class ChatMessage(
      * turn are deliberately dropped from later requests.
      */
     val images: List<String> = emptyList(),
+    /**
+     * Tool calls this ASSISTANT message carries (the model asked to run tools).
+     * Serialized as OpenAI `assistant.tool_calls`; the following TOOL messages
+     * must reference these ids in order (protocol requirement: tool messages
+     * directly follow their assistant).
+     */
+    val toolCalls: List<ToolCallRequest> = emptyList(),
+    /** For role=TOOL: the [ToolCallRequest.id] this result answers. */
+    val toolCallId: String? = null,
+)
+
+/**
+ * One callable tool advertised to the model (OpenAI function-calling shape).
+ * [parametersSchema] is the JSON Schema for the arguments object — it tells the
+ * model HOW to call; [systemHint] (aggregated into the pinned protocol block by
+ * the session layer) tells it WHEN to call.
+ */
+data class ToolSpec(
+    val name: String,
+    val description: String,
+    /** e.g. `{"type":"object","properties":{…},"required":[…]}` (kotlinx JsonObject). */
+    val parametersSchema: JsonObject,
+    val systemHint: String? = null,
 )
 
 /**
@@ -36,6 +72,17 @@ data class LlmConfig(
     val extraHeaders: Map<String, String> = emptyMap(),
     /** Merged verbatim into the JSON request body (e.g. provider-specific knobs). */
     val extraBody: JsonObject? = null,
+    /**
+     * Tools advertised to the model. Empty (default) = the `tools`/`tool_choice`
+     * keys are NOT sent at all — zero behavior change for non-agent sessions
+     * (strict endpoints reject empty tool arrays with 400).
+     */
+    val tools: List<ToolSpec> = emptyList(),
+    /**
+     * OpenAI `tool_choice`: `"auto"` | `"none"` | `"required"` (string form
+     * sent verbatim). null (default) = key omitted → provider default ("auto").
+     */
+    val toolChoice: String? = null,
 )
 
 /**
@@ -58,10 +105,28 @@ sealed interface LlmStreamEvent {
     data class TextDelta(val text: String) : LlmStreamEvent
 
     /**
-     * The stream finished. [reason] is the provider finish reason, e.g. `stop`;
-     * [usage] carries the token counts when the provider reports them.
+     * The model started a tool call ([index] is the parallel-call slot within
+     * this stream). Fired once the id+name become visible; argument fragments
+     * follow as [ToolCallArguments].
      */
-    data class Finish(val reason: String?, val usage: LlmUsage? = null) : LlmStreamEvent
+    data class ToolCallStarted(val index: Int, val id: String, val name: String) : LlmStreamEvent
+
+    /** An incremental piece of a tool call's JSON arguments (observability/progress UI). */
+    data class ToolCallArguments(val index: Int, val fragment: String) : LlmStreamEvent
+
+    /**
+     * The stream finished. [reason] is the provider finish reason, e.g. `stop`
+     * or `tool_calls`; [usage] carries the token counts when the provider
+     * reports them. [toolCalls] holds the fully accumulated tool calls —
+     * non-empty means the model wants tools executed, regardless of the
+     * [reason] literal (some providers finish with `stop` while carrying
+     * accumulated calls).
+     */
+    data class Finish(
+        val reason: String?,
+        val usage: LlmUsage? = null,
+        val toolCalls: List<ToolCallRequest> = emptyList(),
+    ) : LlmStreamEvent
 
     /** The stream failed. Delivered as an event (the Flow also completes normally). */
     data class Error(val throwable: Throwable) : LlmStreamEvent

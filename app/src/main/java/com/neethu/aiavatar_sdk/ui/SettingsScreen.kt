@@ -512,6 +512,17 @@ internal fun SettingsScreen(
                                 subtitle = s.llmCameraSubtitle,
                                 checked = aiPrefs.llmCamera
                             ) { onAiPrefsChange(aiPrefs.copy(llmCamera = it)) }
+
+                            SettingsSwitchRow(
+                                title = s.agentToolsTitle,
+                                subtitle = s.agentToolsSubtitle,
+                                checked = aiPrefs.agentTools
+                            ) { onAiPrefsChange(aiPrefs.copy(agentTools = it)) }
+                            SettingsSwitchRow(
+                                title = s.observeCameraTitle,
+                                subtitle = s.observeCameraSubtitle,
+                                checked = aiPrefs.observeCamera
+                            ) { onAiPrefsChange(aiPrefs.copy(observeCamera = it)) }
                         }
                     }
 

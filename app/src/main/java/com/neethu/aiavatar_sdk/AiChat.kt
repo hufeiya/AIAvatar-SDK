@@ -44,6 +44,16 @@ data class AiChatPrefs(
     val voice: String = "",
     /** 允许模型用 <cam:…> 标签切换视角；关闭后镜头主权归用户。 */
     val llmCamera: Boolean = true,
+    /**
+     * 智能体工具调用总开关（P0，docs/agent-feasibility.md §4.11）：默认开。
+     * 关闭后请求不带 tools 键，模型只能靠行内标签协议表达。
+     */
+    val agentTools: Boolean = true,
+    /**
+     * 摄像头观察工具（observe_camera）：默认**关**（隐私面：模型可主动看画面）。
+     * 生效还需视频模式与相机权限（注册时机见 MainActivity 的接线 effect）。
+     */
+    val observeCamera: Boolean = false,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -114,6 +124,8 @@ private const val KEY_AI_TTS_MODEL = "ai_ttsModel"
 private const val KEY_AI_TTS_ENGINE = "ai_tts_engine"
 private const val KEY_AI_VOICE = "ai_voice"
 private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
+private const val KEY_AI_AGENT_TOOLS = "ai_agent_tools"
+private const val KEY_AI_OBSERVE_CAMERA = "ai_observe_camera"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -143,6 +155,8 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         ttsEngine = prefsEnum<TtsEngine>(this, KEY_AI_TTS_ENGINE) ?: TtsEngine.OPENAI_COMPATIBLE,
         voice = getString(KEY_AI_VOICE, "").orEmpty(),
         llmCamera = getBoolean(KEY_AI_LLM_CAMERA, true),
+        agentTools = getBoolean(KEY_AI_AGENT_TOOLS, true),
+        observeCamera = getBoolean(KEY_AI_OBSERVE_CAMERA, false),
     )
 }
 
@@ -160,6 +174,8 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_TTS_ENGINE, p.ttsEngine.name)
         .putString(KEY_AI_VOICE, p.voice.trim())
         .putBoolean(KEY_AI_LLM_CAMERA, p.llmCamera)
+        .putBoolean(KEY_AI_AGENT_TOOLS, p.agentTools)
+        .putBoolean(KEY_AI_OBSERVE_CAMERA, p.observeCamera)
         .apply()
 }
 
