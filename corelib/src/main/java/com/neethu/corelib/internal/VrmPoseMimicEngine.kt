@@ -229,7 +229,16 @@ internal class VrmPoseMimicEngine(private val engine: Engine) {
             }
         }
 
-        if (p == null || !fresh) return
+        if (p == null || !fresh) {
+            // 断供自愈的触发口：曾驱动过且供给断了（setPose(null) 退场 /
+            // >HOLD_MS 无新鲜帧出画）→ 进入缓动还原，engaged 随 appliedAny
+            // 清零而落 false——locomotion 的 MIMIC_ACTIVE 守卫等消费方据此放行。
+            if (appliedAny && !restoring) {
+                restoring = true
+                restoreElapsed = 0f
+            }
+            return
+        }
         if (!appliedAny) resetSmoothing(p)
         appliedAny = true
         driveFrame(p, dtSeconds)

@@ -7,6 +7,9 @@ import com.neethu.aiavatar_sdk.ui.GuideVariant
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.RenderMode
+import com.neethu.corelib.ScenePlacement
+import com.neethu.corelib.WalkStartResult
+import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -109,6 +112,8 @@ internal class AiChatDebugHooks(
     },
     /** ai_cmd agent_state：智能体工具状态快照（注册表/最近调用/禁用模型/上限配置）。 */
     val agentState: () -> String = { "AI chat not wired in this screen" },
+    /** 会话直取缝（ai_cmd anchors / walk_to <锚点名> 等 P1 走动调试命令用）；null = 无会话。 */
+    val session: () -> AvatarSession? = { null },
 )
 
 /**
@@ -160,6 +165,16 @@ internal suspend fun executeAiCommand(
             "idle_off" -> chat?.clearIdle?.invoke()
                 ?: "idle not wired in this screen"
             "move" -> moveCommand(controller, command)
+            "walk_to" -> walkToCommand(controller, uiState, command, chat)
+            "walk_stop" -> {
+                controller.stopWalk()
+                "walk stopped (back to idle)"
+            }
+            "walk_state" -> walkStateCommand(controller)
+            "anchors" -> anchorsCommand(chat)
+            "walk_transit" -> walkTransitCommand(controller, command.arg)
+            "scene_offset" -> scenePlacementCommand(controller, uiState, command, rotate = false)
+            "scene_rot" -> scenePlacementCommand(controller, uiState, command, rotate = true)
             "zoom" -> zoomCommand(controller, command)
             "pan" -> panCommand(controller, command)
             "orbit" -> orbitCommand(controller, command)
@@ -617,6 +632,166 @@ private fun moveCommand(controller: AvatarController, command: AiDebugCommand): 
     )
 }
 
+// ── Locomotion（自由走动 P0/P1，docs/locomotion-feasibility.md）──────────
+
+private fun walkToCommand(
+    controller: AvatarController,
+    uiState: DemoUiState,
+    command: AiDebugCommand,
+    chat: AiChatDebugHooks?,
+): String {
+    val speed = command.arg?.toFloatOrNull()
+    // 两种目标形态：ai_x/ai_z 坐标（P0）或锚点名（P1，ai_cmd anchors 可查词表）
+    val target: Pair<Float, Float> = if (command.x != null && command.z != null) {
+        command.x to command.z
+    } else if (!command.arg.isNullOrBlank() && speed == null) {
+        val anchor = chat?.session?.invoke()?.locomotionDriver?.find(command.arg.trim().lowercase())
+            ?: throw IllegalArgumentException(
+                "unknown anchor '${command.arg}' — run `anchors` for the table, or use coordinates: walk_to ai_x ai_z [speed]",
+            )
+        anchor.x to anchor.z
+    } else {
+        throw IllegalArgumentException(
+            "walk_to expects ai_x/ai_z = target world meters (ai_arg = speed m/s), or an anchor name: walk_to sofa",
+        )
+    }
+    val (tx, tz) = target
+    if (uiState.selectedScene == null) {
+        throw IllegalStateException(
+            "no scene loaded — run load_scene home.glb first (walk bounds come from its placement meta)"
+        )
+    }
+    if (!controller.isWalkGaitConfigured() &&
+        !controller.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
+    ) {
+        throw IllegalStateException("walk gait failed to load: assets/$DEFAULT_WALK_CLIP")
+    }
+    val placement = controller.getScenePlacement()
+    val result = if (speed != null) controller.startWalk(tx, tz, speed) else controller.startWalk(tx, tz)
+    return when (result) {
+        WalkStartResult.STARTED -> buildString {
+            append(String.format(Locale.US, "walking to (%.2f, %.2f)", tx, tz))
+            if (speed != null) append(String.format(Locale.US, " at %.2f m/s", speed))
+            placement?.bounds?.let {
+                append(
+                    String.format(
+                        Locale.US, " [bounds x %.1f..%.1f, z %.1f..%.1f]",
+                        it.minX, it.maxX, it.minZ, it.maxZ
+                    )
+                )
+            }
+            append("; pair with `camera_shot follow` for a tracking camera")
+        }
+        WalkStartResult.NO_MODEL -> throw IllegalStateException("no model loaded")
+        WalkStartResult.NO_SCENE -> throw IllegalStateException("no scene loaded — walking without a room means walking on air; run load_scene first")
+        WalkStartResult.NO_GAIT -> throw IllegalStateException("walk gait not configured")
+        WalkStartResult.MIMIC_ACTIVE -> throw IllegalStateException("mimic engaged — run `mimic_force off` first")
+        WalkStartResult.LOAD_FAILED -> throw IllegalStateException("walk gait clip failed to load")
+        WalkStartResult.NO_RENDERER -> throw IllegalStateException("renderer not attached")
+    }
+}
+
+/** ai_cmd anchors：会话注入的锚点表（`<move:>` 词表 = move_to 白名单），踩点核对用。 */
+private fun anchorsCommand(chat: AiChatDebugHooks?): String {
+    val anchors = chat?.session?.invoke()?.locomotionAnchors
+        ?: return "AI chat not wired in this screen"
+    if (anchors.isEmpty()) {
+        return "no anchors injected (llmMove off, or assets/scene/home.anchors.json missing/empty)"
+    }
+    return anchors.joinToString("\n") { a -> "- ${a.name} → (${a.x}, ${a.z})" }
+}
+
+/**
+ * ai_cmd walk_transit：起步/停步过渡剪辑配置（P1 档 1 真机 A/B 入口）。
+ * `walk_transit start <assets路径>` / `walk_transit stop <assets路径>` /
+ * `walk_transit off` / 无参 = 查看当前配置。素材位移测量见
+ * docs/locomotion-feasibility.md §5.2（默认关——库内起步候选带 root motion）。
+ */
+private fun walkTransitCommand(controller: AvatarController, arg: String?): String {
+    val current = controller.getWalkTransitions()
+    fun dump(configured: Boolean): String {
+        val (start, stop) = current
+        return "walk transitions: start=${start ?: "off"} stop=${stop ?: "off"}" +
+            if (configured) " (configured)" else ""
+    }
+    val parts = arg?.trim()?.split(" ", limit = 2) ?: emptyList()
+    return when {
+        arg.isNullOrBlank() -> dump(controller.hasWalkTransitions())
+        parts[0].lowercase() == "off" -> {
+            controller.setWalkTransitions(null, null)
+            "walk transitions cleared (hard start/stop)"
+        }
+        parts.size == 2 && parts[0].lowercase() in setOf("start", "stop") -> {
+            val path = parts[1].trim()
+            val (curStart, curStop) = current
+            val ok = if (parts[0].equals("start", ignoreCase = true)) {
+                controller.setWalkTransitions(path, curStop)
+            } else {
+                controller.setWalkTransitions(curStart, path)
+            }
+            if (ok) {
+                val (s, st) = controller.getWalkTransitions()
+                "walk transition ${parts[0]} set: start=${s ?: "off"} stop=${st ?: "off"}"
+            } else {
+                throw IllegalStateException("walk transition clip failed to load: assets/$path")
+            }
+        }
+        else -> throw IllegalArgumentException(
+            "walk_transit expects: (none to dump) | off | start <assets/*.vrma> | stop <assets/*.vrma>",
+        )
+    }
+}
+
+private fun walkStateCommand(controller: AvatarController): String {
+    val s = controller.getWalkState() ?: return "walk: no renderer attached"
+    val gait = if (controller.isWalkGaitConfigured()) {
+        "$DEFAULT_WALK_CLIP (base $DEFAULT_WALK_BASE_SPEED m/s)"
+    } else {
+        "none"
+    }
+    val placement = controller.getScenePlacement()
+    return String.format(
+        Locale.US,
+        "walk: phase=%s pos=(%.2f, %.2f) heading=%.0f° target=(%.2f, %.2f) speed=%.2f m/s | gait: %s | placement: %s",
+        s.phase, s.x, s.z, s.headingDeg, s.targetX, s.targetZ, s.speed,
+        gait,
+        placement?.let {
+            String.format(
+                Locale.US, "yaw=%.1f° off=(%.2f, %.2f, %.2f)",
+                it.yawDeg, it.offsetX, it.offsetY, it.offsetZ
+            )
+        } ?: "none",
+    )
+}
+
+private fun scenePlacementCommand(
+    controller: AvatarController,
+    uiState: DemoUiState,
+    command: AiDebugCommand,
+    rotate: Boolean,
+): String {
+    if (uiState.selectedScene == null) throw IllegalStateException("no scene loaded — run load_scene first")
+    val cur = controller.getScenePlacement() ?: ScenePlacement()
+    val next = if (rotate) {
+        cur.copy(yawDeg = cur.yawDeg + (command.x ?: 0f))
+    } else {
+        cur.copy(
+            offsetX = cur.offsetX + (command.x ?: 0f),
+            offsetY = cur.offsetY + (command.y ?: 0f),
+            offsetZ = cur.offsetZ + (command.z ?: 0f),
+        )
+    }
+    controller.setScenePlacement(next)
+    // 回显可直接抄进 assets/scene/<scene>.meta.json 的 placement 段
+    return String.format(
+        Locale.US,
+        "scene placement → yaw=%.2f° offset=(%.3f, %.3f, %.3f) | meta json: " +
+            "{\"offsetX\": %.3f, \"offsetY\": %.3f, \"offsetZ\": %.3f, \"yawDeg\": %.2f}",
+        next.yawDeg, next.offsetX, next.offsetY, next.offsetZ,
+        next.offsetX, next.offsetY, next.offsetZ, next.yawDeg,
+    )
+}
+
 private fun zoomCommand(controller: AvatarController, command: AiDebugCommand): String {
     val spreadPx = command.x
         ?: throw IllegalArgumentException("zoom expects ai_x = pinch pixels (+ in, - out), e.g. 200")
@@ -648,12 +823,13 @@ private fun cameraShotCommand(controller: AvatarController, arg: String?): Strin
         "full", "fs" -> CameraShot.FULL_SHOT
         "long", "ls", "wide" -> CameraShot.LONG_SHOT
         "over", "over_shoulder", "os" -> CameraShot.OVER_SHOULDER
+        "follow", "fl", "tracking" -> CameraShot.FOLLOW
         "off", "none", "clear" -> {
             controller.clearCameraShot()
             return "camera shot released (free camera)"
         }
         else -> throw IllegalArgumentException(
-            "camera_shot expects closeup|macro|medium|full|long|over|off, got '$arg'"
+            "camera_shot expects closeup|macro|medium|full|long|over|follow|off, got '$arg'"
         )
     }
     controller.setCameraShot(shot)

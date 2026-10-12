@@ -49,7 +49,17 @@ enum class CameraShot(val label: String, val labelEn: String) {
      * 反应侧景 — half-body view from ~38° to the side-front, as if seen
      * over a conversation partner's shoulder.
      */
-    OVER_SHOULDER("反应侧景 OS", "Over-Shoulder OS");
+    OVER_SHOULDER("反应侧景 OS", "Over-Shoulder OS"),
+
+    /**
+     * 跟拍 — walking companion framing: the pivot rides the moving body
+     * (hips-weighted anchor) and the steering never "arrives", so the closed
+     * loop keeps tracking while the avatar walks. Yaw/pitch preserve the
+     * camera's current angle at activation. Intended for locomotion
+     * (`<cam:follow>`); while standing still it behaves like a slightly
+     * wider full shot.
+     */
+    FOLLOW("跟拍 FL", "Follow FL");
 
     /** Language-aware label for UI badges and prompt lines. */
     fun label(lang: Lang): String = if (lang == Lang.EN) labelEn else label

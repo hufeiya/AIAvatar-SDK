@@ -953,7 +953,16 @@ private fun DemoScreen(
     // Load the selected scene whenever it changes (null = 无场景，移除当前场景)
     LaunchedEffect(uiState.selectedScene) {
         val scene = uiState.selectedScene
-        if (scene != null) controller.loadScene("scene/$scene") else controller.removeScene()
+        if (scene != null) {
+            // 场景对位 meta（自由走动 P0）：scene/<名>.meta.json 可选，缺省
+            // 原样加载（历史行为）。标定流程见 SceneMetaParser 头注释。
+            val placement = runCatching {
+                context.assets.open(sceneMetaAssetName(scene)).use { it.readBytes().toString(Charsets.UTF_8) }
+            }.getOrNull()?.let { parseSceneMeta(it) }
+            controller.loadScene("scene/$scene", placement)
+        } else {
+            controller.removeScene()
+        }
     }
 
     // AI debug interface: the executor loop lives below, after the AI chat
@@ -1163,6 +1172,37 @@ private fun DemoScreen(
                         chatLines.addAll(next)
                         chatLog("ToolCallStarted ${ev.name}")
                     }
+                    is AvatarEvent.WalkStarted -> {
+                        // 起步即走即说（TTS 流水不断）：面板灰字 + 大景别跟拍建议由模型自发用 <cam:follow>
+                        val next = ChatTranscript.append(
+                            chatLines.toList(),
+                            ChatRole.SYSTEM,
+                            uiState.strings().transcriptWalkStarted(ev.anchor),
+                        )
+                        chatLines.clear()
+                        chatLines.addAll(next)
+                        chatLog("WalkStarted ${ev.anchor} target=(${ev.targetX}, ${ev.targetZ})")
+                    }
+                    is AvatarEvent.WalkArrived -> {
+                        val next = ChatTranscript.append(
+                            chatLines.toList(),
+                            ChatRole.SYSTEM,
+                            uiState.strings().transcriptWalkArrived,
+                        )
+                        chatLines.clear()
+                        chatLines.addAll(next)
+                        chatLog("WalkArrived (${ev.x}, ${ev.z})")
+                    }
+                    is AvatarEvent.WalkInterrupted -> {
+                        val next = ChatTranscript.append(
+                            chatLines.toList(),
+                            ChatRole.SYSTEM,
+                            uiState.strings().transcriptWalkInterrupted,
+                        )
+                        chatLines.clear()
+                        chatLines.addAll(next)
+                        chatLog("WalkInterrupted (${ev.x}, ${ev.z})")
+                    }
                     is AvatarEvent.ToolCallsIssued ->
                         chatLog("ToolCallsIssued ${ev.names}")
                     is AvatarEvent.ToolCallFinished ->
@@ -1365,6 +1405,30 @@ private fun DemoScreen(
             currentRenderSettings = { controller.currentRenderSettings ?: uiState.renderSettings },
             onRenderSettingsChange = { applyRenderSettings(it) },
         )
+    }
+
+    // P1 自由走动 AI 通道（docs/locomotion-feasibility.md §7.2/§7.3）：锚点表
+    // 注入会话（<move:> 词表 + 协议块移动段）+ move_to/stop_moving 工具注册。
+    // llmMove 关 = 摘工具 + 清锚点（协议块移动段随之消失，指纹机制自动重钉）。
+    // 锚点为空（用户删了 assets/scene/home.anchors.json）= 不注册，功能静默缺席。
+    // 顺带把走动步态配好（ai_cmd walk_to 里同款常量）：LLM 第一次 <move:> 就能走。
+    val walkAnchors = remember { loadWalkAnchors(context) }
+    LaunchedEffect(session, uiState.aiPrefs.llmMove, uiState.lang) {
+        val s = session ?: return@LaunchedEffect
+        s.locomotionAnchors = if (uiState.aiPrefs.llmMove) walkAnchors else emptyList()
+        val wantTools = uiState.aiPrefs.llmMove && walkAnchors.isNotEmpty()
+        if (wantTools && s.tools.find("move_to") == null) {
+            AgentToolCatalog.moveTo(promptTextsOf(uiState.lang)) { s.locomotionDriver }
+                .let { (spec, exec) -> s.tools.register(spec, exec) }
+            AgentToolCatalog.stopMoving(promptTextsOf(uiState.lang)) { s.locomotionDriver }
+                .let { (spec, exec) -> s.tools.register(spec, exec) }
+            if (!controller.isWalkGaitConfigured()) {
+                controller.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
+            }
+        } else if (!wantTools) {
+            s.tools.unregister("move_to")
+            s.tools.unregister("stop_moving")
+        }
     }
 
     // 进出视频模式：进入时补申请相机权限并默认面部特写机位；离开时停相机并把视线交回默认
@@ -2287,6 +2351,7 @@ private fun DemoScreen(
             agentState = {
                 session?.agentSnapshot() ?: "no session (configure the AI service first)"
             },
+            session = { session },
         )
     }
 

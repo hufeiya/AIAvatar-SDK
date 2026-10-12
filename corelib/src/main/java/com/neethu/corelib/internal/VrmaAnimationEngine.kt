@@ -51,7 +51,16 @@ internal class VrmaAnimationEngine(
     private var isLooping = true
     private var targetHipsY: Float = 1.0f
 
-    /** 最近一帧的渲染时钟（setIdleAnimation 热切换/立即接管时用来归零相位）。 */
+    /**
+     * Clip-time playhead (seconds into the animation). Advanced by frame dt ×
+     * [playbackSpeed] instead of sampling the absolute elapsed clock, so a
+     * mid-play speed change (walk gait timeScale = groundSpeed/baseSpeed)
+     * never jumps the phase; update() not being called = paused.
+     */
+    private var playheadSeconds = 0f
+    private var playbackSpeed = 1f
+
+    /** 最近一帧的渲染时钟——帧间 dt 的来源（playhead 积分用）。 */
     private var lastElapsedSeconds = 0f
 
     // Idle takeover: when set, a finished one-shot (or manual stop) switches
@@ -59,7 +68,6 @@ internal class VrmaAnimationEngine(
     // pose is the A-pose, which reads as "arms spread" (§7.10).
     private var idleAnimation: VrmaParser.VrmaAnimation? = null
     private var idleTakeover = false
-    private var idleAnchor = 0f
     private var idleSwapPending = false
 
     // ── Model Binding ────────────────────────────────────────────────────
@@ -152,7 +160,7 @@ internal class VrmaAnimationEngine(
                 isPlaying = true
                 isLooping = true
                 idleTakeover = true
-                idleAnchor = lastElapsedSeconds
+                playheadSeconds = 0f
                 idleSwapPending = true
             }
             // else: 动作播放中——只更新槽位，播完/stop 后接管
@@ -160,7 +168,18 @@ internal class VrmaAnimationEngine(
     }
     fun getIdleDuration(): Float = idleAnimation?.duration ?: 0f
 
-    fun play(loop: Boolean = true) { isPlaying = true; isLooping = loop; idleTakeover = false }
+    /**
+     * Start playback of the loaded animation. [speed] scales the clip clock
+     * (walk locomotion: groundSpeed / gait baseSpeed so footsteps match the
+     * actual travel); the default 1 keeps gesture/idle behavior unchanged.
+     */
+    fun play(loop: Boolean = true, speed: Float = 1f) {
+        isPlaying = true
+        isLooping = loop
+        idleTakeover = false
+        playbackSpeed = speed.coerceIn(0.25f, 3f)
+        playheadSeconds = 0f
+    }
 
     /**
      * Stop playback. With an idle configured this resumes the idle loop
@@ -173,7 +192,7 @@ internal class VrmaAnimationEngine(
             isPlaying = true
             isLooping = true
             idleTakeover = true
-            idleAnchor = 0f
+            playheadSeconds = 0f
             idleSwapPending = true
         } else {
             isPlaying = false
@@ -218,14 +237,16 @@ internal class VrmaAnimationEngine(
     // ── Frame Update ─────────────────────────────────────────────────────
 
     fun update(elapsedSeconds: Float) {
+        // Playhead 积分：dt 只在动画真正被采样的帧累积（未被调用 = 暂停），
+        // 渲染时钟被 vrmaStartTime 重置/回跳时 dt 取 0，变速不跳相位。
+        val dt = (elapsedSeconds - lastElapsedSeconds).coerceIn(0f, 0.25f)
         lastElapsedSeconds = elapsedSeconds
         val anim = currentAnimation ?: return
         if (!isPlaying || anim.duration <= 0f) return
 
-        // After an idle takeover the clock restarts from the swap moment.
-        val elapsed = if (idleTakeover) (elapsedSeconds - idleAnchor).coerceAtLeast(0f) else elapsedSeconds
-        val time = if (isLooping) elapsed % anim.duration
-                   else elapsed.coerceAtMost(anim.duration)
+        playheadSeconds += dt * playbackSpeed
+        val time = if (isLooping) playheadSeconds % anim.duration
+                   else playheadSeconds.coerceAtMost(anim.duration)
 
         val tm = engine.transformManager
 
@@ -293,11 +314,11 @@ internal class VrmaAnimationEngine(
         // automatically); without one, restore the rest pose. Curation prefers
         // clips whose last frame is near the rest pose so the snap is
         // invisible (docs/ai-layer-handoff.md §7.6/§7.10).
-        if (!isLooping && !idleTakeover && elapsedSeconds >= anim.duration) {
+        if (!isLooping && !idleTakeover && playheadSeconds >= anim.duration) {
             val idle = idleAnimation
             if (idle != null) {
                 currentAnimation = idle
-                idleAnchor = elapsedSeconds
+                playheadSeconds = 0f
                 idleTakeover = true
                 isLooping = true
                 idleSwapPending = true

@@ -44,19 +44,21 @@ interface PromptTexts {
     val userAlias: String
 
     /**
-     * 多模态协议块全文。段结构（表情/镜头/动作/few-shot 示例）与中文版逐段
-     * 对齐；空段（无镜头/无动作）的省略规则在两个实现里必须一致。
+     * 多模态协议块全文。段结构（表情/镜头/动作/移动/few-shot 示例）与中文版
+     * 逐段对齐；空段（无镜头/无动作/无锚点）的省略规则在两个实现里必须一致。
      *
      * @param cameras tag→显示名（已本地化）。
      * @param actionGroups 分类（原始名即可，块内部经 [actionCategory] 语言化）→ tag 列表。
      * @param directExpressions 当前模型原生表情名（直驱 `<emo:>` 词表）。
      * @param winkName 眨眼示例用的原生表情名（null = 省略眨眼示例）。
+     * @param moves 走动锚点（自由走动 P1）：name→本地化显示名；空 = 省略移动段。
      */
     fun protocolBlock(
         cameras: List<Pair<String, String>>,
         actionGroups: List<Pair<String, List<String>>>,
         directExpressions: List<String>,
         winkName: String?,
+        moves: List<Pair<String, String>> = emptyList(),
     ): String
 
     // ── 智能体工具（P0 工具调用：内置工具的 schema 描述/使用时机提示/错误文案）──
@@ -157,6 +159,40 @@ interface PromptTexts {
      */
     fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String
 
+    // ── 智能体工具（P1 自由走动，docs/locomotion-feasibility.md §7.3）──
+    val toolMoveToDescription: String
+    val toolMoveToHint: String
+
+    /** 起步成功的确认文案（[label] 是锚点本地化显示名）。 */
+    fun toolMoveToStarted(label: String): String
+
+    /** 走动中收到新 move_to：被防抖忽略（正常结果，模型继续说话即可）。 */
+    val toolMoveToAlreadyWalking: String
+
+    /** 锚点表为空（功能未配置）时的错误文案。 */
+    val toolMoveToNoAnchors: String
+
+    /** 没加载场景（虚空行走守卫）时的错误文案。 */
+    val toolMoveToNoScene: String
+
+    /** 没加载 3D 模型时的错误文案。 */
+    val toolMoveToNoModel: String
+
+    /** 步态未配置/加载失败时的错误文案。 */
+    val toolMoveToNoGait: String
+
+    /** 「模仿我」引擎占用骨骼时的错误文案。 */
+    val toolMoveToMimicActive: String
+
+    /** 其他执行缝失败（渲染层缺失等）的错误文案。 */
+    val toolMoveToFailed: String
+
+    val toolStopMovingDescription: String
+    val toolStopMovingHint: String
+
+    /** 停步成功的确认文案。 */
+    val toolStopMovingDone: String
+
     /**
      * 智能体工具使用说明块（钉在协议块末尾，同一条 system——部分服务商拒绝
      * 多条 system）。[hints] 是 (工具名, 时机提示) 列表；轮数上限写进块里，
@@ -220,6 +256,7 @@ object PromptTextsZh : PromptTexts {
         "full_shot" to "全身",
         "long_shot" to "远景",
         "over_shoulder" to "侧景",
+        "follow" to "跟拍（走动时用，镜头持续跟随）",
     )
 
     override fun actionCategory(raw: String): String = raw
@@ -231,6 +268,7 @@ object PromptTextsZh : PromptTexts {
         actionGroups: List<Pair<String, List<String>>>,
         directExpressions: List<String>,
         winkName: String?,
+        moves: List<Pair<String, String>>,
     ): String = buildString {
         append("[多模态输出协议 / Multimodal protocol]\n")
         append("你在回复中可以插入行内标签，实时驱动你的镜头、身体动作和面部表情。标签不会被朗读，也不会出现在对话记录里，与文字一起自然地输出即可。\n")
@@ -251,6 +289,15 @@ object PromptTextsZh : PromptTexts {
         )
         if (cameras.isNotEmpty()) {
             append("- 镜头 <cam:机位>：${cameras.joinToString(" ") { "${it.first}(${it.second})" }}。回复开头或场景转换时给一个，一个回复通常 0~2 个。\n")
+        }
+        // 移动段（自由走动 P1）：锚点表非空才出现；放在动作列表之前——两者都是
+        // "身体做什么"，但移动词表只有几个词，动作列表量大放最后稀释指令。
+        if (moves.isNotEmpty()) {
+            append(
+                "- 移动 <move:锚点>：你想在房间里走动（自己想去或用户让你去）时，把标签放在" +
+                    "出发那句话里，可以边走边说，到达后继续对话：${moves.joinToString(" ") { "${it.first}(${it.second})" }}。" +
+                    "要走远时可先发 <cam:follow> 让镜头跟拍；正在走动时不要重复下移动指令；列表外的名字不要发。\n",
+            )
         }
         // 动作列表量大（几百个），放在最后以免稀释前面的指令
         if (actionGroups.isNotEmpty()) {
@@ -446,6 +493,48 @@ object PromptTextsZh : PromptTexts {
     override val toolTakePhotoFailed: String =
         "拍照失败(画面没就绪或保存失败)。请口头向用户说明。"
 
+    // ── 智能体工具（P1 自由走动）──
+    override val toolMoveToDescription: String =
+        "走向房间里的指定位置(锚点),可以边走边说。"
+
+    override val toolMoveToHint: String =
+        "用户让你去某处(「你去窗边看看」「到沙发那边坐下聊」)、或你想换个位置表演时调用。" +
+            "调用后立刻起步,请自然地继续说话(比如「这就过去」),不要重复调用等到达;" +
+            "到达事件会自动送达,走远时可先发 <cam:follow> 让镜头跟拍。"
+
+    override fun toolMoveToStarted(label: String): String =
+        "已经在走向「$label」了。请继续自然对话,不要重复调用本工具。"
+
+    override val toolMoveToAlreadyWalking: String =
+        "已经在走动中(上一次的移动指令还在执行),这次调用被忽略了。请继续自然对话,不要重复下移动指令。"
+
+    override val toolMoveToNoAnchors: String =
+        "当前会话没有配置任何可走动的位置(未加载场景或未标定锚点)。请口头说明你现在不能走动。"
+
+    override val toolMoveToNoScene: String =
+        "还没有加载房间场景,现在走不了。请先请用户加载场景(load_scene),再重新尝试。"
+
+    override val toolMoveToNoModel: String =
+        "当前没有加载 3D 模型,走不了。请向用户说明。"
+
+    override val toolMoveToNoGait: String =
+        "走路动作还没准备好(步态未配置或加载失败)。请口头向用户说明你现在还不能走动。"
+
+    override val toolMoveToMimicActive: String =
+        "「模仿我」模式正在占用身体,走不了。请先等模仿结束,或口头向用户说明。"
+
+    override val toolMoveToFailed: String =
+        "走动启动失败(渲染层不可用)。请口头向用户说明。"
+
+    override val toolStopMovingDescription: String =
+        "停下脚步(终止当前走动)。"
+
+    override val toolStopMovingHint: String =
+        "正在走动而用户要求停下(「别走了」「站住」)、或话题需要你站定时调用。"
+
+    override val toolStopMovingDone: String =
+        "已经停下脚步。请自然地继续对话。"
+
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {
             "缺少必填参数:请提供 $tool 的取值(合法值:${valid.joinToString("/")})。"
@@ -461,7 +550,7 @@ object PromptTextsZh : PromptTexts {
         append("- 凡要真正改变设备/舞台状态(开关手电筒、切换灯光氛围、发震动、拍照),必须发起对应的" +
             "函数调用——只在台词里说「已做好」不会真的生效,用户看得出来。\n")
         append("- 工具调用每回合最多 $maxRounds 轮，用完请直接回答。\n")
-        append("- 行内标签（emo/act/cam）是你说话时的表演层；工具是你获取信息用的，两者不互相替代。\n")
+        append("- 行内标签（emo/act/cam/move）是你说话时的表演层；工具是你获取信息用的，两者不互相替代。\n")
         append("- 需要用工具时立即发起函数调用——不要只说话等待，也不要把调用写成文字" +
             "（比如「[调用工具 xx]」会被朗读出来）；拿到工具结果后再正式回答用户。")
     }
@@ -512,6 +601,7 @@ object PromptTextsEn : PromptTexts {
         "full_shot" to "full shot (head to feet)",
         "long_shot" to "long shot",
         "over_shoulder" to "over-the-shoulder",
+        "follow" to "tracking shot (use while walking, camera keeps following)",
     )
 
     override fun actionCategory(raw: String): String = when (raw) {
@@ -537,6 +627,7 @@ object PromptTextsEn : PromptTexts {
         actionGroups: List<Pair<String, List<String>>>,
         directExpressions: List<String>,
         winkName: String?,
+        moves: List<Pair<String, String>>,
     ): String = buildString {
         append("[Multimodal output protocol]\n")
         append("You may insert inline tags in your replies to drive your camera, body movements and facial expressions in real time. Tags are never read aloud and never appear in the chat transcript — just write them naturally together with the text.\n")
@@ -554,6 +645,17 @@ object PromptTextsEn : PromptTexts {
         )
         if (cameras.isNotEmpty()) {
             append("- Camera <cam:shot>: ${cameras.joinToString(" ") { "${it.first}(${it.second})" }}. Give one at the start of a reply or on scene changes; usually 0~2 per reply.\n")
+        }
+        // Move section (locomotion P1): appears only when anchors are configured.
+        if (moves.isNotEmpty()) {
+            append(
+                "- Move <move:anchor>: when you want to walk somewhere in the room (on your own or " +
+                    "when the user asks), put the tag in the sentence where you set off — you can keep " +
+                    "talking while walking and continue the conversation on arrival: " +
+                    moves.joinToString(" ") { "${it.first}(${it.second})" } + ". " +
+                    "For longer walks send <cam:follow> first so the camera tracks you; do not repeat " +
+                    "move commands while already walking; never use names outside the list.\n",
+            )
         }
         if (actionGroups.isNotEmpty()) {
             append("- Actions <act:action>: the English name is the meaning (words separated by underscores); pick suitable ones by semantics:\n")
@@ -765,6 +867,54 @@ object PromptTextsEn : PromptTexts {
     override val toolTakePhotoFailed: String =
         "Taking the photo failed (view not ready or save failed). Tell the user."
 
+    // ── Agent tools (P1 free locomotion) ──
+    override val toolMoveToDescription: String =
+        "Walk to a named spot in the room (an anchor); you can keep talking while walking."
+
+    override val toolMoveToHint: String =
+        "Call when the user asks you to go somewhere (\"go check the window\", \"come sit on the " +
+            "sofa\") or when you want to reposition for showmanship. The walk starts immediately — " +
+            "keep chatting naturally (e.g. \"on my way\") and do not call again waiting for arrival; " +
+            "an arrival event will reach you. For longer walks send <cam:follow> first so the camera tracks you."
+
+    override fun toolMoveToStarted(label: String): String =
+        "Already walking toward \"$label\". Keep the conversation natural; do not call this tool again."
+
+    override val toolMoveToAlreadyWalking: String =
+        "Already walking (the previous move is still in progress), so this call was ignored. " +
+            "Keep chatting naturally; do not repeat move commands."
+
+    override val toolMoveToNoAnchors: String =
+        "No walkable positions are configured in this session (no scene loaded or anchors " +
+            "uncalibrated). Tell the user you cannot walk right now."
+
+    override val toolMoveToNoScene: String =
+        "The room scene is not loaded yet, so walking is unavailable. Ask the user to load a " +
+            "scene (load_scene) first, then try again."
+
+    override val toolMoveToNoModel: String =
+        "No 3D model is loaded, so walking is unavailable. Tell the user."
+
+    override val toolMoveToNoGait: String =
+        "The walk animation is not ready (gait not configured or failed to load). " +
+            "Tell the user you cannot walk right now."
+
+    override val toolMoveToMimicActive: String =
+        "\"Imitate me\" mode currently owns the body, so walking is unavailable. " +
+            "Wait for it to end or tell the user."
+
+    override val toolMoveToFailed: String =
+        "Starting the walk failed (render layer unavailable). Tell the user."
+
+    override val toolStopMovingDescription: String =
+        "Stop walking (cancel the current walk)."
+
+    override val toolStopMovingHint: String =
+        "Call while walking when the user asks you to stop (\"stop walking\") or the topic needs you standing still."
+
+    override val toolStopMovingDone: String =
+        "Stopped. Continue the conversation naturally."
+
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {
             "Missing required argument: provide one of $tool's valid values (${valid.joinToString(" / ")})."
@@ -782,7 +932,7 @@ object PromptTextsEn : PromptTexts {
             "go through the corresponding function call — merely saying \"done\" in dialogue changes nothing, " +
             "and the user can tell.\n")
         append("- At most $maxRounds tool rounds per turn; once spent, answer directly.\n")
-        append("- Inline tags (emo/act/cam) are your performance layer while speaking; tools are for " +
+        append("- Inline tags (emo/act/cam/move) are your performance layer while speaking; tools are for " +
             "gathering information — neither replaces the other.\n")
         append("- When a tool is needed, fire the function call IMMEDIATELY — do not just talk and wait, and do " +
             "not write the call as text (something like \"[call tool xx]\" would be read aloud); answer after " +

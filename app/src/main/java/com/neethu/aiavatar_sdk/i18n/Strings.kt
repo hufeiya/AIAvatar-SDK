@@ -99,6 +99,16 @@ class Strings(val lang: Lang) {
     /** 聊天面板的元信息行：模型正在调用工具（等待原因可视化，docs/agent-feasibility.md §4.11）。 */
     fun transcriptToolCall(name: String): String =
         zh("🔍 正在调用工具 $name…", "🔍 Calling tool $name…")
+
+    /** 聊天面板的元信息行：虚拟人起步走向锚点（自由走动 P1）。 */
+    fun transcriptWalkStarted(target: String): String =
+        zh("🚶 正在走向$target…", "🚶 Walking to $target…")
+
+    /** 聊天面板的元信息行：走动到达。 */
+    val transcriptWalkArrived: String get() = zh("🚶 已到达", "🚶 Arrived")
+
+    /** 聊天面板的元信息行：走动被中断（用户/模型停步）。 */
+    val transcriptWalkInterrupted: String get() = zh("🚶 走动已停止", "🚶 Walk stopped")
     val sendA11y: String get() = zh("发送", "Send")
     val interruptA11y: String get() = zh("打断", "Interrupt")
     val toggleInputModeA11y: String get() = zh("切换输入模式", "Switch input mode")
@@ -279,6 +289,10 @@ class Strings(val lang: Lang) {
     val readClipboardSubtitle: String get() =
         zh("工具 read_clipboard：仅当用户明确要求看刚复制的内容（长文/快递单号/验证码）时读取，模型绝不偷看；默认关",
             "Tool read_clipboard: reads copied text only when explicitly asked (long text, tracking number, code); never peeks uninvited; off by default")
+    val llmMoveTitle: String get() = zh("AI 自由走动", "AI free locomotion")
+    val llmMoveSubtitle: String get() =
+        zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",
+            "Let the model walk to room anchors with <move:…> tags (\"go to the window\"…); the move_to tool comes with it; a scene must be loaded first")
 
     val sectionCard: String get() = zh("人物卡 (Character Card · 人设提示词)", "Character Card (persona prompt)")
     val cardNotActive: String get() =

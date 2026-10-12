@@ -40,6 +40,35 @@ class InlineTagExtractorTest {
     }
 
     @Test
+    fun `move tag extracted, intensity dropped, case-insensitive`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("好<move:sofa>的，<MOVE:window:0.5>走起。")
+        assertEquals("好的，走起。", r.cleanText)
+        assertEquals(
+            listOf(TagCue.Move("sofa", "<move:sofa>"), TagCue.Move("window", "<MOVE:window:0.5>")),
+            r.cues,
+        )
+    }
+
+    @Test
+    fun `move tag split across deltas is buffered`() {
+        val ex = InlineTagExtractor()
+        val r1 = ex.feed("我去<mo")
+        assertEquals("我去", r1.cleanText)
+        assertEquals(0, r1.cues.size)
+        val r2 = ex.feed("ve:sofa>看看")
+        assertEquals("看看", r2.cleanText)
+        assertEquals(listOf(TagCue.Move("sofa", "<move:sofa>")), r2.cues)
+    }
+
+    @Test
+    fun `flush drops a dangling move prefix`() {
+        val ex = InlineTagExtractor()
+        assertEquals("好", ex.feed("好<move").cleanText)
+        assertEquals("", ex.flush().cleanText)
+    }
+
+    @Test
     fun `tag names are lowercased`() {
         val ex = InlineTagExtractor()
         val r = ex.feed("<ACT:Wave><CAM:Close_Up><EMO:Happy>")
@@ -241,6 +270,77 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         ex.feed("<emo")
         ex.reset()
+        assertEquals("", ex.flush().cleanText)
+    }
+
+    // ── 文本形态工具调用 + 命名空间宽容回退（P1 真机踩过:DeepSeek 把
+    //    <move_to carpet>/<stop_moving> 当文本吐进 TTS;<move:window→carpet>
+    //    箭头形状漏进语音）──
+
+    @Test
+    fun `text-form tool call with args is extracted not leaked`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<move_to carpet>好，我这就去。")
+        assertEquals("好，我这就去。", r.cleanText)
+        assertEquals(listOf(TagCue.ToolCallText("<move_to carpet>")), r.cues)
+    }
+
+    @Test
+    fun `text-form tool call with xml args and bare form extracted`() {
+        val ex = InlineTagExtractor()
+        val r1 = ex.feed("<move_to anchor=\"desk\">走起")
+        assertEquals("走起", r1.cleanText)
+        assertEquals(listOf(TagCue.ToolCallText("<move_to anchor=\"desk\">")), r1.cues)
+
+        ex.reset()
+        val r2 = ex.feed("<stop_moving>停下")
+        assertEquals("停下", r2.cleanText)
+        assertEquals(listOf(TagCue.ToolCallText("<stop_moving>")), r2.cues)
+    }
+
+    @Test
+    fun `text-form tool call split across deltas is buffered`() {
+        val ex = InlineTagExtractor()
+        val r1 = ex.feed("好<stop_mo")
+        assertEquals("好", r1.cleanText)
+        assertEquals(0, r1.cues.size)
+        val r2 = ex.feed("ving>听你的")
+        assertEquals("听你的", r2.cleanText)
+        assertEquals(listOf(TagCue.ToolCallText("<stop_moving>")), r1.cues + r2.cues)
+    }
+
+    @Test
+    fun `prose angle brackets without tool shape pass through`() {
+        val ex = InlineTagExtractor()
+        // 无下划线的词/短词不是工具名:保持语音透传(宁漏勿误伤散文)
+        val r = ex.feed("<see this> <hello> <b> 与 <i love you>")
+        assertEquals("<see this> <hello> <b> 与 <i love you>", r.cleanText)
+        assertEquals(0, r.cues.size)
+    }
+
+    @Test
+    fun `lenient move fallback catches invented arrow shape`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<move:window→carpet>好")
+        assertEquals("好", r.cleanText)
+        assertEquals(listOf(TagCue.Move("window→carpet", "<move:window→carpet>")), r.cues)
+    }
+
+    @Test
+    fun `lenient emo fallback catches symbol junk name`() {
+        val ex = InlineTagExtractor()
+        val r = ex.feed("<emo:happy+sad>嗯")
+        assertEquals("嗯", r.cleanText)
+        val cue = r.cues.single() as TagCue.Emotion
+        assertEquals("happy+sad", cue.name)
+        assertEquals("<emo:happy+sad>", cue.raw)
+    }
+
+    @Test
+    fun `flush drops a dangling text-form tool prefix`() {
+        val ex = InlineTagExtractor()
+        val fed = ex.feed("好<move_t")
+        assertEquals("好", fed.cleanText)
         assertEquals("", ex.flush().cleanText)
     }
 

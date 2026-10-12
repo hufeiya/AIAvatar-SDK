@@ -123,13 +123,33 @@ fun aiDebugHelp(): String = """
     |Motion:
     |  move                     Move avatar in world units. ai_x/ai_y/ai_z = deltas
     |                           (+x right, +y up, +z toward camera)
+    |  walk_to                  Walk to a world point (free locomotion, needs a
+    |                           loaded scene — walk bounds come from its meta).
+    |                           ai_x/ai_z = target meters; ai_arg = speed m/s
+    |                           (default 1.0; walk gait auto-configured on
+    |                           first use); OR an anchor name: walk_to sofa
+    |                           (table = `anchors`). Pair with camera_shot follow
+    |  walk_stop                Stop walking (hard stop, returns to idle)
+    |  walk_state               Dump locomotion state (phase/pos/heading/target)
+    |  anchors                  List the session's walk anchors (<move:> table)
+    |  walk_transit             Walk transition clips (P1 tier-1): none=dump |
+    |                           off | start <assets/*.vrma> | stop <assets/*.vrma>
+    |                           (one-shot clips; program motion held while the
+    |                           start clip plays; measured candidates in
+    |                           docs/locomotion-feasibility.md §5.2)
+    |  scene_offset             Nudge the loaded scene: ai_x/ai_y/ai_z = meters.
+    |                           Calibration probe — paste the echoed placement
+    |                           json into assets/scene/<scene>.meta.json
+    |  scene_rot <ai_x>         Rotate the loaded scene: ai_x = yaw degrees
+    |                           (same meta workflow as scene_offset)
     |  zoom <ai_x>              Camera dolly. ai_x = pinch pixels, + zooms in / - zooms out
     |  pan                      Camera pan. ai_x/ai_y = screen pixels (two-finger equivalent)
     |  orbit                    Camera orbit. ai_x/ai_y = screen pixels (drag equivalent)
     |  reset_camera             Restore the initial camera pose
     |  camera_shot <arg>        Frame a preset shot with a smooth transition:
     |                           closeup | macro | medium | full | long | over
-    |                           | off (release). Video mode defaults to closeup
+    |                           | follow (tracking shot for walking) | off
+    |                           (release). Video mode defaults to closeup
     |                           on entry and returns to it after each turn
     |  set_drag_mode <arg>      on = touch drags the avatar instead of orbiting the camera
 |  open_panel <arg>         Open a bottom panel: none | models | animations |

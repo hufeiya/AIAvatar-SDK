@@ -61,6 +61,14 @@ data class AiChatPrefs(
      * 刻意不含本开关（与其他工具开关同列：不改变模型能力面，不轮换上下文）。
      */
     val readClipboard: Boolean = false,
+    /**
+     * AI 自由走动（P1，docs/locomotion-feasibility.md §7.3）：允许模型用
+     * `<move:锚点>` 标签走向房间锚点（move_to/stop_moving 工具同步可用）。
+     * 默认开（锚点表随 APK 内置，协议块只在锚点非空时才宣传移动段）。
+     * 身份签名刻意不含（与 llmCamera 同列：协议块变化走重钉+重发，不轮换
+     * 上下文）。
+     */
+    val llmMove: Boolean = true,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -112,6 +120,7 @@ data class AiChatPrefs(
             voice = voice,
             lang = lang,
             enableLlmCamera = llmCamera,
+            enableLlmMove = llmMove,
             contextId = contextId,
             characterId = characterId,
         )
@@ -134,6 +143,7 @@ private const val KEY_AI_LLM_CAMERA = "ai_llm_camera"
 private const val KEY_AI_AGENT_TOOLS = "ai_agent_tools"
 private const val KEY_AI_OBSERVE_CAMERA = "ai_observe_camera"
 private const val KEY_AI_READ_CLIPBOARD = "ai_read_clipboard"
+private const val KEY_AI_LLM_MOVE = "ai_llm_move"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -166,6 +176,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         agentTools = getBoolean(KEY_AI_AGENT_TOOLS, true),
         observeCamera = getBoolean(KEY_AI_OBSERVE_CAMERA, false),
         readClipboard = getBoolean(KEY_AI_READ_CLIPBOARD, false),
+        llmMove = getBoolean(KEY_AI_LLM_MOVE, true),
     )
 }
 
@@ -186,6 +197,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_AGENT_TOOLS, p.agentTools)
         .putBoolean(KEY_AI_OBSERVE_CAMERA, p.observeCamera)
         .putBoolean(KEY_AI_READ_CLIPBOARD, p.readClipboard)
+        .putBoolean(KEY_AI_LLM_MOVE, p.llmMove)
         .apply()
 }
 

@@ -45,6 +45,16 @@ P0.5 六工具真机验收中发现(P0 的 curl A/B 只测「能不能调用」,
 1. **DeepSeek-V4-Flash 的「方向不对称」**:信息类(get_device_status)与「开启/切换到」类(开灯/set_ambience dim)稳定原生调用;**「关闭/恢复/表达类」动作(关灯、氛围恢复、拍照、击掌)倾向口头演**——模型在台词里宣称「已关掉/拍好啦」但零函数调用,连干净上下文、显式「用手电筒工具」话术、per-tool hint 与 toolsetBlock 公共尾「必须发起函数调用」提示词两轮加重都压不住(doubao 同场景关灯原生调用成功→有模型差异)。**残余缓解**:悬空衔接句检测只接「单句 ≤24 字就停」形态,整轮叙述接不住(已知残余的推广);后续候选=回合级「宣布了动作但零调用」的 required 重试(成本控制:仅当轮内出现动作动词+工具名相关词时)。**用户侧缓解**:关灯/拍照类话术显式点名工具或换 doubao。
 2. **doubao-seed-2-0-mini 对 set_ambience 确定性文本吐**(3/3):模型输出 `<set_ambience><parameter name="preset">dim</parameter></set_ambience>` 作为**正文文本**——不是 Qwen 的 `<tool_call><function=>` 模板形态(无 wrapper、parameter 用 name 属性),`parseTemplateToolCalls` 不识别→工具意图丢失,且**原文进了断句→TTS 被朗读**(比 Qwen 形态多一层危害)。同模型 set_flashlight 关灯原生调用正常→工具相关。后续=parser 扩展识别该形态+流式侧抑制(在 InlineTagExtractor 层吞掉,防 TTS 泄漏)。
 
+### P1 走动通道的自然触发形态(2026-10-12 真机 2c3769db,DeepSeek-V4-Flash,锚点已踩点标定)
+
+「你走到 X」类请求 3 走 1 成,成功的形态是标准标签 `<move:window>`/`<move:desk>`/`<move:carpet>`(还会自发配 `<cam:follow>` 编排运镜,异步起步+跨走动 TTS 不断流全链通过)。失败三种(与 P0.5 doubao set_ambience 同族——**文本吐工具调用**):
+
+1. **伪工具调用文本**:`<move_to carpet>`/`<move_to anchor="desk">`(自然措辞与显式「用工具 move_to」都会触发)——不是原生 tool_calls、不是任何协议标签,整段进断句→TTS 朗读且动作不发生;`<stop_moving>` 同形态(走动中叫停,模型只用文本形态回应,原生工具一次没调过)。
+2. **发明标签形状**:`<move:window→carpet>`(箭头复合目标),严格 moveTag 名字段不认→原样漏进 TTS。
+3. 附带:**未调用就口头宣称到达**(「到啦,已经站在地毯中间停稳了」其实没走)——P0.5「方向不对称」的走动版,公理 3 形态。
+
+**SDK 侧兜底已落地(2026-10-12,层 0 原则「形状是标签就不进语音」)**:InlineTagExtractor 三层扩展——①snake_case 伪工具形状(name 含下划线+可选自由参数)→新 `TagCue.ToolCallText` 只抑制+UnknownTag[tool] 上报,**不执行**(文本不是工具通道);②四命名空间宽容回退 `<move:[^>]{1,40}>` 等,离谱名字下游按未知名过滤+上报;③flush 前缀表补 `move_` 截断形态。误伤防线=要求名字含下划线,散文 `<see this>`/`<hello>` 永不命中。单测 +8(adapter 7/orchestrator 1)。**provider 侧正经修复仍是 P0.5 遗留**:回合级「宣布动作零调用」required 重试(走动动词「去/走/到」加入悬空检测候选集,误伤面要单独评估)+move_to 文本形态的模板解析扩展。**选型建议**:走动方向 DeepSeek 触发不稳定(3 走 1),doubao 未测;结合 P0.5 结论,走动+工具全都要时优先火山 doubao 验证后再定。
+
 ## 服务商瞬态故障与韧性(2026-10-11 晚实测)
 
 硅基流动当晚多模型间歇抖动(Qwen3-VL 一度 50507 4/5、Qwen3.8 空回复/60s 挂起、半小时后自愈),两类故障不再杀死回合:

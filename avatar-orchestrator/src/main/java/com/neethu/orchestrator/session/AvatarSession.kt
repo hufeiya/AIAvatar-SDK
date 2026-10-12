@@ -29,6 +29,8 @@ import com.neethu.orchestrator.agent.isDanglingBridgeReply
 import com.neethu.orchestrator.agent.parseTemplateToolCalls
 import com.neethu.orchestrator.i18n.PromptTexts
 import com.neethu.orchestrator.i18n.promptTextsOf
+import com.neethu.orchestrator.locomotion.LocomotionDriver
+import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
 import com.neethu.orchestrator.audio.PlaybackItem
 import com.neethu.orchestrator.audio.PlaybackQueue
@@ -100,6 +102,11 @@ class AvatarSession(
     lipSyncProcessor: LipSyncProcessor? = WlipsyncLipSyncProcessor(),
     gestureDriver: GestureDriver? = null,
     /**
+     * 行走决策层注入位（测试 fake / 集成方定制）；默认按 [Options.enableLlmMove]
+     * 自动构建。见 [locomotionDriver]。
+     */
+    locomotionDriver: LocomotionDriver? = null,
+    /**
      * 对话历史存储（任务 3）：默认内存环形（杀进程即失），集成方注入
      * [com.neethu.orchestrator.history.RoomConversationStore] 即获得跨进程
      * 持久化与多上下文。
@@ -155,6 +162,14 @@ class AvatarSession(
         /** Let `<cam:…>` tags switch the preset camera framing. */
         val enableLlmCamera: Boolean = true,
         /**
+         * Let `<move:锚点>` tags (and the move_to/stop_moving tools) walk the
+         * avatar to scene anchors (docs/locomotion-feasibility.md §7.3). The
+         * anchor table itself is injected via [locomotionAnchors] — an empty
+         * table means the move section never appears in the protocol block
+         * and move cues are reported as unknown tags.
+         */
+        val enableLlmMove: Boolean = true,
+        /**
          * LLM 请求只带最近 N 条 user/assistant 历史（system 消息恒置顶、不受
          * 裁剪影响）；null = 全量发送。持久化存储下上下文会无限增长，长会话
          * 建议设置。
@@ -208,6 +223,30 @@ class AvatarSession(
             gestureDriver ?: GestureDriver(controller)
         } else {
             null
+        }
+
+    /**
+     * LLM-driven walk driver (`<move:锚点>` 标签 + move_to/stop_moving 工具
+     * 共用的决策层，docs/locomotion-feasibility.md §7.3)；null = 无 controller
+     * 或 [Options.enableLlmMove] 关闭。可注入（测试传 fake）。锚点表经
+     * [locomotionAnchors] 注入（会话内不变——协议块指纹承诺）。
+     */
+    val locomotionDriver: LocomotionDriver? =
+        if (controller != null && options.enableLlmMove) {
+            locomotionDriver ?: LocomotionDriver(controller)
+        } else {
+            null
+        }
+
+    /**
+     * 场景锚点表（`assets/scene/<场景>.anchors.json` 解析产物）：`<move:>`
+     * 词表、协议块移动段与 move_to 工具的 enum 白名单共用。空表 = 功能未
+     * 配置（协议块无移动段、Move cue 走 UnknownTag 上报）。
+     */
+    var locomotionAnchors: List<MoveAnchor> = emptyList()
+        set(value) {
+            field = value
+            locomotionDriver?.anchors = value
         }
 
     /**
@@ -317,6 +356,19 @@ class AvatarSession(
             Log.e("AvatarSession", "${STREAM_PREFIX}sentence #$sequence failed", error)
             emit(AvatarEvent.SentenceFailed(sequence, text, error.message ?: "TTS failed"))
         }
+        }
+        // 走动完成事件（自由走动 P1，docs/locomotion-feasibility.md §7.4）：corelib
+        // 渲染层到达/停步 → AvatarEvent，UI 信息行与对话逻辑共用同一出口。
+        controller?.walkFinished?.let { walkFlow ->
+            scope.launch {
+                walkFlow.collect { finished ->
+                    if (finished.arrived) {
+                        emit(AvatarEvent.WalkArrived(finished.x, finished.z))
+                    } else {
+                        emit(AvatarEvent.WalkInterrupted(finished.x, finished.z))
+                    }
+                }
+            }
         }
         queue.listener = object : PlaybackQueue.Listener {
             override fun onPlaybackStarted(item: PlaybackItem) {
@@ -862,6 +914,8 @@ class AvatarSession(
                 }
             }
             is TagCue.Camera -> dispatchCamera(cue)
+            is TagCue.Move -> dispatchMove(cue)
+            is TagCue.ToolCallText -> reportUnknownTag("tool", cue.raw)
         }
     }
 
@@ -880,6 +934,30 @@ class AvatarSession(
         }
         controller?.setCameraShot(shot)
         emit(AvatarEvent.CameraChanged(shot))
+    }
+
+    /**
+     * `<move:锚点>`（自由走动 P1，docs/locomotion-feasibility.md §7.3）：异步
+     * 语义——起步即返回，LLM 继续说话，TTS 流水不断（"边走边说"）。未知名走
+     * UnknownTag 上报（过滤不朗读，层 2 兜底复用）；锚点对但执行缝拒绝
+     * （没加载模型/场景、步态未配、mimic 占用）只打日志——名字是对的，不该
+     * 混进"未识别标签"；走动中收到新指令被驱动器防抖忽略（坑 9）。
+     */
+    private fun dispatchMove(cue: TagCue.Move) {
+        val driver = locomotionDriver ?: return
+        val anchor = driver.find(cue.name)
+        if (anchor == null) {
+            reportUnknownTag("move", cue.raw)
+            return
+        }
+        when (val outcome = driver.walkTo(anchor)) {
+            LocomotionDriver.Outcome.STARTED ->
+                emit(AvatarEvent.WalkStarted(anchor.name, anchor.x, anchor.z))
+            LocomotionDriver.Outcome.ALREADY_WALKING ->
+                Log.i("AvatarSession", "${STREAM_PREFIX}move ignored (already walking): ${cue.raw}")
+            else ->
+                Log.w("AvatarSession", "${STREAM_PREFIX}move '${cue.name}' rejected: $outcome")
+        }
     }
 
     private fun submitSentence(sentence: String, ttsCfg: TtsConfig) {
@@ -1051,6 +1129,7 @@ class AvatarSession(
                     "cameras=${currentCameraTags().size}, " +
                     "actions=${currentActionGroups().sumOf { it.second.size }}, " +
                     "directExpr=${currentDirectExpressions().size}" +
+                    (if (currentMoveTags().isNotEmpty()) ", moves=${currentMoveTags().size}" else "") +
                     (if (options.agentToolsEnabled && !tools.isEmpty()) ", tools=${tools.list().size}" else ""),
             )
         }
@@ -1069,6 +1148,7 @@ class AvatarSession(
             cameras = currentCameraTags(),
             actionGroups = currentActionGroups(),
             directExpressions = currentDirectExpressions(),
+            moves = currentMoveTags(),
         )
         val toolset = toolsetBlockText()
         return listOfNotNull(block.takeIf { it.isNotBlank() }, toolset)
@@ -1116,6 +1196,16 @@ class AvatarSession(
     private fun currentCameraTags(): List<Pair<String, String>> =
         if (options.enableLlmCamera && controller != null) texts.cameraTags
         else emptyList()
+
+    /**
+     * 移动词表（`<move:锚点>`，锚点名 → 本地化显示名）：锚点表非空且开关开启
+     * 才进协议块（headless/未注入锚点的会话永远不宣传走不动的能力）。
+     */
+    private fun currentMoveTags(): List<Pair<String, String>> {
+        val driver = locomotionDriver ?: return emptyList()
+        if (driver.anchors.isEmpty()) return emptyList()
+        return driver.anchors.map { it.name to it.labelFor(options.lang) }
+    }
 
     // 分类名保持原始值；协议块内部按语言本地化（PromptTexts.actionCategory）。
     // groupBy 保持目录的遭遇序（buildLlmActionCatalog 已按对话价值排好）
@@ -1209,6 +1299,7 @@ class AvatarSession(
         "full_shot" to CameraShot.FULL_SHOT,
         "long_shot" to CameraShot.LONG_SHOT,
         "over_shoulder" to CameraShot.OVER_SHOULDER,
+        "follow" to CameraShot.FOLLOW,
     )
     }
 }

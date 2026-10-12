@@ -30,4 +30,24 @@ sealed interface TagCue {
 
     /** `<cam:shot[:intensity]>` — a preset camera framing; intensity tolerated and dropped. */
     data class Camera(val name: String, val raw: String = "") : TagCue
+
+    /**
+     * `<move:anchor[:intensity]>` — a named walk target (scene anchor, e.g.
+     * "sofa") of the free-locomotion protocol (docs/locomotion-feasibility.md
+     * §7.3). Independent namespace (never collides with act names); intensity
+     * tolerated and dropped like act/cam. Names resolve against the session's
+     * anchor table downstream — the adapter stays asset-free.
+     */
+    data class Move(val name: String, val raw: String = "") : TagCue
+
+    /**
+     * A native tool call the model emitted as *text* instead of through the
+     * tool-call channel — `<move_to sofa>`, `<move_to anchor="desk">`,
+     * `<stop_moving>` (P1 真机踩过: DeepSeek mid-prose). Never executed (text
+     * is not the tool channel; the proper cure is the provider-side required
+     * retry, docs/agent-provider-matrix.md) and never spoken (层 0: tag-shaped
+     * segments don't leak into TTS); surfaced downstream as an UnknownTag
+     * report so the panel/log shows what the model attempted.
+     */
+    data class ToolCallText(val raw: String = "") : TagCue
 }

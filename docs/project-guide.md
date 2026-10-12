@@ -87,13 +87,14 @@ corelib 渲染循环消费: 表情 morph 权重 → VrmExpressionManager.setMorp
 | 1 | 动画前快照 | `capturePreAnimation()` | 抓 hips 平移+呼吸/视线骨骼局部，供「先剥再叠」判定动画是否重写 |
 | 2 | 动画 | VRMA 优先 / 内置 glTF 动画 | VRMA 播完自动回 idle；idle 冷启动即接管 |
 | 3 | hips 拖拽 | `applyHipsDragOffset` | 拖拽位移以「动画刚写出的平移」为基线重钉（HipsDragOffsetSolver 双信号） |
+| 3.5 | 走动根位移 | `updateLocomotion`（LocomotionEngine） | 写 asset root 平移+绕 Y 旋转（与骨骼局部写入正交）；到达切回 idle |
 | 4 | 呼吸 | VrmBreathEngine | 脊柱三段+双肩 ~4.7°，说话 ×1.15 频率 ×0.6 幅度 |
 | 5 | 视线 | VrmLookAtEngine | 头颈 35/65 平滑，眼睛带未平滑余量（眼先动头后追） |
-| 6 | 动作模仿 | VrmPoseMimicEngine | 方向绝对驱动（无 IK），后写者赢 |
+| 6 | 动作模仿 | VrmPoseMimicEngine | 方向绝对驱动（无 IK），后写者赢（mimic 激活期间走动被拒绝） |
 | 7 | 显式提交 | `commitLocalTransformTransaction` + `updateBoneMatrices` | 惰性求值必须显式提交，否则头部抽搐 |
 | 8 | 表情 morph | VrmExpressionManager | 各激活表达式按权重累加 → setMorphWeights |
 | 9 | 弹簧骨骼 | VrmSpringBoneManager | Verlet 积分，动画后渲染前 |
-| 10 | 运镜/上屏/渲染 | CameraShot steering / render | |
+| 10 | 运镜/上屏/渲染 | CameraShot steering / render | 运镜 7 镜位（follow=跟拍，闭环持续跟随不「到位」） |
 
 **每一层骨骼写入都遵循同一范式**：「先剥再叠」——叠加层如果发现骨骼局部仍等于上次写入值（未被动画重写），先剥掉旧偏移再叠新的；被动画重写则全量写。纯函数 `BreathBaseResolver` / `HipsDragOffsetSolver` / `VrmLookAtEngine.stripPreviousWrite` 都有单测锁死。**改任何骨骼写入层之前先理解这个范式**，否则会复现「锁死/累积/抽搐」三类已踩过的坑。
 
@@ -225,7 +226,8 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 | 弹簧骨骼物理（头发/衣物摆动） | 默认开，`spring on/off` | three-vrm 移植，Verlet 积分 center 空间，球/胶囊碰撞体 | `VrmSpringBoneManager` |
 | 拖拽/挪动人物 | 挪动 FAB / `set_drag_mode` | hips 平移拖拽，双信号基线防漂移 | `HipsDragOffsetSolver` |
 | 程序化运镜 | 视角 FAB / `<cam:>` 标签 / `camera_shot` | 6 镜位+steering 平滑过渡；手势 orbit/pan/zoom | `CameraShot`、Manipulator 自建 |
-| 场景加载 | 场景面板 / `load_scene`（none=纯色背景） | 独立 loader；无场景=满帧率 | SoulLinkRenderer |
+| 场景加载 | 场景面板 / `load_scene`（none=纯色背景） | 独立 loader；无场景=满帧率；可选对位 meta（`<场景名>.meta.json`，Y 旋转+平移） | SoulLinkRenderer |
+| 自由走动 | `walk_to` / SDK `startWalk` / LLM `<move:锚点>` / `move_to` 工具 | 原地步态素材+程序化根位移（合成 root motion）；状态机 TURNING/WALKING；接近段提前制动减速；步速与步态同步（timeScale=速度/baseSpeed，tools/walk-calib 标定）；`camera_shot follow` 跟拍；锚点表 `assets/scene/home.anchors.json`（`<move:>` 词表）；过渡剪辑可选（`walk_transit`，默认关） | `LocomotionEngine`、`Locomotion.kt`、`locomotion/`（orchestrator）、`tools/walk-calib` |
 | 画质 15 项设置 | 设置→画质 | 大多热插拔；renderMode 切换触发模型重载 | `AvatarRenderSettings`、`QualityPreset` 四档 |
 
 ### 3.2 对话与 AI
@@ -322,6 +324,7 @@ adb logcat -s FreeSpeech         # VAD 电平/门限
 
 | 项 | 出处 | 现状 |
 |---|---|---|
+| **自由走动（Locomotion）** | `docs/locomotion-feasibility.md` | **P0+P1 已完成+真机验收通过**（2026-10-12：锚点踩点标定〔5 锚点实标+bounds 收紧〕、`<move:>` 标签链 LLM 自然触发+运镜自发编排+事件/UI 行+TTS 跨走动不断流、clamp/开关/过渡 A/B/拖拽/mimic 互斥/双模型全过；顺手修两 bug=sceneMetaAssetName 缺 scene/ 前缀〔bounds 曾静默失效〕+mimic 断供自愈无触发口〔engaged 永久卡互斥〕；DeepSeek 走动触发 3 走 1 成，提取器伪工具抑制兜底已加，单测 737 全绿；详见交接文档 2026-10-12 条目+坑 25/26/27）→ P2 crossfade/mask/waypoint/方案 C 位移提取 |
 | **智能体化（Agent 化）** | `docs/agent-feasibility.md` | **P0 原生工具调用已完成**（2026-10-11，工具循环+三内置工具+Skill.tools() 缝+降级，矩阵 docs/agent-provider-matrix.md；真机待验收）；剩 P1 主动性（定时/主动搭话，基建已就位）→ P2 长期记忆（Room+向量）→ P3 web_search/MCP |
 | 流式 TTS | handoff 任务 7 远期项 | 现在 TTS 是句级整段（每句新建连接 ~1s 延迟）；远期=streaming 变体（Flow\<AudioChunk\>，对齐 AIRI bidirectional-ws） |
 | CameraDirector | handoff 任务 7.2 | phase→CameraShot 规则式映射（THINKING→特写等），默认关闭；未做 |

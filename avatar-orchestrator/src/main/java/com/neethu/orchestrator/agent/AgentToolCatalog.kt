@@ -10,6 +10,8 @@ import com.neethu.corelib.AmbiencePreset
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.i18n.PromptTexts
+import com.neethu.orchestrator.locomotion.LocomotionDriver
+import com.neethu.orchestrator.locomotion.MoveAnchor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
@@ -382,6 +384,110 @@ object AgentToolCatalog {
             val name = shoot()
                 ?: return@ToolExecutor ToolResult(texts.toolTakePhotoFailed, isError = true)
             ToolResult(texts.toolPhotoSaved(name))
+        }
+        return spec to executor
+    }
+
+    /**
+     * `move_to`（P1 自由走动，docs/locomotion-feasibility.md §7.3）：走向一个
+     * 锚点。**异步语义**（起步即返回"正在走"）而非阻塞等到达——工具层有超时
+     * 上限（默认 10s），正常步速走 2m+ 必超时;到达经 WalkArrived 事件给 UI,
+     * 模型拿到起步确认后自然继续说话("这就过去"),与"边走边说"设计对齐。
+     * anchor 是 enum 白名单（锚点表定型,同 send_haptic 惯例）。[driver] 缝
+     * 惰性取(锚点晚于注册注入时也拿得到);null = 功能未配置。
+     */
+    fun moveTo(
+        texts: PromptTexts,
+        driver: () -> LocomotionDriver?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val anchorNames = driver()?.anchors?.map { it.name } ?: emptyList()
+        val spec = ToolSpec(
+            name = "move_to",
+            description = texts.toolMoveToDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "anchor",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { anchorNames.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "要走向的位置(锚点名,见工具说明)")
+                            },
+                        )
+                        put(
+                            "speed",
+                            buildJsonObject {
+                                put("type", "number")
+                                put("description", "行走速度 m/s(可选,默认 1.0,0.2~3.0)")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("anchor")) })
+            },
+            systemHint = texts.toolMoveToHint,
+        )
+        val executor = ToolExecutor { args ->
+            val d = driver() ?: return@ToolExecutor ToolResult(texts.toolMoveToNoAnchors, isError = true)
+            val raw = stringArg(args, "anchor")?.lowercase().orEmpty()
+            val anchor = d.find(raw)
+            when {
+                anchor == null -> ToolResult(
+                    texts.toolEnumArgInvalid("move_to", raw, d.anchors.map { it.name }),
+                    isError = true,
+                )
+                else -> {
+                    // 可选速度:合法才应用,坏值忽略走默认(不为一格参数炸一轮)
+                    stringArg(args, "speed")?.toFloatOrNull()?.let { d.speed = it.coerceIn(0.2f, 3.0f) }
+                    when (val outcome = d.walkTo(anchor)) {
+                        LocomotionDriver.Outcome.STARTED ->
+                            ToolResult(texts.toolMoveToStarted(anchor.labelFor(texts.lang)))
+                        LocomotionDriver.Outcome.ALREADY_WALKING ->
+                            ToolResult(texts.toolMoveToAlreadyWalking)
+                        LocomotionDriver.Outcome.NO_MODEL ->
+                            ToolResult(texts.toolMoveToNoModel, isError = true)
+                        LocomotionDriver.Outcome.NO_SCENE ->
+                            ToolResult(texts.toolMoveToNoScene, isError = true)
+                        LocomotionDriver.Outcome.NO_GAIT ->
+                            ToolResult(texts.toolMoveToNoGait, isError = true)
+                        LocomotionDriver.Outcome.MIMIC_ACTIVE ->
+                            ToolResult(texts.toolMoveToMimicActive, isError = true)
+                        LocomotionDriver.Outcome.UNKNOWN_ANCHOR ->
+                            ToolResult(texts.toolEnumArgInvalid("move_to", raw, d.anchors.map { it.name }), isError = true)
+                        LocomotionDriver.Outcome.NO_RENDERER, LocomotionDriver.Outcome.LOAD_FAILED ->
+                            ToolResult(texts.toolMoveToFailed, isError = true)
+                    }
+                }
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `stop_moving`（P1）：无参停步。与 move_to 配对注册（走不动时停步工具
+     * 也没有存在感）。
+     */
+    fun stopMoving(
+        texts: PromptTexts,
+        driver: () -> LocomotionDriver?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "stop_moving",
+            description = texts.toolStopMovingDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolStopMovingHint,
+        )
+        val executor = ToolExecutor { _ ->
+            val d = driver()
+            if (d == null) {
+                ToolResult(texts.toolMoveToNoAnchors, isError = true)
+            } else {
+                d.stopWalking()
+                ToolResult(texts.toolStopMovingDone)
+            }
         }
         return spec to executor
     }

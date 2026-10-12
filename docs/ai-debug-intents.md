@@ -38,11 +38,18 @@
 | `set_idle` | `ai_arg`=文件名片段 | 把一个 .vrma 设为循环待机（LLM 手势播完/手动停止后回到它），持久化到 demo_settings；不设则用内置优先级自动选（Idle Stand Looking Around 优先） |
 | `idle_off` | — | 清除待机，一次性动作播完回落 rest pose |
 | `move` | `ai_x` `ai_y` `ai_z` | 平移人物（世界坐标米）：+x 右、+y 上、+z 朝相机 |
+| `walk_to` | `ai_x` `ai_z`，可选 `ai_arg`=速度 m/s；或 `ai_arg`=锚点名 | **自由走动**（docs/locomotion-feasibility.md P0/P1）：走向世界坐标点或锚点（词表见 `anchors`），原地转身对齐（~20° 门限）后沿朝向前进，接近段提前制动减速（v=sqrt(2·a·d)），越界目标 clamp 进场景 meta 的 bounds；需要已加载场景（corelib 硬守卫 NO_SCENE）；步态首次自动配置（Female Normal Walk，baseSpeed 1.22 m/s 由 tools/walk-calib 实测），播放 timeScale=速度/基准速度保证脚步与位移同步；到达（≤6cm）减速停步回待机。配 `camera_shot follow` 跟拍 |
+| `walk_stop` | — | 立即停步（回待机循环；配置了停步过渡剪辑则先播剪辑再回待机） |
+| `walk_state` | — | 走动状态快照：phase（IDLE/TURNING/WALKING）/位置/朝向/目标/速度 + 步态与场景对位信息 |
+| `anchors` | — | 列出会话注入的走动锚点表（`<move:>` 词表 = move_to 工具白名单，`assets/scene/home.anchors.json`）；无会话/空表给出原因行 |
+| `walk_transit` | `ai_arg`：空=查看；`off`=清除；`start <assets/*.vrma>` / `stop <assets/*.vrma>` | **P1 过渡剪辑 A/B 入口**（docs/locomotion-feasibility.md §5.2）：起步剪辑播放期程序位移冻结、播完切步态循环；停步剪辑 one-shot 播完自动回待机。默认关（库内起步候选带 0.8~1.7m root motion 会双重位移，测量见交接文档坑 23） |
+| `scene_offset` | `ai_x` `ai_y` `ai_z` | 对位标定探针：把已加载场景平移指定米数（在 load 抓拍的基准上累计，不逐次叠加）；回显可直接抄进 `assets/scene/<场景>.meta.json` 的 placement JSON |
+| `scene_rot` | `ai_x`=度 | 对位标定探针：把已加载场景绕 Y 轴旋转指定度数；同 scene_offset 回显 meta |
 | `zoom` | `ai_x` | 相机推拉，取值为「双指张开距离」像素：正数放大、负数缩小 |
 | `pan` | `ai_x` `ai_y` | 相机平移（屏幕像素，等效双指拖动） |
 | `orbit` | `ai_x` `ai_y` | 相机环绕（屏幕像素，等效单指拖动） |
 | `reset_camera` | — | 相机恢复初始机位 |
-| `camera_shot` | `ai_arg`= closeup \| medium \| full \| long \| over \| off | 平滑运镜到预设机位：closeup 面部特写、medium 中景半身、full 全景全身、long 远景（大动作舞蹈用）、over 反应侧景；`off` 释放回自由相机 |
+| `camera_shot` | `ai_arg`= closeup \| medium \| full \| long \| over \| follow \| off | 平滑运镜到预设机位：closeup 面部特写、medium 中景半身、full 全景全身、long 远景（大动作舞蹈用）、over 反应侧景、follow 跟拍（走动时用，闭环永不「到位」，持续跟随移动中的身体，yaw/pitch 保持激活瞬间角度）；`off` 释放回自由相机 |
 | `look_at` | `ai_arg`= camera \| off，或 `ai_x` `ai_y` `ai_z`；省略 `ai_arg` = 查状态 | 视线控制（任务 5）：默认 camera（注视镜头=注视用户，由 FaceDriver 的 SaccadeEngine 每帧加注视抖动）；`ai_x/ai_y/ai_z`=世界坐标注视点（切 POINT 模式，未来人脸追踪同入口，**无 AI 会话也可用**——直接驱动 corelib 视线叠加）；`off`=关闭（头颈眼回动画自身姿态）；无参数=输出当前状态（目标/已施加 yaw/pitch/骨骼绑定），验证明看 yaw 是否非零 |
 | `set_drag_mode` | `ai_arg`=on \| off | 拖拽模式：on 时手指拖动人物而非旋转相机 |
 | `open_panel` | `ai_arg`= none \| models \| animations \| expressions \| scenes \| cards \| settings \| guide \| guide_cn \| guide_intl | 打开/关闭对应底部面板（MIUI 禁止 shell 注入点击，用此命令驱动 UI 面板）；`guide` = 新手引导半屏面板（未配 Key 时自动弹出的那个，受众按界面语言自动：中文→硅基流动版、其余→OpenRouter 版），`guide_cn`/`guide_intl` 强制指定受众做 A/B |

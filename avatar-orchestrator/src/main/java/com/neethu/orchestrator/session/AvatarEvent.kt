@@ -58,4 +58,17 @@ sealed interface AvatarEvent {
 
     /** 单个工具执行完毕（[isError]=失败结果已回灌模型，回合不失败）。 */
     data class ToolCallFinished(val name: String, val isError: Boolean) : AvatarEvent
+
+    /**
+     * `<move:锚点>`（或 move_to 工具）让虚拟人起步走向一个位置
+     * （docs/locomotion-feasibility.md §7.3/§7.4）：[anchor] 是锚点名，
+     * 坐标为世界 XZ 米。到达/中断各有 [WalkArrived]/[WalkInterrupted] 跟进。
+     */
+    data class WalkStarted(val anchor: String, val targetX: Float, val targetZ: Float) : AvatarEvent
+
+    /** 行走到达目标（corelib walkFinished 流转出，到达停步之后发出）。 */
+    data class WalkArrived(val x: Float, val z: Float) : AvatarEvent
+
+    /** 行走被中断（stopWalk：用户打断/模型主动停步），坐标为停下位置。 */
+    data class WalkInterrupted(val x: Float, val z: Float) : AvatarEvent
 }

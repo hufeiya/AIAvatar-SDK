@@ -1,0 +1,9 @@
+{
+  "anchors": [
+    { "name": "carpet", "x": 0.0, "z": -4.0, "label": "地毯中央", "labelEn": "the carpet in the middle of the room" },
+    { "name": "bed", "x": -2.4, "z": -4.3, "label": "床边", "labelEn": "the bed" },
+    { "name": "window", "x": 2.0, "z": -4.4, "label": "窗帘窗边", "labelEn": "the curtained window" },
+    { "name": "tv", "x": 1.2, "z": -4.8, "label": "电视柜前", "labelEn": "the TV stand" },
+    { "name": "desk", "x": 0.1, "z": -5.5, "label": "书桌前", "labelEn": "the desk" }
+  ]
+}

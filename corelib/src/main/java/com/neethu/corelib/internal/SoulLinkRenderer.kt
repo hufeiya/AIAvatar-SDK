@@ -48,7 +48,10 @@ import com.neethu.corelib.LookAtInfo
 import com.neethu.corelib.MimicInfo
 import com.neethu.corelib.MimicPose
 import com.neethu.corelib.RenderMode
+import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.ToneMappingMode
+import com.neethu.corelib.WalkStartResult
+import com.neethu.corelib.WalkSnapshot
 
 /**
  * Internal rendering engine backed by Filament [ModelViewer].
@@ -164,12 +167,37 @@ internal class SoulLinkRenderer(
     private var activeShot: CameraShot? = null
     private var shotSteering = false
     private var shotDeadlineNanos = 0L
+    // FOLLOW 跟拍的激活瞬间快照：yaw/pitch 固定为激活时的相机角度（每帧从
+    // 当前 gaze 重取会自参照固化漂移——实测收成低机位仰拍）；距离取
+    // max(激活时距离, 2.5×span)，跟拍=保持当前取景只跟随，不拉近。
+    private var followYawPitch: Pair<Float, Float>? = null
 
     // Scene (environment/background GLB) support
     private var sceneAsset: FilamentAsset? = null
     private var sceneAssetLoader: AssetLoader? = null
     private var sceneResourceLoader: ResourceLoader? = null
     private val sceneReadyRenderables = IntArray(128)
+    // Scene placement（对位标定）：一次性把房间对齐到角色世界（ Rotation+平移，
+    // 基于 load 时抓拍的场景根矩阵），并携带可走区域（walk clamp 用）。
+    private var scenePlacement: ScenePlacement? = null
+    private var sceneBaseMatrix: FloatArray? = null
+
+    // Locomotion（自由走动，P0）：纯数学状态机 + 走路步态，见
+    // docs/locomotion-feasibility.md §4.2/§5 —— 原地步态素材继续播，
+    // 引擎每帧推 root（合成 root motion），与 hips 局部动画正交。
+    private val locomotionEngine = LocomotionEngine()
+    private var walkGait: WalkGait? = null
+
+    // 过渡素材（P1 档 1，§5.2）：起步/停步剪辑可选配置；起步剪辑播放期间
+    // 程序位移冻结（引擎 start-hold），播完切回步态循环。⚠库内候选素材的
+    // 位移测量与取舍见 docs/locomotion-feasibility.md §5.2 标定项——默认关，
+    // ai_cmd `walk_transit` 真机 A/B 后再定默认。
+    private var walkStartClip: WalkGait? = null
+    private var walkStopClip: WalkGait? = null
+    /** >0 = 起步剪辑播放中（墙钟到期切步态循环）；stopWalk 清零。 */
+    private var startClipDeadlineNanos = 0L
+    /** 本次起步请求的速度（m/s）——起步剪辑播完切步态循环时换算 timeScale 用。 */
+    private var walkSpeed = 1.0f
 
     // Drag mode support
     var isDragMode: Boolean = false
@@ -206,6 +234,14 @@ internal class SoulLinkRenderer(
      * never fire this.
      */
     var onRenderModeAutoDetected: ((RenderMode) -> Unit)? = null
+
+    /**
+     * Fired once per walk when it ends: [com.neethu.corelib.WalkFinished.arrived]=true
+     * = the state machine reached the target; false = the walk was cancelled
+     * (user/LLM stop). AvatarController relays this to its [walkFinished] flow
+     * (AvatarSession turns it into UI events).
+     */
+    var onWalkFinished: ((com.neethu.corelib.WalkFinished) -> Unit)? = null
     private var fpsFrameCount = 0
     private var fpsWindowStartNanos = 0L
 
@@ -233,8 +269,11 @@ internal class SoulLinkRenderer(
 
         // Camera-shot transition tuning: exponential approach rate (1/s) toward
         // the shot pose, error thresholds for "arrived", and a hard timeout so
-        // a pathological pose can never wedge the driver on.
+        // a pathological pose can never wedge the driver on. FOLLOW never
+        // "arrives" (it tracks a moving body) — it uses a softer rate and
+        // skips the timeout/arrival gates.
         private const val SHOT_APPROACH_RATE = 7f
+        private const val FOLLOW_APPROACH_RATE = 5f
         private const val SHOT_ARRIVE_DIST = 0.012f
         private const val SHOT_ARRIVE_ANGLE_RAD = 0.02f
         private const val SHOT_TIMEOUT_NANOS = 4_000_000_000L
@@ -344,6 +383,11 @@ internal class SoulLinkRenderer(
 
             val gazeDt = if (lastFrameTimeNanos == 0L) 0.016f
             else ((frameTimeNanos - lastFrameTimeNanos).coerceAtLeast(0L)) / 1_000_000_000.0f
+
+            // Locomotion root motion（自由走动）：root 是骨骼层级的父节点，
+            // 写 root 变换与骨骼局部写入正交；放在动画/drag 钉层之后、蒙皮
+            // 传播之前（程序化层的统一落点）。到达时由引擎切回 idle。
+            updateLocomotion(gazeDt.coerceIn(0.001f, 0.05f))
 
             // Breath overlay（呼吸）: spine/shoulder micro-rotation rides on
             // the animated pose — runs after the animation wrote bone locals
@@ -962,6 +1006,9 @@ internal class SoulLinkRenderer(
 
         // Initialize VRMA engine and bind to model
         vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
+        // 模型切换 = 骨架/根矩阵全部重建：走动立即停止（步态配置保留，
+        // 素材是 assets 路径与模型无关）
+        locomotionEngine.stopWalk()
         modelViewer.asset?.let { asset ->
             vrmaEngine?.bindToModel(asset, bytes)
 
@@ -1458,14 +1505,16 @@ internal class SoulLinkRenderer(
 
     /**
      * Start playing the loaded VRMA animation.
-     * Stops any built-in animation that's playing.
+     * Stops any built-in animation that's playing. [speed] scales the clip
+     * clock (walk locomotion passes groundSpeed/baseSpeed so footsteps match
+     * the actual travel); the default keeps gesture behavior unchanged.
      */
-    fun playVrmaAnimation(loop: Boolean = true) {
+    fun playVrmaAnimation(loop: Boolean = true, speed: Float = 1f) {
         // Stop built-in animation
         currentAnimationIndex = -1
         // Start VRMA
         vrmaStartTime = System.nanoTime()
-        vrmaEngine?.play(loop)
+        vrmaEngine?.play(loop, speed)
         pendingSpringReset = true
     }
 
@@ -1490,11 +1539,20 @@ internal class SoulLinkRenderer(
     /**
      * Load a GLB scene (environment/background) from assets.
      * The scene is rendered alongside the current model in the same Filament scene.
+     *
+     * [placement] composes a one-time rigid alignment (Y rotation + offset,
+     * calibrated once via the `scene_offset`/`scene_rot` ai_cmd probes and
+     * persisted as `assets/scene/<scene>.meta.json`) on top of the scene's own
+     * root transform, and carries the walkable bounds used by locomotion.
+     * `null` keeps the previous behavior (scene loaded as-is).
+     *
      * @param assetsPath Path to the .glb scene file in assets.
      */
-    fun loadScene(assetsPath: String) {
+    fun loadScene(assetsPath: String, placement: ScenePlacement? = null) {
         // Remove any existing scene first
         removeScene()
+        scenePlacement = placement
+        sceneBaseMatrix = null
 
         val engine = modelViewer.engine
 
@@ -1518,8 +1576,11 @@ internal class SoulLinkRenderer(
                     sceneResourceLoader?.asyncBeginLoad(asset)
                     asset.releaseSourceData()
                     sceneAsset = asset
+                    applyScenePlacement()
                     android.util.Log.i("SoulLinkRenderer",
-                        "Scene loaded: $assetsPath (${asset.entities.size} entities)")
+                        "Scene loaded: $assetsPath (${asset.entities.size} entities)" +
+                            (placement?.let { ", placement(yaw=${it.yawDeg}, off=${it.offsetX}/${it.offsetY}/${it.offsetZ})" } ?: "")
+                    )
                 } else {
                     android.util.Log.e("SoulLinkRenderer", "Failed to create scene asset: $assetsPath")
                 }
@@ -1527,6 +1588,51 @@ internal class SoulLinkRenderer(
         } catch (e: Exception) {
             android.util.Log.e("SoulLinkRenderer", "Failed to load scene: $assetsPath", e)
         }
+    }
+
+    /** Live-adjust the scene placement (calibration probes); re-applies from base. */
+    fun setScenePlacement(placement: ScenePlacement?) {
+        scenePlacement = placement
+        applyScenePlacement()
+    }
+
+    fun getScenePlacement(): ScenePlacement? = scenePlacement
+
+    /**
+     * Compose the placement onto the captured scene-root base matrix:
+     * `world = T(offset) · Ry(yaw) · base`. The base matrix is snapshotted
+     * once per load (identity for plain GLBs, or the glTF scene transform) so
+     * repeated adjustments never accumulate.
+     */
+    private fun applyScenePlacement() {
+        val asset = sceneAsset ?: return
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return
+        if (sceneBaseMatrix == null) {
+            val base = FloatArray(16)
+            tm.getTransform(instance, base)
+            sceneBaseMatrix = base
+        }
+        val mat = sceneBaseMatrix!!.clone()
+        scenePlacement?.let { p ->
+            if (p.yawDeg != 0f) {
+                val yaw = toRadians(p.yawDeg)
+                val c = cos(yaw)
+                val s = sin(yaw)
+                for (col in 0..2) {
+                    val i = col * 4
+                    val x = mat[i]
+                    val z = mat[i + 2]
+                    mat[i] = c * x + s * z
+                    mat[i + 2] = -s * x + c * z
+                }
+            }
+            mat[12] += p.offsetX
+            mat[13] += p.offsetY
+            mat[14] += p.offsetZ
+        }
+        tm.setTransform(instance, mat)
     }
 
     /**
@@ -1541,6 +1647,7 @@ internal class SoulLinkRenderer(
             android.util.Log.i("SoulLinkRenderer", "Scene removed")
         }
         sceneAsset = null
+        sceneBaseMatrix = null
     }
 
     /**
@@ -1683,6 +1790,10 @@ internal class SoulLinkRenderer(
         dragMovesHips = enabled
         // 切换拖拽目标（hips/root）丢弃 hips 拖拽状态与已累计位移，
         // 避免重新启用时把位移重复计进基线
+        clearHipsDragOffset()
+    }
+
+    private fun clearHipsDragOffset() {
         hipsDragOffset.fill(0f)
         hipsDragState = HipsDragOffsetSolver.initial()
     }
@@ -1758,6 +1869,226 @@ internal class SoulLinkRenderer(
         tm.setTransform(instance, mat)
     }
 
+    // ── Locomotion（自由走动，P0，docs/locomotion-feasibility.md）─────────
+
+    /**
+     * Configure the looping walk gait used by [startWalk]. Parses the clip
+     * once for validation but does NOT touch current playback.
+     *
+     * @param assetPath VRMA clip inside `assets/` (an in-place walk; the
+     *   travel comes from the locomotion layer itself).
+     * @param baseSpeed the gait's natural ground speed in m/s at playback
+     *   speed 1 — calibrate with `tools/walk-calib`; [startWalk] plays the
+     *   clip at speed/baseSpeed so footsteps match the actual travel.
+     */
+    fun setWalkGait(assetPath: String, baseSpeed: Float): Boolean {
+        return try {
+            val bytes = surfaceView.context.assets.open(assetPath).use { it.readBytes() }
+            val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
+            if (animation == null || animation.duration <= 0f) {
+                android.util.Log.e("SoulLinkRenderer", "Walk gait parse failed: $assetPath")
+                false
+            } else {
+                walkGait = WalkGait(assetPath, animation.duration, baseSpeed)
+                android.util.Log.i(
+                    "SoulLinkRenderer",
+                    "Walk gait set: $assetPath (${animation.duration}s, base=$baseSpeed m/s)"
+                )
+                true
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Walk gait load failed: $assetPath", e)
+            false
+        }
+    }
+
+    fun hasWalkGait(): Boolean = walkGait != null
+
+    /**
+     * Configure optional walk transition clips (P1 档 1, §5.2): [startAssetPath]
+     * plays once at walk start (program motion held while it runs, then the
+     * gait loop takes over), [stopAssetPath] plays once on arrival/stop and
+     * the idle takeover returns to the idle loop at its end. `null` clears a
+     * slot. Defaults to both-off — the curated candidates carry root motion
+     * (measured: docs/locomotion-feasibility.md §5.2) and need on-device A/B
+     * (ai_cmd `walk_transit`) before any clip becomes the shipped default.
+     *
+     * @return false when any provided path fails to load/parse (config kept).
+     */
+    fun setWalkTransitions(startAssetPath: String?, stopAssetPath: String?): Boolean {
+        fun parseOrNull(path: String?): WalkGait? {
+            if (path == null) return null
+            return try {
+                val bytes = surfaceView.context.assets.open(path).use { it.readBytes() }
+                val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
+                if (animation == null || animation.duration <= 0f) {
+                    android.util.Log.e("SoulLinkRenderer", "Walk transition parse failed: $path")
+                    return null
+                }
+                WalkGait(path, animation.duration, baseSpeed = 1f)
+            } catch (e: Exception) {
+                android.util.Log.e("SoulLinkRenderer", "Walk transition load failed: $path", e)
+                null
+            }
+        }
+        val start = parseOrNull(startAssetPath)
+        if (startAssetPath != null && start == null) return false
+        val stop = parseOrNull(stopAssetPath)
+        if (stopAssetPath != null && stop == null) return false
+        walkStartClip = start
+        walkStopClip = stop
+        android.util.Log.i(
+            "SoulLinkRenderer",
+            "walk transitions: start=${start?.clipAssetPath ?: "off"} stop=${stop?.clipAssetPath ?: "off"}",
+        )
+        return true
+    }
+
+    fun hasWalkTransitions(): Boolean = walkStartClip != null || walkStopClip != null
+
+    /** Current transition clip config (asset paths, null = off) — diagnostics/ai_cmd dump. */
+    fun getWalkTransitions(): Pair<String?, String?> =
+        walkStartClip?.clipAssetPath to walkStopClip?.clipAssetPath
+
+    /**
+     * Start walking toward a world-space XZ point: play the configured gait
+     * on loop (timeScale = speed/baseSpeed), clear the drag offset so stale
+     * hips displacement can't skew the straight line, and engage the
+     * locomotion state machine. Mimic owns the bones while engaged — walking
+     * under it would fight the pose lanes, so it's refused. Walking with no
+     * scene loaded is refused ("walking on air" guard, 坑 4).
+     */
+    fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult {
+        if (modelViewer.asset == null) return WalkStartResult.NO_MODEL
+        if (sceneAsset == null) return WalkStartResult.NO_SCENE
+        if (mimicInfo()?.engaged == true) return WalkStartResult.MIMIC_ACTIVE
+        val gait = walkGait ?: return WalkStartResult.NO_GAIT
+        clearHipsDragOffset()
+        walkSpeed = speed
+        // 起步剪辑只在「从静止起步」时播：走动中改目标 = 步态循环继续，不重播
+        val startClip = walkStartClip?.takeIf {
+            locomotionEngine.snapshot().phase == com.neethu.corelib.WalkPhase.IDLE
+        }
+        if (startClip != null && loadVrmaAnimation(startClip.clipAssetPath)) {
+            // 起步剪辑先行（one-shot）：程序位移在引擎 start-hold 里冻结，
+            // 播完由 updateLocomotion 切回步态循环。剪辑加载失败 = 退回直启。
+            playVrmaAnimation(loop = false, speed = 1f)
+            startClipDeadlineNanos = System.nanoTime() + (startClip.durationSeconds * 1_000_000_000L).toLong()
+            locomotionEngine.startWalk(targetX, targetZ, speed, scenePlacement?.bounds, startClip.durationSeconds)
+        } else {
+            startClipDeadlineNanos = 0L
+            if (!loadVrmaAnimation(gait.clipAssetPath)) return WalkStartResult.LOAD_FAILED
+            playVrmaAnimation(loop = true, speed = speed / gait.baseSpeed)
+            locomotionEngine.startWalk(targetX, targetZ, speed, scenePlacement?.bounds)
+        }
+        android.util.Log.i(
+            "SoulLinkRenderer",
+            "startWalk target=(%.2f, %.2f) speed=%.2f startClip=%s bounds=%s".format(
+                targetX, targetZ, speed,
+                if (startClipDeadlineNanos != 0L) "on" else "off",
+                scenePlacement?.bounds?.toString() ?: "none"
+            )
+        )
+        return WalkStartResult.STARTED
+    }
+
+    /** Stop walking and return to the idle loop (optionally via the stop clip). */
+    fun stopWalk() {
+        val s = locomotionEngine.snapshot()
+        val wasWalking = s.phase != com.neethu.corelib.WalkPhase.IDLE
+        if (wasWalking) {
+            android.util.Log.i("SoulLinkRenderer", "stopWalk at (%.2f, %.2f)".format(s.x, s.z))
+        }
+        // 起步剪辑还没播完就停步：跳过停步剪辑（身体还没真正起步，播
+        // "走→停"剪辑会凭空走出两步）
+        val skippedStartClip = startClipDeadlineNanos != 0L
+        startClipDeadlineNanos = 0L
+        locomotionEngine.stopWalk()
+        stopVrmaAnimation()
+        val stopClip = walkStopClip
+        if (wasWalking && !skippedStartClip && stopClip != null &&
+            loadVrmaAnimation(stopClip.clipAssetPath)
+        ) {
+            // one-shot：播完引擎自动接管 idle 循环
+            playVrmaAnimation(loop = false, speed = 1f)
+        }
+        if (wasWalking) {
+            onWalkFinished?.invoke(com.neethu.corelib.WalkFinished(arrived = false, x = s.x, z = s.z))
+        }
+    }
+
+    fun walkSnapshot(): WalkSnapshot = locomotionEngine.snapshot()
+
+    /**
+     * Per-frame root motion: read the authoritative root translation, ask the
+     * state machine for this frame's motion, apply translation + world-Y
+     * rotation. Root is the parent of the whole bone hierarchy, so this is
+     * orthogonal to the bone-local writes above; arrival switches back to the
+     * idle loop (or plays the stop clip first). Also orchestrates the start
+     * clip → gait loop handoff.
+     */
+    private fun updateLocomotion(dtSeconds: Float) {
+        val asset = modelViewer.asset ?: return
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return
+
+        // 起步剪辑到期 → 切步态循环（引擎 start-hold 同帧到期，程序位移恢复）
+        if (startClipDeadlineNanos != 0L) {
+            val gait = walkGait
+            if (System.nanoTime() >= startClipDeadlineNanos) {
+                startClipDeadlineNanos = 0L
+                if (gait != null && locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
+                    loadVrmaAnimation(gait.clipAssetPath)
+                ) {
+                    playVrmaAnimation(loop = true, speed = walkSpeed / gait.baseSpeed)
+                }
+            }
+        }
+
+        val mat = FloatArray(16)
+        tm.getTransform(instance, mat)
+        val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14])
+        if (motion != null) {
+            rotateRootAroundY(mat, motion.dHeadingRad)
+            mat[12] += motion.dx
+            mat[13] += motion.dy
+            mat[14] += motion.dz
+            tm.setTransform(instance, mat)
+        }
+        if (locomotionEngine.consumeArrived()) {
+            val s = locomotionEngine.snapshot()
+            // 到达：配置了停步剪辑就播（one-shot 播完自动接管 idle），否则直接回 idle
+            val stopClip = walkStopClip
+            if (stopClip != null && loadVrmaAnimation(stopClip.clipAssetPath)) {
+                playVrmaAnimation(loop = false, speed = 1f)
+            } else {
+                stopVrmaAnimation()
+            }
+            onWalkFinished?.invoke(com.neethu.corelib.WalkFinished(arrived = true, x = s.x, z = s.z))
+        }
+    }
+
+    /**
+     * World-Y rotation composed onto the root: the 3×3 block is left-multiplied
+     * by Ry(θ) (column-major, per column), translation column untouched —
+     * a turn about the body axis that preserves the unit-cube scale baked
+     * into the root matrix. Works identically for VRM 0.x (whose Y-180 flip
+     * lives inside the matrix) and VRM 1.0.
+     */
+    private fun rotateRootAroundY(mat: FloatArray, theta: Float) {
+        if (theta == 0f) return
+        val c = cos(theta)
+        val s = sin(theta)
+        for (col in 0..2) {
+            val i = col * 4
+            val x = mat[i]
+            val z = mat[i + 2]
+            mat[i] = c * x + s * z
+            mat[i + 2] = -s * x + c * z
+        }
+    }
+
     /**
      * Dolly the camera toward/away from the model.
      * [spreadPx] is expressed in the same units as a two-finger pinch:
@@ -1829,12 +2160,18 @@ internal class SoulLinkRenderer(
         activeShot = shot
         shotSteering = true
         shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
+        if (shot == CameraShot.FOLLOW) {
+            followYawPitch = currentYawPitch()
+        } else {
+            followYawPitch = null
+        }
     }
 
     /** Release the camera-shot mode; the camera stays where it is. */
     fun clearCameraShot() {
         activeShot = null
         shotSteering = false
+        followYawPitch = null
     }
 
     /** The last requested shot (camera mode), or `null` when released. */
@@ -1868,8 +2205,12 @@ internal class SoulLinkRenderer(
      */
     private fun updateCameraShot(nowNanos: Long) {
         if (!shotSteering) return
-        val pose = shotPose(activeShot ?: return) ?: run { shotSteering = false; return }
-        if (nowNanos > shotDeadlineNanos) {
+        val shot = activeShot ?: return
+        val follow = shot == CameraShot.FOLLOW
+        val pose = shotPose(shot) ?: run { shotSteering = false; return }
+        // FOLLOW 跟拍永远"未到位"（主体在动）：跳过超时与到位判定，闭环
+        // 持续把 pivot 收向移动中的锚点；阻尼更软防跟随抖动。
+        if (!follow && nowNanos > shotDeadlineNanos) {
             android.util.Log.w("SoulLinkRenderer", "Camera shot transition timed out")
             shotSteering = false
             return
@@ -1878,7 +2219,7 @@ internal class SoulLinkRenderer(
         val h = surfaceView.height
         if (w <= 0 || h <= 0) return
         val dt = ((nowNanos - lastFrameTimeNanos) / 1_000_000_000.0f).coerceIn(0.001f, 0.05f)
-        val step = 1f - exp(-dt * SHOT_APPROACH_RATE)
+        val step = 1f - exp(-dt * (if (follow) FOLLOW_APPROACH_RATE else SHOT_APPROACH_RATE))
 
         val goalDir = orbitDirection(pose.yaw, pose.pitch)
         val goalEye = floatArrayOf(
@@ -1940,10 +2281,11 @@ internal class SoulLinkRenderer(
         }
 
         // Arrival: every component decays geometrically; stop once the whole
-        // pose is within thresholds so gestures work normally again.
+        // pose is within thresholds so gestures work normally again. FOLLOW
+        // keeps steering — its subject keeps moving.
         cameraManipulator.getLookAt(eye, target, up)
         val gazeDot = dot(normalize(floatArrayOf(target[0] - eye[0], target[1] - eye[1], target[2] - eye[2])), goalDir)
-        if (dist3(eye, goalEye) < SHOT_ARRIVE_DIST && gazeDot > cos(SHOT_ARRIVE_ANGLE_RAD)) {
+        if (!follow && dist3(eye, goalEye) < SHOT_ARRIVE_DIST && gazeDot > cos(SHOT_ARRIVE_ANGLE_RAD)) {
             shotSteering = false
         }
     }
@@ -2001,7 +2343,38 @@ internal class SoulLinkRenderer(
                 yaw = toRadians(38f),
                 pitch = toRadians(6f),
             )
+            CameraShot.FOLLOW -> {
+                // 跟拍：pivot 骑在移动的身体上（hips 为主）；yaw/pitch 用
+                // 激活瞬间的快照（orbit 修正≈0，闭环只做 pan+dolly，相机
+                // 不随角色转向甩动）；距离保留激活时的取景（下限 2.5×span
+                // 防贴脸），从远拉近的构图突变不存在——只跟随。
+                val pivot = lerp3(head, hips, 0.9f)
+                val yawPitch = followYawPitch ?: currentYawPitch().also { followYawPitch = it }
+                val currentDist = run {
+                    val (eyeNow, targetNow, _) = cameraLookAt()
+                    dist3(eyeNow, pivot)
+                }
+                ShotPose(
+                    pivot = pivot,
+                    distance = maxOf(currentDist, 2.5f * span),
+                    yaw = yawPitch.first,
+                    pitch = yawPitch.second.coerceIn(toRadians(-60f), toRadians(60f)),
+                )
+            }
         }
+    }
+
+    /** Current camera orbit angles (yaw around Y, pitch) derived from the gaze. */
+    private fun currentYawPitch(): Pair<Float, Float> {
+        val (eye, target, _) = cameraLookAt()
+        val gaze = normalize(
+            floatArrayOf(
+                target[0] - eye[0],
+                target[1] - eye[1],
+                target[2] - eye[2],
+            )
+        )
+        return atan2(-gaze[0], -gaze[2]) to asin((-gaze[1]).coerceIn(-1f, 1f))
     }
 
     /** World position of a bone entity, or a proportional fallback anchor. */

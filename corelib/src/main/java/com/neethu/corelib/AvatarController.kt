@@ -4,8 +4,11 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.neethu.corelib.internal.SoulLinkRenderer
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
@@ -65,6 +68,12 @@ class AvatarController {
 
     private val _detectedRenderMode = MutableStateFlow<RenderMode?>(null)
 
+    /** Walk-finished events relayed from the renderer (see [walkFinished]). */
+    private val _walkFinished = MutableSharedFlow<WalkFinished>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+
     /**
      * Render mode auto-detected from the currently loaded model's materials,
      * or `null` before the first auto-detected load.
@@ -108,6 +117,7 @@ class AvatarController {
     internal fun attach(renderer: SoulLinkRenderer) {
         this.renderer = renderer
         renderer.onFpsUpdated = { value -> _fps.value = value }
+        renderer.onWalkFinished = { finished -> _walkFinished.tryEmit(finished) }
         // A material-driven mode switch happens mid-load (the model is already
         // rendered in the detected mode), so bookkeeping only: keep the reload
         // trigger in sync and expose the value — no reload, no settings push.
@@ -122,6 +132,7 @@ class AvatarController {
      */
     internal fun detach() {
         renderer?.onFpsUpdated = null
+        renderer?.onWalkFinished = null
         this.renderer = null
         _fps.value = 0
         // Don't reset state — the controller can outlive the view
@@ -499,17 +510,34 @@ class AvatarController {
      * The scene is rendered alongside the current model in the same Filament scene.
      * Loading a new scene automatically removes the previously loaded scene.
      *
+     * [placement] is an optional one-time rigid alignment (Y rotation + offset)
+     * for the room, plus the walkable bounds used by [startWalk] — typically
+     * parsed from `assets/scene/<scene>.meta.json` after a one-time
+     * calibration (see the `scene_offset` / `scene_rot` ai_cmd probes).
+     * `null` keeps the previous behavior (scene loaded as-is).
+     *
      * @param assetPath Relative path inside `assets/`, e.g. `"scene/living_room.glb"`.
      */
-    fun loadScene(assetPath: String) {
+    fun loadScene(assetPath: String, placement: ScenePlacement? = null) {
         val r = renderer ?: return
-        r.loadScene(assetPath)
+        r.loadScene(assetPath, placement)
         // Update state to include scene path
         val current = _state.value
         if (current is AvatarState.Ready) {
             _state.value = current.copy(scenePath = assetPath)
         }
     }
+
+    /**
+     * Live-adjust the loaded scene's placement (calibration probes) without
+     * reloading it; re-applies from the placement captured at load time.
+     */
+    fun setScenePlacement(placement: ScenePlacement?) {
+        renderer?.setScenePlacement(placement)
+    }
+
+    /** The current scene placement, or `null` when none was set. */
+    fun getScenePlacement(): ScenePlacement? = renderer?.getScenePlacement()
 
     /**
      * Remove the currently loaded scene (environment/background).
@@ -523,6 +551,86 @@ class AvatarController {
             _state.value = current.copy(scenePath = null)
         }
     }
+
+    // ── Public API: Locomotion（自由走动）────────────────────────────────
+
+    /**
+     * Configure the looping walk gait used by [startWalk]. Must succeed once
+     * before walking; re-calling it swaps the gait (also mid-walk, taking
+     * effect on the next [startWalk]).
+     *
+     * @param assetPath In-place walk VRMA inside `assets/` — the travel comes
+     *   from the locomotion layer itself (synthetic root motion), so any
+     *   in-place clip from the animation library works.
+     * @param baseSpeed The gait's natural ground speed in m/s at playback
+     *   speed 1 (calibrate with `tools/walk-calib`). Walking at [speed] m/s
+     *   plays the clip at speed/baseSpeed so footsteps match the actual
+     *   travel and the feet don't slide.
+     * @return `false` when the clip can't be read/parsed (renderer missing).
+     */
+    fun setWalkGait(assetPath: String, baseSpeed: Float): Boolean {
+        return renderer?.setWalkGait(assetPath, baseSpeed) ?: false
+    }
+
+    /** Whether a walk gait is configured (see [setWalkGait]). */
+    fun isWalkGaitConfigured(): Boolean = renderer?.hasWalkGait() ?: false
+
+    /**
+     * Configure optional walk transition clips (P1 档 1, docs/locomotion-feasibility.md
+     * §5.2): a one-shot [startAssetPath] plays at walk start (program motion
+     * held while it runs), a one-shot [stopAssetPath] plays on arrival/stop
+     * before the idle loop resumes. `null` disables a slot; both-off by
+     * default. Re-calling swaps the config (also mid-walk, next walk).
+     *
+     * @return `false` when any provided path fails to load/parse (config kept).
+     */
+    fun setWalkTransitions(startAssetPath: String?, stopAssetPath: String?): Boolean {
+        return renderer?.setWalkTransitions(startAssetPath, stopAssetPath) ?: false
+    }
+
+    /** Whether transition clips are configured (see [setWalkTransitions]). */
+    fun hasWalkTransitions(): Boolean = renderer?.hasWalkTransitions() ?: false
+
+    /** Current transition clip config (asset paths, null = off) — diagnostics/ai_cmd dump. */
+    fun getWalkTransitions(): Pair<String?, String?> =
+        renderer?.getWalkTransitions() ?: (null to null)
+
+    /**
+     * One event per finished walk: [WalkFinished.arrived]=true when the state
+     * machine reached the target, false when cancelled ([stopWalk]). Collect
+     * to surface arrival in UI or feed dialogue logic (AvatarSession emits
+     * [com.neethu.orchestrator.session.AvatarEvent.WalkArrived] from this).
+     */
+    val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
+
+    /**
+     * Walk toward a world-space XZ point (meters): plays the configured gait
+     * on loop while the locomotion layer turns the avatar toward the target
+     * (in place first, ~20° gate) and advances along its facing direction,
+     * clamping the target into the loaded scene's [ScenePlacement.bounds].
+     * Arrival (≤6 cm) hard-stops and returns to the idle loop; [stopWalk]
+     * interrupts at any time. Refused while the mimic engine owns the bones.
+     *
+     * ```kotlin
+     * controller.setWalkGait("animations/Female Normal Walk.vrma", baseSpeed = 1.1f)
+     * controller.setCameraShot(CameraShot.FOLLOW) // optional tracking camera
+     * controller.startWalk(targetX = 1.5f, targetZ = -3f, speed = 1.0f)
+     * ```
+     */
+    fun startWalk(targetX: Float, targetZ: Float, speed: Float = 1.0f): WalkStartResult {
+        return renderer?.startWalk(targetX, targetZ, speed) ?: WalkStartResult.NO_RENDERER
+    }
+
+    /** Stop walking immediately and return to the idle loop. */
+    fun stopWalk() {
+        renderer?.stopWalk()
+    }
+
+    /**
+     * Locomotion state snapshot (phase / position / heading / target / speed),
+     * for diagnostics and UI.
+     */
+    fun getWalkState(): WalkSnapshot? = renderer?.walkSnapshot()
 
     // ── Public API: Render Settings ──────────────────────────────────────
 

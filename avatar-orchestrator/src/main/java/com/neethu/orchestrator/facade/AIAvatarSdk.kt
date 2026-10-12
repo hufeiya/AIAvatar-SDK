@@ -114,6 +114,8 @@ class AIAvatarSdk(
         val voice: String = "",
         val lang: Lang = Lang.ZH,
         val enableLlmCamera: Boolean = true,
+        /** 允许模型用 `<move:锚点>` 标签走向场景锚点（自由走动 P1）。 */
+        val enableLlmMove: Boolean = true,
         val contextId: String = DEFAULT_CONTEXT_ID,
         val characterId: String? = null,
         val temperature: Float = 0.6f,
@@ -276,6 +278,7 @@ class AIAvatarSdk(
             AvatarSession.Options(
                 lang = config.lang,
                 enableLlmCamera = config.enableLlmCamera,
+                enableLlmMove = config.enableLlmMove,
                 // Room 持久化后上下文可无限增长；请求只带最近 N 条 user/assistant。
                 // 身份前言每轮恒带；人设全文+协议目录（~12K chars）只随上下文
                 // 首轮发送、失败自动重发（AvatarSession 内聚），都不进 store。
