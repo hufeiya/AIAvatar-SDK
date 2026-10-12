@@ -9,6 +9,7 @@ import com.neethu.corelib.CameraShot
 import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.WalkStartResult
+import com.neethu.orchestrator.locomotion.LocomotionDriver
 import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -171,6 +172,11 @@ internal suspend fun executeAiCommand(
                 "walk stopped (back to idle)"
             }
             "walk_state" -> walkStateCommand(controller)
+            "walk_gait" -> walkGaitCommand(controller)
+            "walk_strafe" -> walkStrafeCommand(controller, uiState, command)
+            "walk_fade" -> walkFadeCommand(controller, command.arg)
+            "walk_overlay" -> walkOverlayCommand(controller, command.arg)
+            "walk_extract" -> walkExtractCommand(controller, command.arg)
             "anchors" -> anchorsCommand(chat)
             "walk_transit" -> walkTransitCommand(controller, command.arg)
             "scene_offset" -> scenePlacementCommand(controller, uiState, command, rotate = false)
@@ -641,30 +647,46 @@ private fun walkToCommand(
     chat: AiChatDebugHooks?,
 ): String {
     val speed = command.arg?.toFloatOrNull()
-    // 两种目标形态：ai_x/ai_z 坐标（P0）或锚点名（P1，ai_cmd anchors 可查词表）
-    val target: Pair<Float, Float> = if (command.x != null && command.z != null) {
-        command.x to command.z
-    } else if (!command.arg.isNullOrBlank() && speed == null) {
-        val anchor = chat?.session?.invoke()?.locomotionDriver?.find(command.arg.trim().lowercase())
-            ?: throw IllegalArgumentException(
-                "unknown anchor '${command.arg}' — run `anchors` for the table, or use coordinates: walk_to ai_x ai_z [speed]",
+    // 两种目标形态：ai_x/ai_z 坐标（P0，直线走）或锚点名（P1，ai_cmd anchors
+    // 可查词表）——锚点名走 driver（P2 waypoint 图路由 + 失败归因同 LLM 通道）
+    if (command.x == null || command.z == null) {
+        if (command.arg.isNullOrBlank() || speed != null) {
+            throw IllegalArgumentException(
+                "walk_to expects ai_x/ai_z = target world meters (ai_arg = speed m/s), or an anchor name: walk_to sofa",
             )
-        anchor.x to anchor.z
-    } else {
-        throw IllegalArgumentException(
-            "walk_to expects ai_x/ai_z = target world meters (ai_arg = speed m/s), or an anchor name: walk_to sofa",
-        )
+        }
+        val driver = chat?.session?.invoke()?.locomotionDriver
+            ?: throw IllegalStateException("AI chat not wired in this screen — anchor walking needs the session")
+        ensureWalkGaits(controller)
+        if (speed != null) driver.speed = speed
+        Log.i("AiDebugExecutor", "walkTo via driver=${driver.hashCode()} session=${chat.session.invoke().hashCode()}")
+        val outcome = driver.walkTo(command.arg.trim().lowercase())
+        return when (outcome) {
+            LocomotionDriver.Outcome.STARTED -> {
+                val legs = driver.pendingLegsSnapshot()
+                buildString {
+                    append("walking to '${command.arg.trim().lowercase()}'")
+                    if (legs.isNotEmpty()) append(" via waypoints: ${legs.joinToString(" → ")}")
+                    append("; pair with `camera_shot follow` for a tracking camera")
+                }
+            }
+            LocomotionDriver.Outcome.UNKNOWN_ANCHOR ->
+                throw IllegalArgumentException(
+                    "unknown anchor '${command.arg}' — run `anchors` for the table, or use coordinates: walk_to ai_x ai_z [speed]",
+                )
+            LocomotionDriver.Outcome.ALREADY_WALKING -> "already walking — new move cue ignored (debounce)"
+            else -> "walk rejected: $outcome"
+        }
     }
+    val target: Pair<Float, Float> = command.x to command.z
     val (tx, tz) = target
     if (uiState.selectedScene == null) {
         throw IllegalStateException(
             "no scene loaded — run load_scene home.glb first (walk bounds come from its placement meta)"
         )
     }
-    if (!controller.isWalkGaitConfigured() &&
-        !controller.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
-    ) {
-        throw IllegalStateException("walk gait failed to load: assets/$DEFAULT_WALK_CLIP")
+    if (!controller.isWalkGaitConfigured()) {
+        ensureWalkGaits(controller)
     }
     val placement = controller.getScenePlacement()
     val result = if (speed != null) controller.startWalk(tx, tz, speed) else controller.startWalk(tx, tz)
@@ -691,6 +713,101 @@ private fun walkToCommand(
     }
 }
 
+/**
+ * 走动步态一次性全量配置（walk/run/strafe）：walkToCommand 与 MainActivity
+ * 接线共用，幂等（已配置则跳过）。run/strafe 素材 baseSpeed=0 → 由素材自带
+ * 的烘焙位移自动标定（P2 方案 C，无需 walk-calib）。
+ */
+internal fun ensureWalkGaits(controller: AvatarController) {
+    if (controller.isWalkGaitConfigured()) return
+    if (!controller.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)) {
+        throw IllegalStateException("walk gait failed to load: assets/$DEFAULT_WALK_CLIP")
+    }
+    // P2 跑步/侧移步态（带烘焙位移，提取回灌驱动；失败不阻断基础走动）
+    if (!controller.setRunGait(DEFAULT_RUN_CLIP)) {
+        Log.w(AI_LOG_TAG, "run gait failed to load: assets/$DEFAULT_RUN_CLIP")
+    }
+    if (!controller.setStrafeGaits(DEFAULT_STRAFE_LEFT_CLIP, DEFAULT_STRAFE_RIGHT_CLIP)) {
+        Log.w(AI_LOG_TAG, "strafe gaits failed to load: assets/$DEFAULT_STRAFE_LEFT_CLIP / $DEFAULT_STRAFE_RIGHT_CLIP")
+    }
+}
+
+/** ai_cmd walk_gait：步态槽一览（walk/run/strafe 左右 + 烘焙位移标记）。 */
+private fun walkGaitCommand(controller: AvatarController): String = controller.walkGaitsSummary()
+
+/**
+ * ai_cmd walk_strafe：朝向锁死横步挪（P2 侧移）。
+ * `walk_strafe left|right` + 可选 `ai_x`=米数（默认 1.0）`ai_z`=速度（默认 1.0）
+ */
+private fun walkStrafeCommand(
+    controller: AvatarController,
+    uiState: DemoUiState,
+    command: AiDebugCommand,
+): String {
+    val dir = command.arg?.trim()?.lowercase()
+        ?: throw IllegalArgumentException("walk_strafe expects ai_arg = left|right (ai_x = meters, ai_z = speed)")
+    if (dir != "left" && dir != "right") {
+        throw IllegalArgumentException("walk_strafe expects ai_arg = left|right, got '$dir'")
+    }
+    if (uiState.selectedScene == null) {
+        throw IllegalStateException("no scene loaded — run load_scene home.glb first")
+    }
+    ensureWalkGaits(controller)
+    val meters = command.x ?: 1.0f
+    val speed = command.z ?: 1.0f
+    return when (val r = controller.startStrafe(dir == "left", meters, speed)) {
+        WalkStartResult.STARTED ->
+            "strafing $dir %.1fm at %.2f m/s (heading locked)".format(meters, speed)
+        WalkStartResult.NO_GAIT -> throw IllegalStateException("strafe gait not configured")
+        else -> "strafe rejected: $r"
+    }
+}
+
+/** ai_cmd walk_fade：走动起步/停步 crossfade 时长（秒）。空=查看，0=关。 */
+private fun walkFadeCommand(controller: AvatarController, arg: String?): String {
+    if (arg.isNullOrBlank()) {
+        return "walk fade = ${controller.getWalkFadeSeconds()} s (0 = hard cut)"
+    }
+    val seconds = arg.toFloatOrNull()
+        ?: throw IllegalArgumentException("walk_fade expects seconds (0..2), got '$arg'")
+    controller.setWalkFadeSeconds(seconds)
+    return "walk fade = ${controller.getWalkFadeSeconds()} s"
+}
+
+/** ai_cmd walk_overlay：走动中手势 overlay（上半身 mask 边走边比划）开关。 */
+private fun walkOverlayCommand(controller: AvatarController, arg: String?): String {
+    return when (arg?.lowercase()) {
+        null, "", "status" ->
+            "gesture overlay = ${controller.isGestureOverlayEnabled()}"
+        "on", "true", "1" -> {
+            controller.setGestureOverlayEnabled(true)
+            "gesture overlay ON (walk + <act:> gesture together, upper-body mask)"
+        }
+        "off", "false", "0" -> {
+            controller.setGestureOverlayEnabled(false)
+            "gesture overlay OFF (walking gestures stop-and-play, P1 behavior)"
+        }
+        else -> throw IllegalArgumentException("walk_overlay expects on|off|status")
+    }
+}
+
+/** ai_cmd walk_extract：方案 C 位移提取总开关（A/B 对拍用）。 */
+private fun walkExtractCommand(controller: AvatarController, arg: String?): String {
+    return when (arg?.lowercase()) {
+        null, "", "status" ->
+            "walk extraction = ${controller.isExtractionEnabled()} (baked gait motion → root)"
+        "on", "true", "1" -> {
+            controller.setExtractionEnabled(true)
+            "walk extraction ON (baked hips motion drives root; no loop snap-back)"
+        }
+        "off", "false", "0" -> {
+            controller.setExtractionEnabled(false)
+            "walk extraction OFF (program displacement only, P1 behavior)"
+        }
+        else -> throw IllegalArgumentException("walk_extract expects on|off|status")
+    }
+}
+
 /** ai_cmd anchors：会话注入的锚点表（`<move:>` 词表 = move_to 白名单），踩点核对用。 */
 private fun anchorsCommand(chat: AiChatDebugHooks?): String {
     val anchors = chat?.session?.invoke()?.locomotionAnchors
@@ -698,7 +815,10 @@ private fun anchorsCommand(chat: AiChatDebugHooks?): String {
     if (anchors.isEmpty()) {
         return "no anchors injected (llmMove off, or assets/scene/home.anchors.json missing/empty)"
     }
-    return anchors.joinToString("\n") { a -> "- ${a.name} → (${a.x}, ${a.z})" }
+    return anchors.joinToString("\n") { a ->
+        "- ${a.name} → (${a.x}, ${a.z})" +
+            if (a.links.isNotEmpty()) " ⇄ ${a.links.joinToString(",")}" else ""
+    }
 }
 
 /**
@@ -744,17 +864,16 @@ private fun walkTransitCommand(controller: AvatarController, arg: String?): Stri
 
 private fun walkStateCommand(controller: AvatarController): String {
     val s = controller.getWalkState() ?: return "walk: no renderer attached"
-    val gait = if (controller.isWalkGaitConfigured()) {
-        "$DEFAULT_WALK_CLIP (base $DEFAULT_WALK_BASE_SPEED m/s)"
-    } else {
-        "none"
-    }
+    val gait = if (controller.isWalkGaitConfigured()) controller.walkGaitsSummary() else "none"
     val placement = controller.getScenePlacement()
     return String.format(
         Locale.US,
-        "walk: phase=%s pos=(%.2f, %.2f) heading=%.0f° target=(%.2f, %.2f) speed=%.2f m/s | gait: %s | placement: %s",
+        "walk: phase=%s pos=(%.2f, %.2f) heading=%.0f° target=(%.2f, %.2f) speed=%.2f m/s | gait: %s | fade=%.2fs overlay=%s extract=%s | placement: %s",
         s.phase, s.x, s.z, s.headingDeg, s.targetX, s.targetZ, s.speed,
         gait,
+        controller.getWalkFadeSeconds(),
+        controller.isGestureOverlayEnabled(),
+        controller.isExtractionEnabled(),
         placement?.let {
             String.format(
                 Locale.US, "yaw=%.1f° off=(%.2f, %.2f, %.2f)",

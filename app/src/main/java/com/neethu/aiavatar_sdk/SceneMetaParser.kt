@@ -48,9 +48,17 @@ internal fun parseSceneMeta(json: String): ScenePlacement? = runCatching {
 
 // ── 自由走动 AI 通道（P1，docs/locomotion-feasibility.md §7.2/§7.3）────────
 
-/** 默认步态（tools/walk-calib 实测：Female Normal Walk 步长 0.417m/周期 0.683s）。 */
+/** 默认步态（tools/walk-calib 实测：Female Normal Walk 步长 0.417m/周期 0.683s）。
+ *  ⚠P2 实测该素材带烘焙位移 1.49m/循环（净速 1.27 m/s，与 walk-calib 脚步速度
+ *  1.22 一致——「原地」是误认），方案 C 提取开启后位移由素材驱动，更精确。 */
 const val DEFAULT_WALK_CLIP = "animations/Female Normal Walk.vrma"
 const val DEFAULT_WALK_BASE_SPEED = 1.22f
+
+/** P2 跑步/侧移步态（hips 净位移实测：run 1.68 / strafeL 0.62 / strafeR 1.72 m/s，
+ *  baseSpeed=0 由提取器自动标定）。 */
+const val DEFAULT_RUN_CLIP = "animations/Running Forward.vrma"
+const val DEFAULT_STRAFE_LEFT_CLIP = "animations/Walking Strafe To The Left.vrma"
+const val DEFAULT_STRAFE_RIGHT_CLIP = "animations/Walking Strafe To The Right.vrma"
 
 /** 锚点表资产路径（与场景对应；当前内置场景只有 home.glb）。 */
 private const val ANCHORS_ASSET = "scene/home.anchors.json"

@@ -227,7 +227,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 | 拖拽/挪动人物 | 挪动 FAB / `set_drag_mode` | hips 平移拖拽，双信号基线防漂移 | `HipsDragOffsetSolver` |
 | 程序化运镜 | 视角 FAB / `<cam:>` 标签 / `camera_shot` | 6 镜位+steering 平滑过渡；手势 orbit/pan/zoom | `CameraShot`、Manipulator 自建 |
 | 场景加载 | 场景面板 / `load_scene`（none=纯色背景） | 独立 loader；无场景=满帧率；可选对位 meta（`<场景名>.meta.json`，Y 旋转+平移） | SoulLinkRenderer |
-| 自由走动 | `walk_to` / SDK `startWalk` / LLM `<move:锚点>` / `move_to` 工具 | 原地步态素材+程序化根位移（合成 root motion）；状态机 TURNING/WALKING；接近段提前制动减速；步速与步态同步（timeScale=速度/baseSpeed，tools/walk-calib 标定）；`camera_shot follow` 跟拍；锚点表 `assets/scene/home.anchors.json`（`<move:>` 词表）；过渡剪辑可选（`walk_transit`，默认关） | `LocomotionEngine`、`Locomotion.kt`、`locomotion/`（orchestrator）、`tools/walk-calib` |
+| 自由走动 | `walk_to` / SDK `startWalk` / LLM `<move:锚点>` / `move_to` 工具 / `walk_strafe` | 步态驱动（方案 C 优先：带烘焙位移素材由 `LocomotionExtractor` 剥离 hips 前向分量回灌 root，脚步与位移按构造同步，baseSpeed 自动标定；原地素材回退程序位移）；双槽 crossfade（起步/停步/one-shot→idle 淡入淡出，`walk_fade`）；走动中手势 overlay（上半身 mask 边走边比划，`walk_overlay`）；跑步/侧移步态（speed≥1.9 自动跑步，`walk_strafe` 朝向锁死横移）；waypoint 图（`home.anchors.json` links+BFS 多段腿）；接近段提前制动减速；`camera_shot follow` 跟拍+静态机位角色逼近自护 | `LocomotionEngine`、`LocomotionExtractor`、`Locomotion.kt`、`WaypointRouter`、`locomotion/`（orchestrator）、`tools/walk-calib` |
 | 画质 15 项设置 | 设置→画质 | 大多热插拔；renderMode 切换触发模型重载 | `AvatarRenderSettings`、`QualityPreset` 四档 |
 
 ### 3.2 对话与 AI

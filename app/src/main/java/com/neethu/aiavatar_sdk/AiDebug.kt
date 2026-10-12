@@ -126,12 +126,26 @@ fun aiDebugHelp(): String = """
     |  walk_to                  Walk to a world point (free locomotion, needs a
     |                           loaded scene — walk bounds come from its meta).
     |                           ai_x/ai_z = target meters; ai_arg = speed m/s
-    |                           (default 1.0; walk gait auto-configured on
+    |                           (default 1.0; ≥1.9 auto-switches to the run
+    |                           gait when configured; gaits auto-configured on
     |                           first use); OR an anchor name: walk_to sofa
-    |                           (table = `anchors`). Pair with camera_shot follow
-    |  walk_stop                Stop walking (hard stop, returns to idle)
-    |  walk_state               Dump locomotion state (phase/pos/heading/target)
-    |  anchors                  List the session's walk anchors (<move:> table)
+    |                           (table = `anchors`; links route via waypoints).
+    |                           Pair with camera_shot follow
+    |  walk_stop                Stop walking (fades back to idle)
+    |  walk_state               Dump locomotion state (phase/pos/heading/target
+    |                           + gait slots + fade/overlay/extract switches)
+    |  walk_gait                Dump gait slots (walk/run/strafeL/strafeR)
+    |  walk_strafe              Sidestep without turning (P2): ai_arg =
+    |                           left|right, ai_x = meters (default 1.0),
+    |                           ai_z = speed (default 1.0)
+    |  walk_fade                Walk start/stop crossfade seconds (P2):
+    |                           none=dump | 0..2 (0 = hard cut, P1 behavior)
+    |  walk_overlay             Walk + gesture overlay toggle (P2 边走边比划):
+    |                           on | off | status (off = stop-and-play, P1)
+    |  walk_extract             方案C baked-motion extraction toggle (P2):
+    |                           on | off | status (A/B on|off compares)
+    |  anchors                  List the session's walk anchors (<move:> table;
+    |                           ⇄ marks waypoint links)
     |  walk_transit             Walk transition clips (P1 tier-1): none=dump |
     |                           off | start <assets/*.vrma> | stop <assets/*.vrma>
     |                           (one-shot clips; program motion held while the

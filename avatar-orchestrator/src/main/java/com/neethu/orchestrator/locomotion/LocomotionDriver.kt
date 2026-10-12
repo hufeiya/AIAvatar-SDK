@@ -12,6 +12,11 @@ import com.neethu.corelib.WalkStartResult
  * `assets/scene/<场景>.anchors.json` 后赋给 [AvatarSession.locomotionAnchors]，
  * 同 LlmActionCatalog 注入 ActCatalog 的模式），决策层只发指令不逐帧参与。
  *
+ * P2 waypoint 图（§7.2 V2）：锚点表带 links 时 [walkTo] 经
+ * [WaypointRouter] BFS 求途经锚点序列，逐段起步——到达一段由
+ * [onWalkFinished]（AvatarSession 从 controller.walkFinished 转交）接着走
+ * 下一段，中断/停步清空队列。全表无 links 时维持两点直线（V1 行为）。
+ *
  * 防抖（坑 9）：走动中收到新指令一律忽略（不排队不替换目标）——"边走边改
  * 目标"的语义不进 V1，提示词与协议块同步约束模型不要连发。结果枚举
  * [Outcome] 让标签通道与工具通道各自决定「要不要说出去」（工具要回灌文案，
@@ -54,6 +59,9 @@ open class LocomotionDriver(private val controller: AvatarController) {
     /** 行走速度（m/s），`move_to` 的可选 speed 参数与标签通道共用。 */
     var speed: Float = 1.0f
 
+    /** waypoint 路由的剩余途经锚点（含最终目标；空 = 单段直线走动中）。 */
+    private val pendingLegs = ArrayDeque<MoveAnchor>()
+
     /** 名字解析对大小写不敏感（extractor 已归一小写；锚点表手写大小写兜底）。 */
     open fun find(name: String): MoveAnchor? =
         anchors.firstOrNull { it.name.equals(name, ignoreCase = true) }
@@ -71,6 +79,29 @@ open class LocomotionDriver(private val controller: AvatarController) {
                 return Outcome.ALREADY_WALKING
             }
         }
+        // waypoint 路由（P2 §7.2 V2）：图拓扑（任一锚点带 links）时起点取
+        // **全局最近锚点**（不设半径——保证从图节点出发走verified连线，比
+        // 直线穿越未知几何安全）；无图 = 直线（V1 行为，bounds clamp 兜底）。
+        val state = controller.getWalkState()
+        val graphed = anchors.any { it.links.isNotEmpty() }
+        val from = if (state != null && graphed) {
+            WaypointRouter.nearestAnchor(anchors, state.x, state.z, maxDistMeters = Float.MAX_VALUE)
+        } else {
+            null
+        }
+        val route = WaypointRouter.route(anchors, from, anchor)
+        pendingLegs.clear()
+        pendingLegs.addAll(route.drop(1)) // 第一段立即起步，剩余逐段续
+        val first = route.first()
+        val outcome = startLeg(first)
+        if (outcome != Outcome.STARTED) pendingLegs.clear()
+        if (pendingLegs.isNotEmpty()) {
+            Log.i(TAG, "waypoint route to '${anchor.name}': ${route.joinToString("→") { it.name }}")
+        }
+        return outcome
+    }
+
+    open fun startLeg(anchor: MoveAnchor): Outcome {
         val result = controller.startWalk(anchor.x, anchor.z, speed)
         val outcome = when (result) {
             WalkStartResult.STARTED -> Outcome.STARTED
@@ -87,8 +118,28 @@ open class LocomotionDriver(private val controller: AvatarController) {
         return outcome
     }
 
+    /**
+     * 走动结束转交（AvatarSession 从 controller.walkFinished 收集后调用）：
+     * [arrived]=true 续走下一段；false（停步/中断）清空队列。
+     */
+    open fun onWalkFinished(arrived: Boolean) {
+        if (!arrived) {
+            if (pendingLegs.isNotEmpty()) Log.i(TAG, "walk interrupted — ${pendingLegs.size} legs dropped")
+            pendingLegs.clear()
+            return
+        }
+        val next = pendingLegs.removeFirstOrNull() ?: return
+        Log.i(TAG, "arrival → next leg '${next.name}'")
+        val outcome = startLeg(next)
+        if (outcome != Outcome.STARTED) pendingLegs.clear()
+    }
+
+    /** 剩余途经锚点名（诊断/ai_cmd；空 = 无多段腿在排队）。 */
+    fun pendingLegsSnapshot(): List<String> = pendingLegs.map { it.name }
+
     /** 停步并回到 idle（`stop_moving` 工具 / 中断语义）。 */
     open fun stopWalking() {
+        pendingLegs.clear()
         controller.stopWalk()
     }
 

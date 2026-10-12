@@ -293,4 +293,88 @@ class LocomotionEngineTest {
         val m = engine.update(1f / 60f, 0f, 0f, 0f)!!
         assertTrue(m.dz > 0f)
     }
+
+    // ── P2：headingLocked（侧移）与 externalGait（方案 C）──────────────
+
+    @Test
+    fun `headingLocked 不转身直指目标`() {
+        val engine = LocomotionEngine()
+        // heading 0（面朝 +Z），目标在 +X 侧方：侧移模式不转朝向、直接横挪
+        engine.startWalk(3f, 0f, 1.0f, null, headingLocked = true)
+        val m = engine.update(1f / 60f, 0f, 0f, 0f)!!
+        assertEquals("locked heading must not rotate", 0f, m.dHeadingRad, 1e-6f)
+        assertEquals("strafe moves straight toward target", 1f, m.dx / (m.dx + m.dz), 1e-4f)
+        assertTrue(m.dx > 0f)
+        assertEquals(engine.snapshot().phase, WalkPhase.WALKING)
+    }
+
+    @Test
+    fun `headingLocked 背后目标也不转身直走`() {
+        val engine = LocomotionEngine()
+        engine.startWalk(0f, -3f, 1.0f, null, headingLocked = true)
+        var z = 0f
+        var t = 0f
+        val dt = 1f / 60f
+        while (t < 10f && engine.snapshot().phase != WalkPhase.IDLE) {
+            val m = engine.update(dt, 0f, 0f, z) ?: break
+            assertEquals(0f, m.dHeadingRad, 1e-6f)
+            z += m.dz
+            t += dt
+        }
+        assertTrue("never arrived", t < 10f)
+        assertEquals(-3f, z, LocomotionEngine.ARRIVE_EPS)
+        assertEquals("heading untouched", 0f, engine.snapshot().headingDeg, 1e-3f)
+    }
+
+    @Test
+    fun `externalGait 平移归零 速度策略经 commandedSpeed 输出`() {
+        val engine = LocomotionEngine()
+        engine.startWalk(0f, 4f, 2.0f, null)
+        var z = 0f
+        val dt = 1f / 60f
+        var t = 0f
+        var sawCommand = false
+        while (t < 30f && engine.snapshot().phase != WalkPhase.IDLE) {
+            val m = engine.update(dt, 0f, 0f, z, externalGait = true) ?: break
+            assertEquals("external gait must not translate programmatically", 0f, m.dz, 1e-6f)
+            if (m.commandedSpeedMps > 0f) sawCommand = true
+            // 模拟渲染层：提取位移 = commanded × dt（速度与位移同步）
+            z += m.commandedSpeedMps * dt
+            t += dt
+        }
+        assertTrue("commanded speed never reported", sawCommand)
+        assertTrue("walk did not arrive", t < 30f)
+        assertEquals(4f, z, 0.2f)
+    }
+
+    @Test
+    fun `externalGait 制动在接近段压低 commandedSpeed`() {
+        val engine = LocomotionEngine()
+        val full = 2.0f
+        engine.startWalk(0f, 10f, full, null)
+        var z = 0f
+        val dt = 1f / 60f
+        var t = 0f
+        var nearCmd = Float.MAX_VALUE
+        while (t < 30f && engine.snapshot().phase != WalkPhase.IDLE) {
+            val m = engine.update(dt, 0f, 0f, z, externalGait = true) ?: break
+            if (10f - z < 0.3f && m.commandedSpeedMps > 0f) {
+                nearCmd = minOf(nearCmd, m.commandedSpeedMps)
+            }
+            z += m.commandedSpeedMps * dt
+            t += dt
+        }
+        assertTrue("brake never kicked in near target", nearCmd < full * 0.7f)
+    }
+
+    @Test
+    fun `stopWalk 清 headingLocked`() {
+        val engine = LocomotionEngine()
+        engine.startWalk(3f, 0f, 1.0f, null, headingLocked = true)
+        engine.stopWalk()
+        // 重启为普通走动：应恢复转身/对齐语义（第一帧 TURNING）
+        engine.startWalk(0f, -3f, 1.0f, null)
+        engine.update(1f / 60f, 0f, 0f, 0f)
+        assertEquals(WalkPhase.TURNING, engine.snapshot().phase)
+    }
 }

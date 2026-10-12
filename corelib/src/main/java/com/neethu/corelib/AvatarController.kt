@@ -320,16 +320,22 @@ class AvatarController {
      * This stops any built-in animation that is currently playing.
      *
      * @param loop Whether the animation should loop. Defaults to `true`.
+     * @param speed Clip clock scale (walk gait passes groundSpeed/baseSpeed).
+     * @param fadeSeconds P2 crossfade: > 0 blends from whatever is currently
+     *   playing over this many seconds (three.js `crossFadeTo` semantics).
+     *   While walking, a one-shot gesture automatically becomes an
+     *   upper-body-masked overlay (walk + gesture at the same time).
      */
-    fun playVrmaAnimation(loop: Boolean = true) {
-        renderer?.playVrmaAnimation(loop)
+    fun playVrmaAnimation(loop: Boolean = true, speed: Float = 1f, fadeSeconds: Float = 0f) {
+        renderer?.playVrmaAnimation(loop, speed, fadeSeconds)
     }
 
     /**
-     * Stop the VRMA animation and restore the model's rest pose.
+     * Stop the VRMA animation and restore the model's rest pose (or the idle
+     * loop when configured). [fadeSeconds] > 0 fades out instead of cutting.
      */
-    fun stopVrmaAnimation() {
-        renderer?.stopVrmaAnimation()
+    fun stopVrmaAnimation(fadeSeconds: Float = 0f) {
+        renderer?.stopVrmaAnimation(fadeSeconds)
     }
 
     /**
@@ -574,6 +580,53 @@ class AvatarController {
 
     /** Whether a walk gait is configured (see [setWalkGait]). */
     fun isWalkGaitConfigured(): Boolean = renderer?.hasWalkGait() ?: false
+
+    /**
+     * P2 跑步步态：[startWalk] 的 speed ≥ 1.9 m/s 且配置了跑步步态时自动
+     * 选用。[baseSpeed] ≤ 0 且素材带烘焙位移时自动标定（方案 C）。
+     */
+    fun setRunGait(assetPath: String, baseSpeed: Float = 0f): Boolean {
+        return renderer?.setRunGait(assetPath, baseSpeed) ?: false
+    }
+
+    /**
+     * P2 侧移步态对（左/右）：[startStrafe] 按方向选用。[baseSpeed] 同上。
+     */
+    fun setStrafeGaits(leftAssetPath: String, rightAssetPath: String, baseSpeed: Float = 0f): Boolean {
+        return renderer?.setStrafeGaits(leftAssetPath, rightAssetPath, baseSpeed) ?: false
+    }
+
+    /**
+     * P2 侧移：朝向不变横步挪 [meters] 米（[left]=true 向角色左手边）。
+     * 返回值语义同 [startWalk]（NO_GAIT = 侧移步态未配置）。
+     */
+    fun startStrafe(left: Boolean, meters: Float, speed: Float = 1.0f): WalkStartResult {
+        return renderer?.startStrafe(left, meters, speed) ?: WalkStartResult.NO_RENDERER
+    }
+
+    /** P2 走动起步/停步 crossfade 时长（秒）；0 = 关（硬切）。 */
+    fun setWalkFadeSeconds(seconds: Float) {
+        renderer?.setWalkFadeSeconds(seconds)
+    }
+
+    fun getWalkFadeSeconds(): Float = renderer?.getWalkFadeSeconds() ?: 0f
+
+    /** P2 走动中手势 overlay（边走边比划）开关。 */
+    fun setGestureOverlayEnabled(enabled: Boolean) {
+        renderer?.setGestureOverlayEnabled(enabled)
+    }
+
+    fun isGestureOverlayEnabled(): Boolean = renderer?.isGestureOverlayEnabled() ?: false
+
+    /** P2 方案 C 位移提取总开关（A/B 对拍用；默认开）。 */
+    fun setExtractionEnabled(enabled: Boolean) {
+        renderer?.setExtractionEnabled(enabled)
+    }
+
+    fun isExtractionEnabled(): Boolean = renderer?.isExtractionEnabled() ?: true
+
+    /** 走动步态配置一览（诊断/ai_cmd）。 */
+    fun walkGaitsSummary(): String = renderer?.walkGaitsSummary() ?: "no renderer"
 
     /**
      * Configure optional walk transition clips (P1 档 1, docs/locomotion-feasibility.md

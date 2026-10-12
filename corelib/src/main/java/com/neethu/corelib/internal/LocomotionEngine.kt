@@ -59,6 +59,12 @@ internal class LocomotionEngine {
         val dz: Float,
         /** Left-multiply the root's 3×3 block by Ry(this) — turn about the body axis. */
         val dHeadingRad: Float,
+        /**
+         * 本帧指令速度（m/s，= min(speed, brake)×ease）。externalGait 模式下
+         * 渲染层拿它设步态 playbackSpeed（提取位移随播放头走，自身已含变速）；
+         * 程序位移模式下仅诊断用。
+         */
+        val commandedSpeedMps: Float = 0f,
     )
 
     private var phase = WalkPhase.IDLE
@@ -75,6 +81,11 @@ internal class LocomotionEngine {
      * Fresh only when starting from IDLE.
      */
     private var startHoldRemaining = 0f
+    /**
+     * 侧移模式（P2 跑步/侧移）：heading 全程锁死不修正（不转身），位移直指
+     * 目标（投影点）——身体朝向不变、横步挪过去，步态用侧移剪辑。
+     */
+    private var headingLocked = false
     private var arrivedFlag = false
     private var lastX = 0f
     private var lastZ = 0f
@@ -86,6 +97,7 @@ internal class LocomotionEngine {
      * [bounds] when present (P0 room geometry = rectangle, no obstacles).
      * [startHoldSeconds] freezes translation for that long (start transition
      * clip windup); heading corrections still apply during the hold.
+     * [headingLocked]（侧移）跳过转身、全程不修正朝向。
      */
     fun startWalk(
         targetX: Float,
@@ -93,6 +105,7 @@ internal class LocomotionEngine {
         speed: Float,
         bounds: WalkBounds?,
         startHoldSeconds: Float = 0f,
+        headingLocked: Boolean = false,
     ) {
         this.bounds = bounds
         if (bounds != null) {
@@ -103,11 +116,13 @@ internal class LocomotionEngine {
             this.targetZ = targetZ
         }
         this.speed = speed.coerceIn(0.2f, 3.0f)
+        this.headingLocked = headingLocked
         if (phase == WalkPhase.IDLE) {
             easeElapsed = 0f
             startHoldRemaining = startHoldSeconds.coerceAtLeast(0f)
         }
-        phase = WalkPhase.TURNING
+        // 侧移不进 TURNING（无朝向修正可言），直接走
+        phase = if (headingLocked) WalkPhase.WALKING else WalkPhase.TURNING
         arrivedFlag = false
     }
 
@@ -115,6 +130,7 @@ internal class LocomotionEngine {
     fun stopWalk() {
         phase = WalkPhase.IDLE
         startHoldRemaining = 0f
+        headingLocked = false
         arrivedFlag = false
     }
 
@@ -123,8 +139,18 @@ internal class LocomotionEngine {
      * translation (authoritative — the engine never integrates position
      * itself, so drags and programmatic moves can't desync it). Returns the
      * motion to apply, or `null` when idle/arrived this frame.
+     *
+     * [externalGait]（方案 C，P2）：步态素材自带位移（提取器逐帧回灌），本引擎
+     * 只管朝向/到达/速度策略——平移恒 0，[FrameMotion.commandedSpeedMps] 交给
+     * 渲染层设步态 playbackSpeed（提取位移随播放头走，制动/ease 自动生效）。
      */
-    fun update(dtSeconds: Float, rootX: Float, rootY: Float, rootZ: Float): FrameMotion? {
+    fun update(
+        dtSeconds: Float,
+        rootX: Float,
+        rootY: Float,
+        rootZ: Float,
+        externalGait: Boolean = false,
+    ): FrameMotion? {
         lastX = rootX
         lastZ = rootZ
         if (phase == WalkPhase.IDLE || dtSeconds <= 0f) return null
@@ -138,11 +164,16 @@ internal class LocomotionEngine {
             return null
         }
 
-        // Forward = (sin h, 0, cos h) → desired heading = atan2(dx, dz).
-        val desired = atan2(dx, dz)
-        val err = wrapAngle(desired - headingRad)
-        val dHeading = err.coerceIn(-TURN_RATE_RAD_PER_S * dtSeconds, TURN_RATE_RAD_PER_S * dtSeconds)
-        headingRad += dHeading
+        val dHeading: Float
+        if (headingLocked) {
+            dHeading = 0f
+        } else {
+            // Forward = (sin h, 0, cos h) → desired heading = atan2(dx, dz).
+            val desired = atan2(dx, dz)
+            val err = wrapAngle(desired - headingRad)
+            dHeading = err.coerceIn(-TURN_RATE_RAD_PER_S * dtSeconds, TURN_RATE_RAD_PER_S * dtSeconds)
+            headingRad += dHeading
+        }
 
         // Start windup: turn-in-place behavior only, no translation. On the
         // frame the hold expires, restart the ease ramp so the first program
@@ -156,7 +187,11 @@ internal class LocomotionEngine {
             easeElapsed = 0f
         }
 
-        if (abs(err) > ALIGN_RAD) {
+        // 对齐门：程序位移模式原地转到位再走；externalGait 不设门——步态自带
+        // 位移跟随朝向，转身体同时走出弧线（自然起步），设门反而冻结步态。
+        if (!headingLocked && !externalGait &&
+            abs(wrapAngle(atan2(dx, dz) - headingRad)) > ALIGN_RAD
+        ) {
             phase = WalkPhase.TURNING
             return FrameMotion(0f, 0f, 0f, dHeading)
         }
@@ -168,15 +203,28 @@ internal class LocomotionEngine {
         // approach so the last strides decelerate into the stop instead of
         // hard-stopping at full pace.
         val brakeSpeed = sqrt(2f * BRAKE_DECEL * dist)
-        val step = minOf(speed, brakeSpeed) * ease * dtSeconds
+        val commanded = minOf(speed, brakeSpeed) * ease
+        if (externalGait) {
+            // 方案 C：渲染层以 commanded 设步态变速，位移来自素材提取
+            return if (commanded >= dist / dtSeconds) {
+                // 提取步长可能越过目标：归零速停（下一帧 dist≤ARRIVE_EPS 到达）
+                FrameMotion(0f, 0f, 0f, dHeading, 0f)
+            } else {
+                FrameMotion(0f, 0f, 0f, dHeading, commanded)
+            }
+        }
+        val step = commanded * dtSeconds
         return if (step >= dist) {
             // Final partial step walks straight onto the target (≤ ALIGN_RAD off
             // the facing direction, invisible), then hard-stop.
             arrivedFlag = true
             phase = WalkPhase.IDLE
-            FrameMotion(dx, 0f, dz, dHeading)
+            FrameMotion(dx, 0f, dz, dHeading, commanded)
+        } else if (headingLocked) {
+            // 侧移：朝向不变，位移直指目标（不沿 heading 前向）
+            FrameMotion(dx / dist * step, 0f, dz / dist * step, dHeading, commanded)
         } else {
-            FrameMotion(sin(headingRad) * step, 0f, cos(headingRad) * step, dHeading)
+            FrameMotion(sin(headingRad) * step, 0f, cos(headingRad) * step, dHeading, commanded)
         }
     }
 
@@ -205,10 +253,23 @@ internal class LocomotionEngine {
     }
 }
 
+/** Gait family (P2 跑步/侧移): pick by commanded speed / strafe direction. */
+internal enum class WalkGaitKind { WALK, RUN, STRAFE_LEFT, STRAFE_RIGHT }
+
 /** The looping walk gait driving [LocomotionEngine] playback (app-configured). */
 internal data class WalkGait(
     val clipAssetPath: String,
     val durationSeconds: Float,
-    /** Ground speed (m/s) of the gait at playback speed 1 — from tools/walk-calib. */
+    /** Ground speed (m/s) of the gait at playback speed 1 — from tools/walk-calib,
+     *  or auto-derived from the baked root motion (方案 C extraction). */
     val baseSpeed: Float,
+    val kind: WalkGaitKind = WalkGaitKind.WALK,
+    /** 方案 C 提取器（非原地素材）；null = 原地素材走程序位移。 */
+    val extractor: LocomotionExtractor? = null,
+    /**
+     * hips 局部 1 单位 → 世界的渲染尺度（root→hips 链路缩放积）。骨骼写入的
+     * 位移经它放大，而 root 平移列不在放大链上——提取回灌补回同样的倍数
+     * （剥离与回灌才严格抵消）。unit-cube 大缩放模型上 ≈9，普通模型 ≈1。
+     */
+    val renderScale: Float = 1f,
 )

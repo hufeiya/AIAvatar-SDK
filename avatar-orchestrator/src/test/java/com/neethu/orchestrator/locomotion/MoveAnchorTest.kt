@@ -69,4 +69,27 @@ class MoveAnchorTest {
         assertEquals("sofa", bare.labelFor(Lang.ZH))
         assertEquals("sofa", bare.labelFor(Lang.EN))
     }
+
+    @Test
+    fun `links parsed lowercased deduped self-loops dropped`() {
+        val json = """
+            {"anchors":[
+              {"name":"A","x":0,"z":0,"links":["B"," b ","A","ghost"]},
+              {"name":"B","x":1,"z":0}
+            ]}
+        """.trimIndent()
+        val anchors = parseMoveAnchors(json)
+        // ghost 是未知名——解析层看不见全表不裁决，路由层解析不到即丢
+        assertEquals(listOf("b", "ghost"), anchors[0].links)
+        assertEquals(emptyList<String>(), anchors[1].links)
+    }
+
+    @Test
+    fun `links non-array or primitive entries ignored`() {
+        val json = """{"anchors":[{"name":"A","x":0,"z":0,"links":"B"},{"name":"B","x":1,"z":0,"links":[1,null]}]}"""
+        val anchors = parseMoveAnchors(json)
+        assertEquals(emptyList<String>(), anchors[0].links)
+        // 数字 primitive 取 content 不抛；null 元素显式滤掉
+        assertEquals(listOf("1"), anchors[1].links)
+    }
 }

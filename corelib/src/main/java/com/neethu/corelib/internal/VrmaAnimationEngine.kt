@@ -23,6 +23,29 @@ import kotlin.math.cos
  *    `targetLocal = restLocal * inv(restWorld) * normalized * restWorld`
  *
  * Reference: pixiv/three-vrm createVRMAnimationClip.ts
+ *
+ * ## 双槽播放（P2，docs/locomotion-feasibility.md §5.2 档 2）
+ *
+ * base 槽常驻（idle 循环 / 走路步态），overlay 槽承载淡入淡出的第二个剪辑
+ * （three.js `AnimationMixer.crossFadeTo` 同款语义）：
+ * - **crossfade**：`play(fadeSeconds>0)` 时现播剪辑成为淡出的 base，新剪辑从 0
+ *   淡入——起步/停步不再硬切，任意两剪辑平滑互转；
+ * - **手势 overlay**：走动中 `<act:>` 以 [UPPER_BODY_BONES] 掩码淡入（上半身
+ *   边走边比划，§5.3 P2），one-shot 播完自动淡出回纯步态；
+ * - 一次性动作播完的 idle 接管也走淡入淡出（原来是硬切）。
+ *
+ * 混合在**归一化空间**做（slerp/lerp 后单次 retarget），共享骨骼按 overlay
+ * 权重 w 混合，单侧独有的骨骼直接取拥有方的值（three.js 同款：未被上.clip
+ * 绑定的 property 保留另一 clip 的值）。[Slot.boneMask] 控制槽位写集——被
+ * 掩码挡掉的骨骼视为该槽不存在，让位给另一槽。
+ *
+ * ## 方案 C 位移提取（§4.3）
+ *
+ * 槽位可携带 [LocomotionExtractor]（非原地素材）：hips 平移轨道照常采样，
+ * 但写入前减去前向投影（hips 只留起伏+侧向），前向分量以逐帧差值从
+ * [consumeExtractedForwardDelta] 交给渲染层积分进 root——可循环、可控速、
+ * 不回弹。混合期间暂停回灌（半权重的步态配全额位移=滑步），播放头照常
+ * 推进保证恢复后无跳变。
  */
 internal class VrmaAnimationEngine(
     private val engine: Engine
@@ -30,10 +53,49 @@ internal class VrmaAnimationEngine(
     companion object {
         private const val TAG = "VrmaAnimEngine"
         private const val CHUNK_TYPE_JSON = 0x4E4F534A
+
+        /** 一次性动作播完 → idle 接管的淡入时长（秒）。 */
+        const val FADE_TO_IDLE_SECONDS = 0.25f
+
+        /** 手势 overlay 播完/被打断时的淡出时长（秒）。 */
+        const val OVERLAY_FADE_OUT_SECONDS = 0.18f
+
+        /**
+         * 上半身骨骼集（VRM 标准人骨名，P2 §5.3 边走边比划的写集掩码）：
+         * walk 步态保持全身，act overlay 只写这些骨骼——hips/腿/脚留给步态。
+         */
+        val UPPER_BODY_BONES: Set<String> = setOf(
+            "spine", "chest", "upperChest", "neck", "head", "jaw", "leftEye", "rightEye",
+            "leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand",
+            "rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand",
+            "leftThumbMetacarpal", "leftThumbProximal", "leftThumbDistal",
+            "leftIndexProximal", "leftIndexIntermediate", "leftIndexDistal",
+            "leftMiddleProximal", "leftMiddleIntermediate", "leftMiddleDistal",
+            "leftRingProximal", "leftRingIntermediate", "leftRingDistal",
+            "leftLittleProximal", "leftLittleIntermediate", "leftLittleDistal",
+            "rightThumbMetacarpal", "rightThumbProximal", "rightThumbDistal",
+            "rightIndexProximal", "rightIndexIntermediate", "rightIndexDistal",
+            "rightMiddleProximal", "rightMiddleIntermediate", "rightMiddleDistal",
+            "rightRingProximal", "rightRingIntermediate", "rightRingDistal",
+            "rightLittleProximal", "rightLittleIntermediate", "rightLittleDistal",
+        )
     }
 
-    // Currently loaded animation
-    private var currentAnimation: VrmaParser.VrmaAnimation? = null
+    /** 单个播放槽：剪辑 + 播放头 + 变速 + 循环 + 写集掩码 + 位移提取器。 */
+    private class Slot(
+        val animation: VrmaParser.VrmaAnimation,
+        var playheadSeconds: Float,
+        var speed: Float,
+        var looping: Boolean,
+        /** null = 全部骨骼；非 null = 只写集合内的骨骼（P2 上半身 mask）。 */
+        val boneMask: Set<String>?,
+        /** 方案 C 提取器（非原地步态），null = 原地素材。 */
+        val extractor: LocomotionExtractor?,
+    ) {
+        /** 该轨道是否落在本槽写集内（掩码语义：被挡=本槽没有这条轨道）。 */
+        fun admits(track: VrmaParser.HumanoidTrack): Boolean =
+            boneMask == null || track.boneName in boneMask
+    }
 
     // Bone mapping: VRM bone name → Filament entity
     private var boneEntityMap: Map<String, Int> = emptyMap()
@@ -46,34 +108,71 @@ internal class VrmaAnimationEngine(
     // VRM version: "0" or "1"
     private var vrmMetaVersion: String = "1"
 
-    // Playback
-    private var isPlaying = false
-    private var isLooping = true
     private var targetHipsY: Float = 1.0f
 
-    /**
-     * Clip-time playhead (seconds into the animation). Advanced by frame dt ×
-     * [playbackSpeed] instead of sampling the absolute elapsed clock, so a
-     * mid-play speed change (walk gait timeScale = groundSpeed/baseSpeed)
-     * never jumps the phase; update() not being called = paused.
-     */
-    private var playheadSeconds = 0f
-    private var playbackSpeed = 1f
+    /** setAnimation 暂存的待播剪辑，[play] 消费。 */
+    private var incomingAnimation: VrmaParser.VrmaAnimation? = null
 
-    /** 最近一帧的渲染时钟——帧间 dt 的来源（playhead 积分用）。 */
+    /** base 槽（常驻层）。null = 什么都没在播。 */
+    private var base: Slot? = null
+
+    /** overlay 槽（淡入/淡出中的第二剪辑）；null = 单槽。 */
+    private var overlay: Slot? = null
+
+    /** overlay 当前权重 0..1（共享骨骼的混合因子）。 */
+    private var overlayWeight = 0f
+
+    /** overlay 目标权重：1 = 淡入中（将成为 base），0 = 淡出中（将被丢弃）。 */
+    private var overlayTarget = 1f
+
+    /** 本次淡入/淡出的总时长（秒）。 */
+    private var fadeSeconds = 0f
+
+    /** 淡入期间冻结 base 播放头（一次性动作播完淡出到 idle 时用）。 */
+    private var freezeBase = false
+
+    /** 淡入目标是 idle（晋升时置 idleTakeover + 弹簧重置标记）。 */
+    private var overlaySettlesIdle = false
+
+    /** 淡入期间 base 槽的共享轨道索引（bone+path → 轨道），fade 建一次。 */
+    private var baseTrackIndex: Map<String, VrmaParser.HumanoidTrack>? = null
+
+    private var isPlaying = false
+
+    /**
+     * Playhead 积分：dt 只在动画真正被采样的帧累积（未被调用 = 暂停），
+     * 渲染时钟被 vrmaStartTime 重置/回跳时 dt 取 0，变速不跳相位。
+     */
     private var lastElapsedSeconds = 0f
 
-    // Idle takeover: when set, a finished one-shot (or manual stop) switches
-    // to the looping idle animation instead of the rest pose — the VRM rest
-    // pose is the A-pose, which reads as "arms spread" (§7.10).
+    // Idle takeover: when set, the settled slot is the looping idle animation
+    // instead of an action — the VRM rest pose is the A-pose, which reads as
+    // "arms spread" (§7.10). During a fade that will settle on idle this stays
+    // false so overlay layers (mimic) keep yielding until the promotion.
     private var idleAnimation: VrmaParser.VrmaAnimation? = null
     private var idleTakeover = false
     private var idleSwapPending = false
+
+    /** 方案 C：上一帧的展开前向位移（提取差值的基准）。 */
+    private var lastUnrolledForward = 0f
+
+    /** 方案 C：已提取待渲染层消费的前向位移（模型尺度，米）。 */
+    private var pendingExtracted = 0f
+
+    private var hipsRewritten = false
 
     // ── Model Binding ────────────────────────────────────────────────────
 
     fun bindToModel(asset: FilamentAsset, vrmGlbBytes: ByteArray) {
         val tm = engine.transformManager
+
+        // ⚠先 commit 再读世界变换：bindToModel 在 loadModel+transformToUnitCube
+        // 同一帧内被调，TransformManager 惰性求值——不 commit 时 getWorldTransform
+        // 返回的是**变换前**的陈旧矩阵，targetHipsY 会错一个数量级（真机
+        // 2c3769db 实测 0.112 vs 真值 ~0.75， hips 缩放比连带错 7×，所有 VRMA
+        // 平移轨道渲染只剩 13% 尺寸、提取步态速度同倍失真）。TransformManager
+        // 惰性陷阱的又一处落点（choreoCallback 的 commit 注释同源）。
+        tm.commitLocalTransformTransaction()
 
         // Detect VRM version
         vrmMetaVersion = detectVrmVersion(vrmGlbBytes)
@@ -130,7 +229,14 @@ internal class VrmaAnimationEngine(
         Log.i(TAG, "Bound ${entityMap.size} bones, hipsY=$targetHipsY, version=$vrmMetaVersion")
     }
 
-    fun setAnimation(animation: VrmaParser.VrmaAnimation) { currentAnimation = animation }
+    /** 模型 hips 高（米，bindToModel 时测得）——位移提取的尺度换算用；
+     * 素材→模型的缩放比 = 此值 / 素材 restHipsPosition[1]。 */
+    fun modelHipsHeight(): Float = targetHipsY
+
+    /** hips 的 Filament entity（渲染层取世界/局部矩阵算链路渲染尺度用）。 */
+    fun hipsEntity(): Int = boneEntityMap["hips"] ?: 0
+
+    fun setAnimation(animation: VrmaParser.VrmaAnimation) { incomingAnimation = animation }
 
     /**
      * Set the looping idle the engine returns to after one-shots / stops
@@ -144,23 +250,23 @@ internal class VrmaAnimationEngine(
      * - 正在播动作时不打断——播完或 [stop] 自然回到新 idle。
      */
     fun setIdleAnimation(animation: VrmaParser.VrmaAnimation?) {
-        val showingIdle = isPlaying && idleTakeover
+        val showingIdle = isPlaying && idleTakeover && overlay == null
         idleAnimation = animation
         when {
             animation == null -> {
                 if (showingIdle) {
                     isPlaying = false
-                    currentAnimation = null
+                    base = null
                     idleTakeover = false
                     restoreRestPose()
                 }
             }
             !isPlaying || showingIdle -> {
-                currentAnimation = animation
+                base = Slot(animation, 0f, 1f, looping = true, boneMask = null, extractor = null)
+                overlay = null
+                overlayWeight = 0f
                 isPlaying = true
-                isLooping = true
                 idleTakeover = true
-                playheadSeconds = 0f
                 idleSwapPending = true
             }
             // else: 动作播放中——只更新槽位，播完/stop 后接管
@@ -172,47 +278,136 @@ internal class VrmaAnimationEngine(
      * Start playback of the loaded animation. [speed] scales the clip clock
      * (walk locomotion: groundSpeed / gait baseSpeed so footsteps match the
      * actual travel); the default 1 keeps gesture/idle behavior unchanged.
+     *
+     * P2 双槽：[fadeSeconds] > 0 且当前有剪辑在播时，现播内容成为淡出的
+     * base、新剪辑淡入（crossfade）；无剪辑在播时忽略（无从混合，直接起播）。
+     * [boneMask] 限定新剪辑写集（手势 overlay 传 [UPPER_BODY_BONES]）；
+     * [extractor] 挂方案 C 位移提取（走动步态用）。
      */
-    fun play(loop: Boolean = true, speed: Float = 1f) {
+    internal fun play(
+        loop: Boolean = true,
+        speed: Float = 1f,
+        fadeSeconds: Float = 0f,
+        boneMask: Set<String>? = null,
+        extractor: LocomotionExtractor? = null,
+    ) {
+        val anim = incomingAnimation ?: return
+        incomingAnimation = null
+        val slot = Slot(anim, 0f, speed.coerceIn(0.25f, 3f), loop, boneMask, extractor)
+        if (fadeSeconds > 0f && isActive()) {
+            // 已有 fade 在跑：先把 overlay 原地晋升成 base（权重跳变可接受，
+            // 连续 crossfade 是罕见路径），再对快照开新 fade。
+            promoteOverlay()
+            val current = base
+            if (current != null) {
+                base = current
+                overlay = slot
+                overlayWeight = 0f
+                overlayTarget = 1f
+                this.fadeSeconds = fadeSeconds.coerceIn(0.05f, 2f)
+                freezeBase = false
+                overlaySettlesIdle = false
+                idleTakeover = false
+                isPlaying = true
+                baseTrackIndex = indexTracks(current)
+                lastUnrolledForward = extractor?.forwardAt(0f) ?: 0f
+                pendingExtracted = 0f
+                return
+            }
+        }
+        base = slot
+        overlay = null
+        overlayWeight = 0f
         isPlaying = true
-        isLooping = loop
         idleTakeover = false
-        playbackSpeed = speed.coerceIn(0.25f, 3f)
-        playheadSeconds = 0f
+        freezeBase = false
+        overlaySettlesIdle = false
+        baseTrackIndex = null
+        lastUnrolledForward = extractor?.forwardAt(0f) ?: 0f
+        pendingExtracted = 0f
     }
 
     /**
-     * Stop playback. With an idle configured this resumes the idle loop
-     * (manual stop = "return to idle"); without one it restores the rest pose.
+     * Stop playback. With an idle configured this returns to the idle loop;
+     * without one it restores the rest pose.
+     *
+     * P2：[fadeSeconds] > 0 时淡入淡出——手势 overlay 在走动 base 上快速淡出
+     * （走动继续）；单槽动作冻结当前姿态淡入 idle（急停不再硬切）。
      */
-    fun stop() {
+    fun stop(fadeSeconds: Float = 0f) {
         val idle = idleAnimation
+        val baseSlot = base
+        if (fadeSeconds > 0f && isPlaying && overlay != null && overlaySettlesIdle) {
+            // 已在淡向 idle（重复 stop 幂等）：不动正在进行的过渡
+            return
+        }
+        if (fadeSeconds > 0f && isPlaying && overlay != null &&
+            baseSlot != null && baseSlot.looping && !overlaySettlesIdle
+        ) {
+            // 手势 overlay 收尾：淡出回纯 base（走动/idle 循环不中断）
+            overlayTarget = 0f
+            this.fadeSeconds = fadeSeconds.coerceIn(0.05f, OVERLAY_FADE_OUT_SECONDS * 2f)
+            return
+        }
         if (idle != null) {
-            currentAnimation = idle
+            if (fadeSeconds > 0f && isPlaying && baseSlot != null && overlay == null) {
+                // 单槽动作（步态/手势）淡入 idle：一次性冻结尾帧，循环照常播
+                overlay = Slot(idle, 0f, 1f, looping = true, boneMask = null, extractor = null)
+                overlayWeight = 0f
+                overlayTarget = 1f
+                this.fadeSeconds = fadeSeconds.coerceIn(0.05f, 2f)
+                freezeBase = !baseSlot.looping
+                overlaySettlesIdle = true
+                baseTrackIndex = indexTracks(baseSlot)
+                return
+            }
+            base = Slot(idle, 0f, 1f, looping = true, boneMask = null, extractor = null)
+            overlay = null
+            overlayWeight = 0f
             isPlaying = true
-            isLooping = true
             idleTakeover = true
-            playheadSeconds = 0f
             idleSwapPending = true
         } else {
             isPlaying = false
+            base = null
+            overlay = null
+            overlayWeight = 0f
             restoreRestPose()
         }
     }
 
-    fun isActive(): Boolean = isPlaying && currentAnimation != null
+    fun isActive(): Boolean = isPlaying && base != null
 
     /**
      * 是否正在播**一次性**动作（非 idle 接管）——骨骼叠加层（模仿引擎）的挂起
      * 判据：`<act:>` 手势/技能手势要完整播放，播完回 idle 后叠加层自动续上。
      * 循环播放的非 idle 手动动画也算（用户手动播动画时模仿让路是合理语义）。
+     * 淡出到 idle 的过渡期仍算（动作还在半权重驱动骨骼）。
      */
-    fun isOneShotActive(): Boolean = isPlaying && !idleTakeover && currentAnimation != null
+    fun isOneShotActive(): Boolean = isPlaying && !idleTakeover && base != null
 
     fun getVrmMetaVersion(): String = vrmMetaVersion
 
-    /** Duration of the currently loaded animation in seconds (0 when none). */
-    fun getDuration(): Float = currentAnimation?.duration ?: 0f
+    /** Duration of the settling animation in seconds (0 when none). */
+    fun getDuration(): Float = settleTarget()?.animation?.duration ?: 0f
+
+    /** 运行时改 base 槽变速（方案 C 走动的制动/ease 每帧调；playhead 积分下不跳相位）。 */
+    fun setPlaybackSpeed(speed: Float) {
+        base?.speed = speed.coerceIn(0f, 3f)
+    }
+
+    /**
+     * 方案 C：取走自上次调用以来提取的前向位移（模型尺度，米，沿槽位
+     * [LocomotionExtractor.forwardDir] 方向）。混合期间不累积（渲染层拿到 0）。
+     */
+    fun consumeExtractedForwardDelta(): Float {
+        val pending = pendingExtracted
+        pendingExtracted = 0f
+        return pending
+    }
+
+    /** 当前提取前向方向（模型空间 XZ 单位向量）；无提取器时 null。 */
+    fun extractorForwardDir(): FloatArray? = base?.extractor?.forwardDir
 
     /** One-shot→idle transition happened since the last call (renderer resets spring bones). */
     fun consumeIdleSwap(): Boolean {
@@ -232,8 +427,6 @@ internal class VrmaAnimationEngine(
         return rewritten
     }
 
-    private var hipsRewritten = false
-
     // ── Frame Update ─────────────────────────────────────────────────────
 
     fun update(elapsedSeconds: Float) {
@@ -241,96 +434,310 @@ internal class VrmaAnimationEngine(
         // 渲染时钟被 vrmaStartTime 重置/回跳时 dt 取 0，变速不跳相位。
         val dt = (elapsedSeconds - lastElapsedSeconds).coerceIn(0f, 0.25f)
         lastElapsedSeconds = elapsedSeconds
-        val anim = currentAnimation ?: return
-        if (!isPlaying || anim.duration <= 0f) return
+        if (!isPlaying) return
+        val baseSlot = base ?: return
 
-        playheadSeconds += dt * playbackSpeed
-        val time = if (isLooping) playheadSeconds % anim.duration
-                   else playheadSeconds.coerceAtMost(anim.duration)
+        // 播放头推进：base 冻结（一次性播完淡出 idle）时只有 overlay 前进
+        if (!(freezeBase && overlay != null)) {
+            baseSlot.playheadSeconds += dt * baseSlot.speed
+        }
+        val overlaySlot = overlay
+        if (overlaySlot != null) {
+            overlaySlot.playheadSeconds += dt * overlaySlot.speed
+            val dir = if (overlayTarget == 1f) 1f else -1f
+            overlayWeight = (overlayWeight + dir * dt / fadeSeconds).coerceIn(0f, 1f)
+            // 淡出到位：overlay 丢弃，base 独立续播
+            if (overlayTarget == 0f && overlayWeight <= 0f) dropOverlay()
+        }
 
         val tm = engine.transformManager
 
-        for (track in anim.humanoidTracks) {
-            val entity = boneEntityMap[track.boneName] ?: continue
-            val instance = tm.getInstance(entity)
-            if (instance == 0) continue
-
-            when (track.path) {
-                "rotation" -> {
-                    var normalized = interpolateQuaternion(track.times, track.values, time)
-
-                    // VRM 0.x coordinate flip: negate x and z
-                    // (three-vrm createVRMAnimationClip: i % 2 === 0 ? -v : v)
-                    if (vrmMetaVersion == "0") {
-                        normalized = floatArrayOf(-normalized[0], normalized[1], -normalized[2], normalized[3])
-                    }
-
-                    // Retarget from normalized space to target bone space:
-                    // targetLocal = restLocal * inv(restWorld) * normalized * restWorld
-                    val restL = boneRestLocalQuat[track.boneName] ?: QUAT_IDENTITY
-                    val restW = boneRestWorldQuat[track.boneName] ?: QUAT_IDENTITY
-                    val restWInv = quatInverse(restW)
-
-                    // Retarget: L * (W^-1 * (norm * W))
-                    val step1 = quatMultiply(normalized, restW)
-                    val step2 = quatMultiply(restWInv, step1)
-                    val final_ = quatMultiply(restL, step2)
-
-                    applyRotation(tm, instance, track.boneName, final_)
-                }
-                "translation" -> {
-                    val pos = interpolateVector3(track.times, track.values, time)
-
-                    // Scale by height ratio
-                    val animHipsY = anim.restHipsPosition[1]
-                    val scale = if (animHipsY > 0.01f) targetHipsY / animHipsY else 1.0f
-
-                    // Compute DELTA from animation's rest hips position, then add
-                    // to the model's actual rest local translation. This keeps the
-                    // character centered and only applies relative movement.
-                    val animRest = anim.restHipsPosition
-                    val restMat = boneRestTransforms[track.boneName]
-                    val restTx = restMat?.get(12) ?: 0f
-                    val restTy = restMat?.get(13) ?: 0f
-                    val restTz = restMat?.get(14) ?: 0f
-
-                    if (vrmMetaVersion == "0") {
-                        pos[0] = restTx + -(pos[0] - animRest[0]) * scale
-                        pos[1] = restTy +  (pos[1] - animRest[1]) * scale
-                        pos[2] = restTz + -(pos[2] - animRest[2]) * scale
-                    } else {
-                        pos[0] = restTx + (pos[0] - animRest[0]) * scale
-                        pos[1] = restTy + (pos[1] - animRest[1]) * scale
-                        pos[2] = restTz + (pos[2] - animRest[2]) * scale
-                    }
-
-                    applyTranslation(tm, entity, pos)
-                }
-            }
+        val currentOverlay = overlay
+        if (currentOverlay == null) {
+            writeSlot(baseSlot, tm)
+        } else {
+            writeBlended(baseSlot, currentOverlay, tm)
         }
 
-        // One-shot playback finished: with an idle configured, seamlessly take
-        // over with the looping idle (LLM gestures `<act:…>` return to idle
-        // automatically); without one, restore the rest pose. Curation prefers
-        // clips whose last frame is near the rest pose so the snap is
-        // invisible (docs/ai-layer-handoff.md §7.6/§7.10).
-        if (!isLooping && !idleTakeover && playheadSeconds >= anim.duration) {
-            val idle = idleAnimation
-            if (idle != null) {
-                currentAnimation = idle
-                playheadSeconds = 0f
-                idleTakeover = true
-                isLooping = true
-                idleSwapPending = true
-            } else {
-                stop()
+        // 方案 C 提取：base 带提取器且回灌通道干净时累积——纯单槽，或 overlay
+        // 带上半身 mask（hips 归 base 独占，正交组合）；无 mask 的 crossfade
+        // 期间播放头照常推进（基准持续更新，恢复后无跳变），差值丢弃
+        // （半权重步态配全额位移=滑步）。
+        val extractor = baseSlot.extractor
+        if (extractor != null) {
+            val unrolled = extractor.forwardAt(baseSlot.playheadSeconds)
+            val ov = overlay
+            if (ov == null || ov.boneMask != null) {
+                pendingExtracted += unrolled - lastUnrolledForward
+            }
+            lastUnrolledForward = unrolled
+        }
+
+        // 一次性播完的接管（P2 双槽语义）：
+        // - 淡入完成 → overlay 晋升为 base；目标是 idle 时置接管/弹簧标记；
+        // - overlay 是一次性且播完、base 在循环（走动中的手势）→ 淡出回纯步态，
+        //   **不晋升**（晋升会把一次性手势变成 base 杀掉走动）；
+        // - overlay 一次性播完且 base 不循环 → 晋升后按单槽一次性接管（淡入 idle）；
+        // - 纯单槽一次性到尾 → 淡入 idle（有 idle）或回 rest pose（没有）。
+        if (currentOverlay != null) {
+            if (overlayTarget == 1f && overlayWeight >= 1f) {
+                promoteOverlay()
+            } else if (overlayTarget == 1f && !currentOverlay.looping &&
+                currentOverlay.playheadSeconds >= currentOverlay.animation.duration
+            ) {
+                if (baseSlot.looping) {
+                    overlayTarget = 0f
+                    fadeSeconds = OVERLAY_FADE_OUT_SECONDS
+                } else {
+                    promoteOverlay()
+                    handleOneShotCompletion()
+                }
+            }
+        } else if (!baseSlot.looping && baseSlot.playheadSeconds >= baseSlot.animation.duration) {
+            handleOneShotCompletion()
+        }
+    }
+
+    /** 单槽一次性动作到尾的接管（原硬切逻辑的淡入版判定在 [stop] 里实现）。 */
+    private fun handleOneShotCompletion() {
+        val idle = idleAnimation
+        if (idle != null) {
+            stop(FADE_TO_IDLE_SECONDS)
+        } else {
+            isPlaying = false
+            base = null
+            overlay = null
+            overlayWeight = 0f
+            restoreRestPose()
+        }
+    }
+
+    /** 当前「结算目标」：淡入中的 overlay（将成为 base），否则 base。 */
+    private fun settleTarget(): Slot? =
+        overlay?.takeIf { overlayTarget == 1f } ?: base
+
+    /** overlay 晋升为 base（淡入完成）。目标为 idle 时置接管/弹簧标记。 */
+    private fun promoteOverlay() {
+        val slot = overlay ?: return
+        base = slot
+        overlay = null
+        overlayWeight = 0f
+        baseTrackIndex = null
+        if (overlaySettlesIdle) {
+            idleTakeover = true
+            idleSwapPending = true
+        }
+        overlaySettlesIdle = false
+    }
+
+    /** 丢弃淡出完成的 overlay。 */
+    private fun dropOverlay() {
+        overlay = null
+        overlayWeight = 0f
+    }
+
+    /** fade 期间 base 轨道索引（key = bone\u0001path）。 */
+    private fun indexTracks(slot: Slot): Map<String, VrmaParser.HumanoidTrack> {
+        val map = mutableMapOf<String, VrmaParser.HumanoidTrack>()
+        for (track in slot.animation.humanoidTracks) {
+            if (slot.admits(track)) map[trackKey(track)] = track
+        }
+        return map
+    }
+
+    private fun trackKey(track: VrmaParser.HumanoidTrack) = "${track.boneName}/${track.path}"
+
+    // ── Slot Writing ─────────────────────────────────────────────────────
+
+    /** 单槽写入：每条轨道采样→（带提取器时剥离前向分量）→ retarget 应用。 */
+    private fun writeSlot(slot: Slot, tm: TransformManager) {
+        val anim = slot.animation
+        if (anim.duration <= 0f) return
+        val time = if (slot.looping) slot.playheadSeconds % anim.duration
+                   else slot.playheadSeconds.coerceAtMost(anim.duration)
+        // 提取的 f 与本帧采样同一时间基（单循环内插值），剥离的量与
+        // consumeExtractedForwardDelta 累积的量在循环边界恰好互补。
+        val forwardNow = slot.extractor?.forwardAt(time)
+
+        for (track in anim.humanoidTracks) {
+            if (!slot.admits(track)) continue
+            val entity = boneEntityMap[track.boneName] ?: continue
+            when (track.path) {
+                "rotation" -> writeRotation(track, time, entity, tm, 0f, null)
+                "translation" -> {
+                    val pos = interpolateVector3(track.times, track.values, time)
+                    writeTranslationSample(track, pos, anim, entity, tm, forwardNow)
+                }
             }
         }
     }
 
+    /**
+     * 双槽混合写入：共享骨骼（双方都有且都放行）按 overlay 权重混合；
+     * 单侧独有的骨骼取拥有方——mask 挡掉的轨道视同不存在（走动步态保全身、
+     * 手势 overlay 只写上半身的正交组合就在这条规则里成立）。
+     * 提取在混合期不生效（半权重步态配全额位移=滑步），hips 平移按普通
+     * 插值处理。
+     */
+    private fun writeBlended(baseSlot: Slot, overlaySlot: Slot, tm: TransformManager) {
+        val baseAnim = baseSlot.animation
+        val overlayAnim = overlaySlot.animation
+        val baseTime = if (baseAnim.duration <= 0f) 0f
+            else if (baseSlot.looping) baseSlot.playheadSeconds % baseAnim.duration
+            else baseSlot.playheadSeconds.coerceAtMost(baseAnim.duration)
+        val overlayTime = if (overlayAnim.duration <= 0f) 0f
+            else if (overlaySlot.looping) overlaySlot.playheadSeconds % overlayAnim.duration
+            else overlaySlot.playheadSeconds.coerceAtMost(overlayAnim.duration)
+        val w = overlayWeight
+
+        val baseIndex = baseTrackIndex
+        val covered = HashSet<String>()
+        // Pass 1：overlay 轨道（共享→混合，独有→直接 overlay 值）
+        for (track in overlayAnim.humanoidTracks) {
+            if (!overlaySlot.admits(track)) continue
+            val entity = boneEntityMap[track.boneName] ?: continue
+            val key = trackKey(track)
+            val baseTrack = baseIndex?.get(key)?.takeIf { baseSlot.admits(it) }
+            when (track.path) {
+                "rotation" -> {
+                    if (baseTrack != null) {
+                        covered.add(key)
+                        val qa = interpolateQuaternion(baseTrack.times, baseTrack.values, baseTime)
+                        val qb = interpolateQuaternion(track.times, track.values, overlayTime)
+                        writeRotation(track, 0f, entity, tm, w, qa, qb)
+                    } else {
+                        writeRotation(track, overlayTime, entity, tm, 0f, null)
+                    }
+                }
+                "translation" -> {
+                    if (baseTrack != null) {
+                        covered.add(key)
+                        val va = interpolateVector3(baseTrack.times, baseTrack.values, baseTime)
+                        val vb = interpolateVector3(track.times, track.values, overlayTime)
+                        val blended = floatArrayOf(
+                            va[0] + (vb[0] - va[0]) * w,
+                            va[1] + (vb[1] - va[1]) * w,
+                            va[2] + (vb[2] - va[2]) * w,
+                        )
+                        writeTranslationSample(track, blended, overlayAnim, entity, tm, null)
+                    } else {
+                        val pos = interpolateVector3(track.times, track.values, overlayTime)
+                        writeTranslationSample(track, pos, overlayAnim, entity, tm, null)
+                    }
+                }
+            }
+        }
+        // Pass 2：base 独有轨道（overlay 没绑或被 mask 挡掉）——保留 base 值。
+        // base 带提取器（走动步态 + 上半身手势 overlay 的正交组合）时，hips
+        // 平移照常剥离前向分量——overlay 挡不住 hips 归 base 独占的事实。
+        val baseTracks = baseIndex?.values ?: baseAnim.humanoidTracks
+        val baseForward = if (baseSlot.extractor != null) baseSlot.extractor!!.forwardAt(baseTime) else null
+        for (track in baseTracks) {
+            if (!baseSlot.admits(track)) continue
+            if (trackKey(track) in covered) continue
+            val entity = boneEntityMap[track.boneName] ?: continue
+            when (track.path) {
+                "rotation" -> writeRotation(track, baseTime, entity, tm, 0f, null)
+                "translation" -> {
+                    val pos = interpolateVector3(track.times, track.values, baseTime)
+                    writeTranslationSample(track, pos, baseAnim, entity, tm, baseForward)
+                }
+            }
+        }
+    }
+
+    /**
+     * 采样并写入旋转轨道。[blendWith]/[sampleB] 非 null 时为双槽混合
+     * （blendWeight = overlay 权重，两份归一化四元数 slerp 后单次 retarget），
+     * 否则按 [time] 采样单槽值。
+     */
+    private fun writeRotation(
+        track: VrmaParser.HumanoidTrack,
+        time: Float,
+        entity: Int,
+        tm: TransformManager,
+        blendWeight: Float,
+        blendWith: FloatArray?,
+        sampleB: FloatArray? = null,
+    ) {
+        var normalized = if (blendWith != null && sampleB != null) {
+            slerp(blendWith, sampleB, blendWeight)
+        } else {
+            interpolateQuaternion(track.times, track.values, time)
+        }
+
+        // VRM 0.x coordinate flip: negate x and z
+        // (three-vrm createVRMAnimationClip: i % 2 === 0 ? -v : v)
+        if (vrmMetaVersion == "0") {
+            normalized = floatArrayOf(-normalized[0], normalized[1], -normalized[2], normalized[3])
+        }
+
+        // Retarget from normalized space to target bone space:
+        // targetLocal = restLocal * inv(restWorld) * normalized * restWorld
+        val restL = boneRestLocalQuat[track.boneName] ?: QUAT_IDENTITY
+        val restW = boneRestWorldQuat[track.boneName] ?: QUAT_IDENTITY
+        val restWInv = quatInverse(restW)
+
+        // Retarget: L * (W^-1 * (norm * W))
+        val step1 = quatMultiply(normalized, restW)
+        val step2 = quatMultiply(restWInv, step1)
+        val final_ = quatMultiply(restL, step2)
+
+        applyRotation(tm, entity, track.boneName, final_)
+    }
+
+    /**
+     * 平移写入：delta 语义（相对素材 rest）+ 身高比缩放 + 可选前向分量剥离
+     * （方案 C 单槽步态）。[restHips] 取**样本所属动画**的 rest（双槽混合时
+     * 两个素材的 rest 各自正确）。
+     */
+    private fun writeTranslationSample(
+        track: VrmaParser.HumanoidTrack,
+        pos: FloatArray,
+        ownerAnim: VrmaParser.VrmaAnimation,
+        entity: Int,
+        tm: TransformManager,
+        subtractForwardAt: Float?,
+    ) {
+        // Scale by height ratio
+        val animHipsY = ownerAnim.restHipsPosition[1]
+        val scale = if (animHipsY > 0.01f) targetHipsY / animHipsY else 1.0f
+
+        // Compute DELTA from animation's rest hips position, then add
+        // to the model's actual rest local translation. This keeps the
+        // character centered and only applies relative movement.
+        val animRest = ownerAnim.restHipsPosition
+        val restMat = boneRestTransforms[track.boneName]
+        val restTx = restMat?.get(12) ?: 0f
+        val restTy = restMat?.get(13) ?: 0f
+        val restTz = restMat?.get(14) ?: 0f
+
+        if (vrmMetaVersion == "0") {
+            pos[0] = restTx + -(pos[0] - animRest[0]) * scale
+            pos[1] = restTy +  (pos[1] - animRest[1]) * scale
+            pos[2] = restTz + -(pos[2] - animRest[2]) * scale
+        } else {
+            pos[0] = restTx + (pos[0] - animRest[0]) * scale
+            pos[1] = restTy + (pos[1] - animRest[1]) * scale
+            pos[2] = restTz + (pos[2] - animRest[2]) * scale
+        }
+
+        // 方案 C：剥离烘焙的前向分量（渲染层经 consumeExtractedForwardDelta
+        // 积分进 root，与这里的剥离在循环边界互补，视觉无净差）。
+        val extractor = subtractForwardAt?.let { base?.extractor }
+        if (extractor != null) {
+            pos[0] -= extractor.forwardDir[0] * subtractForwardAt
+            pos[2] -= extractor.forwardDir[2] * subtractForwardAt
+        }
+
+        applyTranslation(tm, entity, pos)
+    }
+
     // ── Transform Application ────────────────────────────────────────────
 
-    private fun applyRotation(tm: TransformManager, instance: Int, boneName: String, quat: FloatArray) {
+    private fun applyRotation(tm: TransformManager, entity: Int, boneName: String, quat: FloatArray) {
+        val instance = tm.getInstance(entity)
+        if (instance == 0) return
         val mat = FloatArray(16)
         tm.getTransform(instance, mat)
         val tx = mat[12]; val ty = mat[13]; val tz = mat[14]

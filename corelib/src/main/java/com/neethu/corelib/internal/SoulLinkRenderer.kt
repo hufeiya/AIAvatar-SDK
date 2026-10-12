@@ -188,10 +188,46 @@ internal class SoulLinkRenderer(
     private val locomotionEngine = LocomotionEngine()
     private var walkGait: WalkGait? = null
 
+    // P2 增强（docs/locomotion-feasibility.md §11）：跑步/侧移步态槽、
+    // 走动 crossfade 时长、走动中手势 overlay 开关、当前生效步态。
+    private var walkRunGait: WalkGait? = null
+    private var strafeLeftGait: WalkGait? = null
+    private var strafeRightGait: WalkGait? = null
+
+    /** 本次走动正在驱动的步态（mode C 判定 externalGait + 速度换算都用它）。 */
+    private var activeGait: WalkGait? = null
+
+    /**
+     * 起步/停步 crossfade 时长（秒，P2 §5.2 档 2）：0 = 关（硬切回 P1 行为）。
+     * ai_cmd `walk_fade` 真机 A/B 入口。
+     */
+    private var walkFadeSeconds = 0.25f
+
+    /**
+     * 走动中 `<act:>` 手势以「上半身 mask + 淡入淡出 overlay」叠加（P2 §5.3
+     * 边走边比划）；false = 回 P1 行为（停步比划）。ai_cmd `walk_overlay` 开关。
+     */
+    private var gestureOverlayEnabled = true
+
+    /** 走动中角色逼近静态机位时自动切 FOLLOW（P1 遗留形态：走进相机粉屏）。 */
+    private val cameraApproachGuardMeters = 0.9f
+    // 相机自护的 getLookAt 复用缓冲（每帧分配逃逸）
+    private val shotEye = FloatArray(3)
+    private val shotTarget = FloatArray(3)
+    private val shotUp = FloatArray(3)
+
+    /**
+     * 方案 C 总开关（P2）：false = 强制程序位移（A/B 对拍用，ai_cmd
+     * `walk_extract`）。默认开——默认步态 Female Normal Walk 实测带 1.49m/
+     * 循环烘焙位移，提取模式消除循环回弹且步频与地面速度天然同步。
+     */
+    private var extractionEnabled = true
+
     // 过渡素材（P1 档 1，§5.2）：起步/停步剪辑可选配置；起步剪辑播放期间
     // 程序位移冻结（引擎 start-hold），播完切回步态循环。⚠库内候选素材的
     // 位移测量与取舍见 docs/locomotion-feasibility.md §5.2 标定项——默认关，
-    // ai_cmd `walk_transit` 真机 A/B 后再定默认。
+    // ai_cmd `walk_transit` 真机 A/B 后再定默认。P2 起步剪辑可带方案 C 提取
+    // （烘焙位移积分进 root，双重位移+回弹消除）。
     private var walkStartClip: WalkGait? = null
     private var walkStopClip: WalkGait? = null
     /** >0 = 起步剪辑播放中（墙钟到期切步态循环）；stopWalk 清零。 */
@@ -1008,6 +1044,7 @@ internal class SoulLinkRenderer(
         vrmaEngine = VrmaAnimationEngine(modelViewer.engine)
         // 模型切换 = 骨架/根矩阵全部重建：走动立即停止（步态配置保留，
         // 素材是 assets 路径与模型无关）
+        activeGait = null
         locomotionEngine.stopWalk()
         modelViewer.asset?.let { asset ->
             vrmaEngine?.bindToModel(asset, bytes)
@@ -1508,22 +1545,42 @@ internal class SoulLinkRenderer(
      * Stops any built-in animation that's playing. [speed] scales the clip
      * clock (walk locomotion passes groundSpeed/baseSpeed so footsteps match
      * the actual travel); the default keeps gesture behavior unchanged.
+     *
+     * P2 走动中手势 overlay（边走边比划，§5.3）：走动中收到 one-shot 手势
+     * （[loop]=false 且无显式掩码）时自动以「上半身 mask + 淡入」叠加在步态
+     * 上——腿继续走，上半身比划，播完引擎自动淡出回纯步态。[allowWalkOverlay]
+     * =false 退出该判定（走动内部分播走 [playVrmaAnimationInternal]）。
      */
-    fun playVrmaAnimation(loop: Boolean = true, speed: Float = 1f) {
+    fun playVrmaAnimation(
+        loop: Boolean = true,
+        speed: Float = 1f,
+        fadeSeconds: Float = 0f,
+        boneMask: Set<String>? = null,
+        allowWalkOverlay: Boolean = true,
+    ) {
         // Stop built-in animation
         currentAnimationIndex = -1
         // Start VRMA
         vrmaStartTime = System.nanoTime()
-        vrmaEngine?.play(loop, speed)
+        val overlayGesture = allowWalkOverlay && !loop && boneMask == null &&
+            gestureOverlayEnabled &&
+            locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE
+        val mask = if (overlayGesture) VrmaAnimationEngine.UPPER_BODY_BONES else boneMask
+        val fade = if (overlayGesture && fadeSeconds <= 0f) 0.2f else fadeSeconds
+        if (overlayGesture) {
+            android.util.Log.i("SoulLinkRenderer", "gesture overlay while walking (upper-body mask, fade=$fade s)")
+        }
+        vrmaEngine?.play(loop, speed, fade, mask, null)
         pendingSpringReset = true
     }
 
     /**
      * Stop the VRMA animation. With an idle configured the engine resumes the
      * idle loop, so restart the playback clock for a clean phase.
+     * P2：[fadeSeconds] > 0 时淡入淡出（步态淡回 idle / 手势 overlay 淡出）。
      */
-    fun stopVrmaAnimation() {
-        vrmaEngine?.stop()
+    fun stopVrmaAnimation(fadeSeconds: Float = 0f) {
+        vrmaEngine?.stop(fadeSeconds)
         vrmaStartTime = System.nanoTime()
         pendingSpringReset = true
     }
@@ -1872,37 +1929,163 @@ internal class SoulLinkRenderer(
     // ── Locomotion（自由走动，P0，docs/locomotion-feasibility.md）─────────
 
     /**
+     * Parse a gait clip and build its [WalkGait] (方案 C 提取分析在内)。
+     *
+     * [baseSpeed] ≤ 0 时自动标定：带烘焙位移的素材（非原地）用
+     * 净前向/周期求速度（提取器副产品，无需 walk-calib）；原地素材无
+     * 提取器时必须显式给速度。烘焙位移低于阈值的素材按原地处理。
+     */
+    private fun parseWalkGait(assetPath: String, baseSpeed: Float, kind: WalkGaitKind): WalkGait? {
+        val bytes = surfaceView.context.assets.open(assetPath).use { it.readBytes() }
+        val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
+        if (animation == null || animation.duration <= 0f) {
+            android.util.Log.e("SoulLinkRenderer", "Walk gait parse failed: $assetPath")
+            return null
+        }
+        val vrmFlip = vrmaEngine?.getVrmMetaVersion() == "0"
+        val modelHipsY = vrmaEngine?.modelHipsHeight() ?: 1f
+        val animHipsY = animation.restHipsPosition[1]
+        val heightScale = if (animHipsY > 0.01f) modelHipsY / animHipsY else 1f
+        val renderScale = hipsRenderScale()
+        val hipsTrack = animation.humanoidTracks.firstOrNull {
+            it.boneName == "hips" && it.path == "translation"
+        }
+        val extractor = LocomotionExtractor.analyze(
+            hipsTrack, animation.restHipsPosition, vrmFlip, heightScale, animation.duration
+        )
+        // 自动标定按世界米（提取单位 × 渲染尺度）；显式 baseSpeed（walk-calib
+        // 实测）本来就是世界口径，直接用。
+        val speed = if (baseSpeed > 0f) baseSpeed
+            else extractor?.let { it.netForwardMeters * renderScale / it.duration } ?: 0f
+        if (speed <= 0f) {
+            android.util.Log.e(
+                "SoulLinkRenderer",
+                "Walk gait '$assetPath' needs an explicit baseSpeed (in-place clip, no calibration given)"
+            )
+            return null
+        }
+        if (extractor != null) {
+            android.util.Log.i(
+                "SoulLinkRenderer",
+                "Gait '$assetPath' has baked motion: net=%.2f units/loop (%.2f m/s world, renderScale=%.2f) → 方案C extraction on"
+                    .format(extractor.netForwardMeters, speed, renderScale)
+            )
+        }
+        return WalkGait(assetPath, animation.duration, speed, kind, extractor, renderScale)
+    }
+
+    /**
+     * hips 局部 1 单位的世界渲染尺度（root→hips 链路缩放积，root 自身缩放
+     * 除掉——root 平移列不在骨骼放大链上）。⚠bindToModel 时 TransformManager
+     * 未 commit、世界矩阵陈旧（已知陷阱），本方法在运行帧读取（已 commit）：
+     * world col0 / local col0 的长度比，hips 自身无缩放时即链路积。
+     */
+    private fun hipsRenderScale(): Float {
+        val hipsEntity = vrmaEngine?.let { engine -> engineHipsEntity(engine) } ?: return 1f
+        val tm = modelViewer.engine.transformManager
+        val inst = tm.getInstance(hipsEntity)
+        if (inst == 0) return 1f
+        val world = FloatArray(16)
+        val local = FloatArray(16)
+        tm.getWorldTransform(inst, world)
+        tm.getTransform(inst, local)
+        fun len(m: FloatArray, c: Int) =
+            kotlin.math.sqrt(m[c] * m[c] + m[c + 1] * m[c + 1] + m[c + 2] * m[c + 2])
+        val wl = len(world, 0)
+        val ll = len(local, 0)
+        if (wl < 1e-6f || ll < 1e-6f) return 1f
+        return wl / ll
+    }
+
+    /** hips 的 Filament entity（经引擎已绑定的骨骼映射反查）。 */
+    private fun engineHipsEntity(engine: VrmaAnimationEngine): Int = engine.hipsEntity()
+
+    /**
      * Configure the looping walk gait used by [startWalk]. Parses the clip
      * once for validation but does NOT touch current playback.
      *
      * @param assetPath VRMA clip inside `assets/` (an in-place walk; the
      *   travel comes from the locomotion layer itself).
      * @param baseSpeed the gait's natural ground speed in m/s at playback
-     *   speed 1 — calibrate with `tools/walk-calib`; [startWalk] plays the
-     *   clip at speed/baseSpeed so footsteps match the actual travel.
+     *   speed 1 — calibrate with `tools/walk-calib`; ≤0 and the clip carries
+     *   baked root motion, the speed is auto-derived (方案 C). [startWalk]
+     *   plays the clip at speed/baseSpeed so footsteps match the travel.
      */
-    fun setWalkGait(assetPath: String, baseSpeed: Float): Boolean {
+    fun setWalkGait(assetPath: String, baseSpeed: Float): Boolean =
+        setWalkGait(assetPath, baseSpeed, WalkGaitKind.WALK)
+
+    /** [setWalkGait] 的种类扩展版（跑步/侧移槽共用）。 */
+    fun setWalkGait(assetPath: String, baseSpeed: Float, kind: WalkGaitKind): Boolean {
         return try {
-            val bytes = surfaceView.context.assets.open(assetPath).use { it.readBytes() }
-            val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
-            if (animation == null || animation.duration <= 0f) {
-                android.util.Log.e("SoulLinkRenderer", "Walk gait parse failed: $assetPath")
-                false
-            } else {
-                walkGait = WalkGait(assetPath, animation.duration, baseSpeed)
-                android.util.Log.i(
-                    "SoulLinkRenderer",
-                    "Walk gait set: $assetPath (${animation.duration}s, base=$baseSpeed m/s)"
-                )
-                true
+            val gait = parseWalkGait(assetPath, baseSpeed, kind) ?: return false
+            when (kind) {
+                WalkGaitKind.WALK -> walkGait = gait
+                WalkGaitKind.RUN -> walkRunGait = gait
+                WalkGaitKind.STRAFE_LEFT -> strafeLeftGait = gait
+                WalkGaitKind.STRAFE_RIGHT -> strafeRightGait = gait
             }
+            android.util.Log.i(
+                "SoulLinkRenderer",
+                "Gait set [$kind]: ${gait.clipAssetPath} (${gait.durationSeconds}s, base=${gait.baseSpeed} m/s)"
+            )
+            true
         } catch (e: Exception) {
             android.util.Log.e("SoulLinkRenderer", "Walk gait load failed: $assetPath", e)
             false
         }
     }
 
+    /** Configure the run gait (P2 跑步)：speed ≥ [RUN_SPEED_MPS] 时 [startWalk] 自动选用。 */
+    fun setRunGait(assetPath: String, baseSpeed: Float = 0f): Boolean =
+        setWalkGait(assetPath, baseSpeed, WalkGaitKind.RUN)
+
+    /** Configure both strafe gaits (P2 侧移)；任一失败返回 false（已成功的槽保留）。 */
+    fun setStrafeGaits(leftAssetPath: String, rightAssetPath: String, baseSpeed: Float = 0f): Boolean {
+        val left = try {
+            parseWalkGait(leftAssetPath, baseSpeed, WalkGaitKind.STRAFE_LEFT)
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Strafe gait load failed: $leftAssetPath", e)
+            null
+        }
+        val right = try {
+            parseWalkGait(rightAssetPath, baseSpeed, WalkGaitKind.STRAFE_RIGHT)
+        } catch (e: Exception) {
+            android.util.Log.e("SoulLinkRenderer", "Strafe gait load failed: $rightAssetPath", e)
+            null
+        }
+        if (left != null) strafeLeftGait = left
+        if (right != null) strafeRightGait = right
+        return left != null && right != null
+    }
+
     fun hasWalkGait(): Boolean = walkGait != null
+
+    /** 走动步态配置一览（ai_cmd walk_gait / walk_state 诊断输出）。 */
+    fun walkGaitsSummary(): String {
+        fun fmt(g: WalkGait?) = g?.let {
+            "${it.clipAssetPath}(base=%.2f%s)".format(
+                it.baseSpeed, if (it.extractor != null) ", baked" else ""
+            )
+        } ?: "off"
+        return "walk=${fmt(walkGait)} run=${fmt(walkRunGait)} " +
+            "strafeL=${fmt(strafeLeftGait)} strafeR=${fmt(strafeRightGait)}"
+    }
+
+    /** 走动 crossfade 时长（秒）：0 = 关（硬切）；`walk_fade` ai_cmd 调节。 */
+    fun getWalkFadeSeconds(): Float = walkFadeSeconds
+
+    fun setWalkFadeSeconds(seconds: Float) {
+        walkFadeSeconds = seconds.coerceIn(0f, 2f)
+        android.util.Log.i("SoulLinkRenderer", "walk fade = $walkFadeSeconds s")
+    }
+
+    /** 走动中手势 overlay（边走边比划）开关；`walk_overlay` ai_cmd 调节。 */
+    fun isGestureOverlayEnabled(): Boolean = gestureOverlayEnabled
+
+    fun setGestureOverlayEnabled(enabled: Boolean) {
+        gestureOverlayEnabled = enabled
+        android.util.Log.i("SoulLinkRenderer", "gesture overlay = $enabled")
+    }
 
     /**
      * Configure optional walk transition clips (P1 档 1, §5.2): [startAssetPath]
@@ -1913,19 +2096,16 @@ internal class SoulLinkRenderer(
      * (measured: docs/locomotion-feasibility.md §5.2) and need on-device A/B
      * (ai_cmd `walk_transit`) before any clip becomes the shipped default.
      *
+     * P2 方案 C：带烘焙位移的起步剪辑在播放期把前向分量剥离积分进 root
+     * （不再「冻结程序位移+凭空滑步」），双重位移与播完回弹同时消除。
+     *
      * @return false when any provided path fails to load/parse (config kept).
      */
     fun setWalkTransitions(startAssetPath: String?, stopAssetPath: String?): Boolean {
         fun parseOrNull(path: String?): WalkGait? {
             if (path == null) return null
             return try {
-                val bytes = surfaceView.context.assets.open(path).use { it.readBytes() }
-                val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
-                if (animation == null || animation.duration <= 0f) {
-                    android.util.Log.e("SoulLinkRenderer", "Walk transition parse failed: $path")
-                    return null
-                }
-                WalkGait(path, animation.duration, baseSpeed = 1f)
+                parseWalkGait(path, baseSpeed = 1f, kind = WalkGaitKind.WALK)
             } catch (e: Exception) {
                 android.util.Log.e("SoulLinkRenderer", "Walk transition load failed: $path", e)
                 null
@@ -1939,7 +2119,9 @@ internal class SoulLinkRenderer(
         walkStopClip = stop
         android.util.Log.i(
             "SoulLinkRenderer",
-            "walk transitions: start=${start?.clipAssetPath ?: "off"} stop=${stop?.clipAssetPath ?: "off"}",
+            "walk transitions: start=${start?.clipAssetPath ?: "off"}" +
+                (if (start?.extractor != null) " [extract]" else "") +
+                " stop=${stop?.clipAssetPath ?: "off"}",
         )
         return true
     }
@@ -1951,42 +2133,148 @@ internal class SoulLinkRenderer(
         walkStartClip?.clipAssetPath to walkStopClip?.clipAssetPath
 
     /**
+     * 走动内部分播入口：绕过公开 [playVrmaAnimation] 的手势 overlay 自动
+     * 判定（起步/步态/停步剪辑绝不能被误判成手势 overlay）。
+     */
+    private fun playVrmaAnimationInternal(
+        loop: Boolean,
+        speed: Float,
+        fadeSeconds: Float,
+        extractor: LocomotionExtractor?,
+        boneMask: Set<String>? = null,
+    ) {
+        currentAnimationIndex = -1
+        vrmaStartTime = System.nanoTime()
+        vrmaEngine?.play(loop, speed, fadeSeconds, boneMask, extractor)
+        pendingSpringReset = true
+    }
+
+    /** 速度 ≥ 此值（m/s）且配置了跑步步态时自动选用跑步（P2 跑步）。 */
+    private val RUN_SPEED_MPS = 1.9f
+
+    /**
      * Start walking toward a world-space XZ point: play the configured gait
      * on loop (timeScale = speed/baseSpeed), clear the drag offset so stale
      * hips displacement can't skew the straight line, and engage the
      * locomotion state machine. Mimic owns the bones while engaged — walking
      * under it would fight the pose lanes, so it's refused. Walking with no
      * scene loaded is refused ("walking on air" guard, 坑 4).
+     *
+     * P2：speed ≥ [RUN_SPEED_MPS] 且配置了跑步步态时自动换跑步步态；起步
+     * crossfade（[walkFadeSeconds] > 0 且有剪辑在播）把 idle→步态的硬切变
+     * 淡入淡出；带烘焙位移的步态（方案 C）由提取回灌驱动位移（externalGait）。
      */
     fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult {
         if (modelViewer.asset == null) return WalkStartResult.NO_MODEL
         if (sceneAsset == null) return WalkStartResult.NO_SCENE
         if (mimicInfo()?.engaged == true) return WalkStartResult.MIMIC_ACTIVE
-        val gait = walkGait ?: return WalkStartResult.NO_GAIT
+        val gait = (if (speed >= RUN_SPEED_MPS) walkRunGait else null) ?: walkGait
+        ?: return WalkStartResult.NO_GAIT
+        val prevGait = activeGait
+        val prevSpeed = walkSpeed
         clearHipsDragOffset()
         walkSpeed = speed
-        // 起步剪辑只在「从静止起步」时播：走动中改目标 = 步态循环继续，不重播
+        activeGait = gait
+        val external = gait.extractor != null && extractionEnabled
+        // 起步剪辑只在「从静止起步」时播：走动中改目标 = 步态循环继续，不重播。
+        // ⚠external 步态不用起步剪辑——提取位移与 hold 冻结互相打架，crossfade
+        // 已覆盖起步衔接（§5.2 档 2 取代档 1 的场景）。
         val startClip = walkStartClip?.takeIf {
-            locomotionEngine.snapshot().phase == com.neethu.corelib.WalkPhase.IDLE
+            !external && locomotionEngine.snapshot().phase == com.neethu.corelib.WalkPhase.IDLE
         }
         if (startClip != null && loadVrmaAnimation(startClip.clipAssetPath)) {
             // 起步剪辑先行（one-shot）：程序位移在引擎 start-hold 里冻结，
-            // 播完由 updateLocomotion 切回步态循环。剪辑加载失败 = 退回直启。
-            playVrmaAnimation(loop = false, speed = 1f)
+            // 剪辑自带位移（带提取器时）由回灌驱动，播完切回步态循环。
+            playVrmaAnimationInternal(loop = false, speed = 1f, fadeSeconds = 0f,
+                extractor = if (extractionEnabled) startClip.extractor else null)
             startClipDeadlineNanos = System.nanoTime() + (startClip.durationSeconds * 1_000_000_000L).toLong()
             locomotionEngine.startWalk(targetX, targetZ, speed, scenePlacement?.bounds, startClip.durationSeconds)
         } else {
             startClipDeadlineNanos = 0L
-            if (!loadVrmaAnimation(gait.clipAssetPath)) return WalkStartResult.LOAD_FAILED
-            playVrmaAnimation(loop = true, speed = speed / gait.baseSpeed)
+            // 走动中 retarget 且就是当前步态：步态循环继续，不重载不重播
+            // （重播=步态周期跳回第 0 帧，视觉顿挫）
+            val sameGaitPlaying = prevGait == gait && prevSpeed == speed &&
+                locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
+                vrmaEngine?.isActive() == true
+            if (!sameGaitPlaying) {
+                if (!loadVrmaAnimation(gait.clipAssetPath)) return WalkStartResult.LOAD_FAILED
+                playVrmaAnimationInternal(
+                    loop = true,
+                    speed = speed / gait.baseSpeed,
+                    fadeSeconds = walkFadeSeconds,
+                    extractor = if (extractionEnabled) gait.extractor else null,
+                )
+            }
             locomotionEngine.startWalk(targetX, targetZ, speed, scenePlacement?.bounds)
         }
         android.util.Log.i(
             "SoulLinkRenderer",
-            "startWalk target=(%.2f, %.2f) speed=%.2f startClip=%s bounds=%s".format(
+            "startWalk target=(%.2f, %.2f) speed=%.2f gait=%s%s startClip=%s fade=%.2f bounds=%s".format(
                 targetX, targetZ, speed,
+                gait.kind, if (external) "/extract" else "",
                 if (startClipDeadlineNanos != 0L) "on" else "off",
+                walkFadeSeconds,
                 scenePlacement?.bounds?.toString() ?: "none"
+            )
+        )
+        return WalkStartResult.STARTED
+    }
+
+    /**
+     * P2 侧移：朝向锁死横步挪 [meters] 米（[left]=true 向角色左侧）。
+     * 目标 = 当前位置 ± 角色局部 X 轴方向 × meters（投到水平面）；
+     * 步态用侧移剪辑（带烘焙位移的提取回灌驱动，原地素材程序位移直指目标）。
+     */
+    fun startStrafe(left: Boolean, meters: Float, speed: Float): WalkStartResult {
+        if (modelViewer.asset == null) return WalkStartResult.NO_MODEL
+        if (sceneAsset == null) return WalkStartResult.NO_SCENE
+        if (mimicInfo()?.engaged == true) return WalkStartResult.MIMIC_ACTIVE
+        val gait = (if (left) strafeLeftGait else strafeRightGait) ?: return WalkStartResult.NO_GAIT
+        clearHipsDragOffset()
+        walkSpeed = speed
+        activeGait = gait
+        val external = gait.extractor != null && extractionEnabled
+
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(modelViewer.asset!!.root)
+        if (instance == 0) return WalkStartResult.NO_MODEL
+        val mat = FloatArray(16)
+        tm.getTransform(instance, mat)
+        // 角色局部 X 轴（root 3×3 第 0 列）投到水平面并归一化——含
+        // transformToUnitCube 的缩放与 VRM0 的 Y-180 翻转，取方向即可
+        var lx = mat[0]
+        var lz = mat[2]
+        val len = kotlin.math.sqrt(lx * lx + lz * lz)
+        if (len < 1e-5f) {
+            // 退化（纯俯仰矩阵）：按 heading 推右侧向量
+            val h = locomotionEngine.snapshot().headingDeg.toDouble() * Math.PI / 180.0
+            lx = kotlin.math.cos(h).toFloat()
+            lz = -kotlin.math.sin(h).toFloat()
+        } else {
+            lx /= len
+            lz /= len
+        }
+        val sign = if (left) -1f else 1f
+        val distance = meters.coerceIn(0.2f, 5f)
+        val targetX = mat[12] + sign * lx * distance
+        val targetZ = mat[14] + sign * lz * distance
+
+        if (!loadVrmaAnimation(gait.clipAssetPath)) return WalkStartResult.LOAD_FAILED
+        playVrmaAnimationInternal(
+            loop = true,
+            speed = speed / gait.baseSpeed,
+            fadeSeconds = walkFadeSeconds,
+            extractor = if (extractionEnabled) gait.extractor else null,
+        )
+        locomotionEngine.startWalk(
+            targetX, targetZ, speed, scenePlacement?.bounds,
+            startHoldSeconds = 0f, headingLocked = true,
+        )
+        android.util.Log.i(
+            "SoulLinkRenderer",
+            "startStrafe %s %.1fm target=(%.2f, %.2f) gait=%s%s fade=%.2f".format(
+                if (left) "left" else "right", distance, targetX, targetZ,
+                gait.kind, if (external) "/extract" else "", walkFadeSeconds
             )
         )
         return WalkStartResult.STARTED
@@ -2003,14 +2291,20 @@ internal class SoulLinkRenderer(
         // "走→停"剪辑会凭空走出两步）
         val skippedStartClip = startClipDeadlineNanos != 0L
         startClipDeadlineNanos = 0L
+        // 方案 C：先冻结步态步速再淡出——提取步态的步进带真实位移，淡出期
+        // 继续步进=原地滑步（程序位移已停）；冻结帧→idle 的淡入无滑步。
+        if (activeGait?.extractor != null && extractionEnabled) {
+            vrmaEngine?.setPlaybackSpeed(0f)
+        }
+        activeGait = null
         locomotionEngine.stopWalk()
-        stopVrmaAnimation()
+        stopVrmaAnimation(walkFadeSeconds)
         val stopClip = walkStopClip
         if (wasWalking && !skippedStartClip && stopClip != null &&
             loadVrmaAnimation(stopClip.clipAssetPath)
         ) {
             // one-shot：播完引擎自动接管 idle 循环
-            playVrmaAnimation(loop = false, speed = 1f)
+            playVrmaAnimationInternal(loop = false, speed = 1f, fadeSeconds = 0f, extractor = null)
         }
         if (wasWalking) {
             onWalkFinished?.invoke(com.neethu.corelib.WalkFinished(arrived = false, x = s.x, z = s.z))
@@ -2019,6 +2313,14 @@ internal class SoulLinkRenderer(
 
     fun walkSnapshot(): WalkSnapshot = locomotionEngine.snapshot()
 
+    /** 方案 C 提取总开关（ai_cmd `walk_extract` A/B 用）。 */
+    fun isExtractionEnabled(): Boolean = extractionEnabled
+
+    fun setExtractionEnabled(enabled: Boolean) {
+        extractionEnabled = enabled
+        android.util.Log.i("SoulLinkRenderer", "walk extraction = $enabled")
+    }
+
     /**
      * Per-frame root motion: read the authoritative root translation, ask the
      * state machine for this frame's motion, apply translation + world-Y
@@ -2026,6 +2328,11 @@ internal class SoulLinkRenderer(
      * orthogonal to the bone-local writes above; arrival switches back to the
      * idle loop (or plays the stop clip first). Also orchestrates the start
      * clip → gait loop handoff.
+     *
+     * P2 新增三条：方案 C 提取位移回灌进 root（externalGait 时程序位移由
+     * 引擎置 0，素材步进顶上）；mode C 每帧以 commandedSpeed 设步态变速
+     * （制动/ease 自动生效，起步剪辑期除外——剪辑按自然速度播）；角色逼近
+     * 静态机位时自动切 FOLLOW（P1 遗留「走进相机粉屏」形态的自护）。
      */
     private fun updateLocomotion(dtSeconds: Float) {
         val asset = modelViewer.asset ?: return
@@ -2035,35 +2342,79 @@ internal class SoulLinkRenderer(
 
         // 起步剪辑到期 → 切步态循环（引擎 start-hold 同帧到期，程序位移恢复）
         if (startClipDeadlineNanos != 0L) {
-            val gait = walkGait
+            val gait = activeGait
             if (System.nanoTime() >= startClipDeadlineNanos) {
                 startClipDeadlineNanos = 0L
                 if (gait != null && locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
                     loadVrmaAnimation(gait.clipAssetPath)
                 ) {
-                    playVrmaAnimation(loop = true, speed = walkSpeed / gait.baseSpeed)
+                    playVrmaAnimationInternal(
+                        loop = true,
+                        speed = walkSpeed / gait.baseSpeed,
+                        fadeSeconds = walkFadeSeconds,
+                        extractor = if (extractionEnabled) gait.extractor else null,
+                    )
                 }
             }
         }
 
         val mat = FloatArray(16)
         tm.getTransform(instance, mat)
-        val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14])
+        val external = activeGait?.extractor != null
+        val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14], external)
         if (motion != null) {
             rotateRootAroundY(mat, motion.dHeadingRad)
             mat[12] += motion.dx
             mat[13] += motion.dy
             mat[14] += motion.dz
             tm.setTransform(instance, mat)
+            // mode C：起步剪辑播完后步态变速跟随指令速度（提取步长随之缩放）
+            if (external && startClipDeadlineNanos == 0L) {
+                vrmaEngine?.setPlaybackSpeed(motion.commandedSpeedMps / (activeGait?.baseSpeed ?: 1f))
+            }
+        }
+        // 方案 C 回灌：步态/起步剪辑提取的前向位移映到世界。⚠骨骼写入的
+        // 位移被 root→hips 链路缩放（renderScale）放大，root 平移列不在放大
+        // 链上——补回同样的倍数，剥离与回灌才严格抵消（否则 unit-cube 大
+        // 缩放模型上走动速度差一个数量级，真机实测 0.13 m/s 爬行即此因）。
+        // 方向用 root 旋转（归一化，剔除 mat 自带缩放/翻转），乘 renderScale。
+        val extracted = vrmaEngine?.consumeExtractedForwardDelta() ?: 0f
+        if (extracted != 0f && extractionEnabled) {
+            vrmaEngine?.extractorForwardDir()?.let { dir ->
+                val scale = activeGait?.renderScale ?: 1f
+                val step = extracted * scale
+                val c0x = mat[0]; val c0z = mat[2]
+                val c2x = mat[8]; val c2z = mat[10]
+                val l0 = kotlin.math.sqrt(c0x * c0x + c0z * c0z).coerceAtLeast(1e-6f)
+                val l2 = kotlin.math.sqrt(c2x * c2x + c2z * c2z).coerceAtLeast(1e-6f)
+                val wx = (c0x / l0) * dir[0] * step + (c2x / l2) * dir[2] * step
+                val wz = (c0z / l0) * dir[0] * step + (c2z / l2) * dir[2] * step
+                mat[12] += wx
+                mat[14] += wz
+                tm.setTransform(instance, mat)
+            }
+        }
+        // 相机自护：静态机位下角色走近到脸前 → 自动切 FOLLOW 跟拍
+        if (motion != null && activeShot != null && activeShot != CameraShot.FOLLOW) {
+            cameraManipulator.getLookAt(shotEye, shotTarget, shotUp)
+            val dx = mat[12] - shotEye[0]
+            val dy = mat[13] - shotEye[1]
+            val dz = mat[14] - shotEye[2]
+            if (dx * dx + dy * dy + dz * dz < cameraApproachGuardMeters * cameraApproachGuardMeters) {
+                android.util.Log.i("SoulLinkRenderer", "avatar approaching static camera → FOLLOW")
+                setCameraShot(CameraShot.FOLLOW)
+            }
         }
         if (locomotionEngine.consumeArrived()) {
             val s = locomotionEngine.snapshot()
-            // 到达：配置了停步剪辑就播（one-shot 播完自动接管 idle），否则直接回 idle
+            activeGait = null
+            // 到达：配置了停步剪辑就播（one-shot 播完自动接管 idle），否则
+            // crossfade 淡回 idle（fade=0 时硬切，P1 行为）
             val stopClip = walkStopClip
             if (stopClip != null && loadVrmaAnimation(stopClip.clipAssetPath)) {
-                playVrmaAnimation(loop = false, speed = 1f)
+                playVrmaAnimationInternal(loop = false, speed = 1f, fadeSeconds = 0f, extractor = null)
             } else {
-                stopVrmaAnimation()
+                stopVrmaAnimation(walkFadeSeconds)
             }
             onWalkFinished?.invoke(com.neethu.corelib.WalkFinished(arrived = true, x = s.x, z = s.z))
         }

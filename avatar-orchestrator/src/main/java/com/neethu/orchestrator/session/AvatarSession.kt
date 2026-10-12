@@ -247,6 +247,7 @@ class AvatarSession(
         set(value) {
             field = value
             locomotionDriver?.anchors = value
+            ensureWalkLegRelay()
         }
 
     /**
@@ -359,6 +360,12 @@ class AvatarSession(
         }
         // 走动完成事件（自由走动 P1，docs/locomotion-feasibility.md §7.4）：corelib
         // 渲染层到达/停步 → AvatarEvent，UI 信息行与对话逻辑共用同一出口。
+        // P2 waypoint 的**续腿订阅**走 [ensureWalkLegRelay]（下方，惰性幂等）：
+        // 不能在 init 里一次性注册——demo 的 session 会在配置变化时重建且旧
+        // 实例 scope 不取消（共享 scope，close() 不取消 job），旧实例的僵尸
+        // collector 收走事件只会转给它自己的空队列 driver（真机实测多段腿断
+        // 在第二段即此因）；锚点注入（[locomotionAnchors] setter）时再注册，
+        // 读的是当下确定的 driver。
         controller?.walkFinished?.let { walkFlow ->
             scope.launch {
                 walkFlow.collect { finished ->
@@ -370,6 +377,7 @@ class AvatarSession(
                 }
             }
         }
+        ensureWalkLegRelay()
         queue.listener = object : PlaybackQueue.Listener {
             override fun onPlaybackStarted(item: PlaybackItem) {
                 queue.active()?.let { faceDriver?.onPlaybackStarted(item, it) }
@@ -777,6 +785,23 @@ class AvatarSession(
         interrupt("close")
         faceDriver?.stop()
         queue.release()
+    }
+
+    /**
+     * P2 waypoint 多段腿：把 controller.walkFinished 转交给
+     * [locomotionDriver]（到达=续走下一段，停步=清队列）。惰性幂等——
+     * init 时 driver 可能尚未确定（demo 里 enableLlmMove 随 prefs 异步
+     * 到位），[locomotionAnchors] 注入时（会话接线 effect）再调一次；
+     * 重复调用不重复订阅。
+     */
+    private var walkLegRelayJob: kotlinx.coroutines.Job? = null
+    private fun ensureWalkLegRelay() {
+        if (walkLegRelayJob != null) return
+        val driver = locomotionDriver ?: return
+        val flow = controller?.walkFinished ?: return
+        walkLegRelayJob = scope.launch {
+            flow.collect { driver.onWalkFinished(it.arrived) }
+        }
     }
 
     // ── Turn internals ────────────────────────────────────────────────────

@@ -38,10 +38,15 @@
 | `set_idle` | `ai_arg`=文件名片段 | 把一个 .vrma 设为循环待机（LLM 手势播完/手动停止后回到它），持久化到 demo_settings；不设则用内置优先级自动选（Idle Stand Looking Around 优先） |
 | `idle_off` | — | 清除待机，一次性动作播完回落 rest pose |
 | `move` | `ai_x` `ai_y` `ai_z` | 平移人物（世界坐标米）：+x 右、+y 上、+z 朝相机 |
-| `walk_to` | `ai_x` `ai_z`，可选 `ai_arg`=速度 m/s；或 `ai_arg`=锚点名 | **自由走动**（docs/locomotion-feasibility.md P0/P1）：走向世界坐标点或锚点（词表见 `anchors`），原地转身对齐（~20° 门限）后沿朝向前进，接近段提前制动减速（v=sqrt(2·a·d)），越界目标 clamp 进场景 meta 的 bounds；需要已加载场景（corelib 硬守卫 NO_SCENE）；步态首次自动配置（Female Normal Walk，baseSpeed 1.22 m/s 由 tools/walk-calib 实测），播放 timeScale=速度/基准速度保证脚步与位移同步；到达（≤6cm）减速停步回待机。配 `camera_shot follow` 跟拍 |
-| `walk_stop` | — | 立即停步（回待机循环；配置了停步过渡剪辑则先播剪辑再回待机） |
-| `walk_state` | — | 走动状态快照：phase（IDLE/TURNING/WALKING）/位置/朝向/目标/速度 + 步态与场景对位信息 |
-| `anchors` | — | 列出会话注入的走动锚点表（`<move:>` 词表 = move_to 工具白名单，`assets/scene/home.anchors.json`）；无会话/空表给出原因行 |
+| `walk_to` | `ai_x` `ai_z`，可选 `ai_arg`=速度 m/s；或 `ai_arg`=锚点名 | **自由走动**（docs/locomotion-feasibility.md P0/P1/P2）：走向世界坐标点或锚点（词表见 `anchors`；锚点名走 driver——**links 图拓扑时 BFS 路由多段腿**，回显「via waypoints」）；接近段提前制动减速（v=sqrt(2·a·d)），越界目标 clamp 进场景 meta 的 bounds；需要已加载场景（corelib 硬守卫 NO_SCENE）；步态首次自动配置（walk/run/strafe 一次配齐）；到达（≤6cm）停步 **crossfade 淡回待机**（P2）。配 `camera_shot follow` 跟拍 |
+| `walk_stop` | — | 立即停步（crossfade 淡回待机；配置了停步过渡剪辑则先播剪辑再回待机） |
+| `walk_state` | — | 走动状态快照：phase/位置/朝向/目标/速度 + 步态槽一览（walk/run/strafeL/strafeR，baked=带烘焙位移）+ fade/overlay/extract 开关 + 场景对位 |
+| `walk_gait` | — | 步态槽一览（P2）：walk/run/strafeL/strafeR 素材路径+基准速度+烘焙位移标记 |
+| `walk_strafe` | `ai_arg`=left\|right，可选 `ai_x`=米（默认 1.0）`ai_z`=速度 | **P2 侧移**：朝向锁死横步挪（不转身），侧移步态自动配置；带烘焙位移由提取回灌驱动 |
+| `walk_fade` | 空=查看；`ai_arg`=秒（0~2，0=硬切） | **P2 走动起步/停步 crossfade 时长**；默认 0.25s |
+| `walk_overlay` | `on` \| `off` \| `status` | **P2 边走边比划开关**：走动中 one-shot 手势以上半身 mask overlay 叠加（播完自动淡出）；off=停步比划（P1 行为） |
+| `walk_extract` | `on` \| `off` \| `status` | **P2 方案 C 位移提取总开关**（A/B 对拍用）：带烘焙位移步态的 hips 前向分量剥离回灌 root；off=程序位移（P1 行为） |
+| `anchors` | — | 列出会话注入的走动锚点表（`<move:>` 词表 = move_to 工具白名单，`assets/scene/home.anchors.json`；⇄ 标记 waypoint links）；无会话/空表给出原因行 |
 | `walk_transit` | `ai_arg`：空=查看；`off`=清除；`start <assets/*.vrma>` / `stop <assets/*.vrma>` | **P1 过渡剪辑 A/B 入口**（docs/locomotion-feasibility.md §5.2）：起步剪辑播放期程序位移冻结、播完切步态循环；停步剪辑 one-shot 播完自动回待机。默认关（库内起步候选带 0.8~1.7m root motion 会双重位移，测量见交接文档坑 23） |
 | `scene_offset` | `ai_x` `ai_y` `ai_z` | 对位标定探针：把已加载场景平移指定米数（在 load 抓拍的基准上累计，不逐次叠加）；回显可直接抄进 `assets/scene/<场景>.meta.json` 的 placement JSON |
 | `scene_rot` | `ai_x`=度 | 对位标定探针：把已加载场景绕 Y 轴旋转指定度数；同 scene_offset 回显 meta |

@@ -1423,7 +1423,7 @@ private fun DemoScreen(
             AgentToolCatalog.stopMoving(promptTextsOf(uiState.lang)) { s.locomotionDriver }
                 .let { (spec, exec) -> s.tools.register(spec, exec) }
             if (!controller.isWalkGaitConfigured()) {
-                controller.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
+                ensureWalkGaits(controller)
             }
         } else if (!wantTools) {
             s.tools.unregister("move_to")
