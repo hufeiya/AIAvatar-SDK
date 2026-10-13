@@ -66,6 +66,8 @@ class RoundtableSession(
     slots: List<Pair<StageSlotSpec, AvatarSession>>,
     /** null = 不做注视接力（headless/无舞台形态照常可用）。 */
     private val gaze: StageGazeRelay? = null,
+    /** null = 不做站位编排（开题不移动，行为与 P2 一致）。 */
+    private val floor: StageFloorRelay? = null,
     /** 导演策略（P2 圆桌）：默认规则档；[setDirector] 运行时热切换。 */
     director: DirectorPolicy = DirectorPolicy.Rule(),
 ) {
@@ -127,6 +129,16 @@ class RoundtableSession(
     @Volatile
     private var pendingUserLine: String? = null
 
+    // ── P3 站位编排（开题走向对谈位）──────────────────────────────────────
+
+    /** 还没走到对谈位的槽位；null = 无编排在途。 */
+    private var formationPending: MutableSet<String>? = null
+    /** 编排完成后的互指目标（slot → 面向点），到位时逐槽 faceTowards。 */
+    private var formationFaces: Map<String, Pair<Float, Float>> = emptyMap()
+    /** 站位期间扣住的首轮批（话题行），全员到位/超时后才交导演。 */
+    private var heldBatch: List<RoundtableLine>? = null
+    private var formationJob: Job? = null
+
     /** 授予回合内逐句累积的干净文本（TurnCompleted 时成为 transcript 一行）。 */
     private val turnText = HashMap<String, StringBuilder>()
     /** 圆桌 transcript（含用户行；LLM 档导演的上下文与复读检测的语料）。 */
@@ -174,11 +186,14 @@ class RoundtableSession(
      * TTS+播放静音）由 AvatarSession 自理；空闲会话不碰（打断一个 IDLE 会话
      * 无意义且会误伤未来回合）。P2：在途的导演裁决与授予一并同步清空（话题
      * 暂停，等下一次插话重新走导演；迟到的 PlaybackInterrupted 见
-     * onDirectorEvent 的 phase 检查）。
+     * onDirectorEvent 的 phase 检查）。P3：在途站位编排一并取消（扣住的
+     * 首轮批丢弃，等下一次插话重新走导演；已起步的走动不追停——走到位站着
+     * 不说话，比半路急停自然）。
      */
     fun interrupt() {
         directorJob?.cancel()
         directorJob = null
+        cancelFormation("打断：话题暂停")
         if (grantedSlotId != null) {
             grantedSlotId = null
             turnText.clear()
@@ -195,6 +210,10 @@ class RoundtableSession(
      * 开题（§4.3）：话题文本广播进全部槽位历史（【用户】前缀），导演授予
      * 首个发言权（规则档：最后对话对象优先）。之后每轮：发言完成 →
      * fanout → 导演裁决下一个开口者 → 前缀槽注入「轮到你/保持倾听」。
+     *
+     * P3 站位编排：接了 [floor] 且台上 ≥2 人就位时，先全员走向对谈位
+     * （锚点优先、推导落点兜底），全员到位后互相对着再交导演开轮；
+     * [FORMATION_TIMEOUT_MS] 内到不齐就原地开题（边走边说本就支持）。
      *
      * @return false = 话题为空或台上无会话。
      */
@@ -218,11 +237,11 @@ class RoundtableSession(
         val line = RoundtableLine(null, USER_NAME, t)
         transcriptAdd(line)
         directorLogAdd("● 开题：$t")
-        decideAndGrant(listOf(line))
+        beginFormation(listOf(line))
         return true
     }
 
-    /** 停题（用户主动）：打断全部在途发言/裁决，状态回 IDLE，不播收场白。 */
+    /** 停题（用户主动）：打断全部在途发言/裁决/编排，状态回 IDLE，不播收场白。 */
     fun stopRoundtable() {
         if (_state.value == RoundtableState.IDLE && grantedSlotId == null) return
         interrupt()
@@ -265,7 +284,9 @@ class RoundtableSession(
         append(" lastAddressed=${lastAddressedId ?: "-"}")
         if (_state.value != RoundtableState.IDLE) {
             append(" topic[${_state.value.name.lowercase()} r=$round/${directorPolicy.maxRounds}")
-            append(" director=${directorPolicy.label} pending=${pendingUserLine != null}]")
+            append(" director=${directorPolicy.label} pending=${pendingUserLine != null}")
+            formationPending?.let { append(" forming=${it.joinToString("/")}") }
+            append("]")
             append("=\"${topic.take(12)}\"")
         }
         sessionById.forEach { (id, session) ->
@@ -288,6 +309,12 @@ class RoundtableSession(
         // P2：授予回合的句子累积（TurnCompleted 时拼成 transcript 一行）
         if (event is AvatarEvent.SentenceQueued && slotId == grantedSlotId) {
             turnText.getOrPut(slotId) { StringBuilder() }.append(event.text)
+        }
+        // P3：站位编排便的到达/中断（任何来源的走动事件都过这里，编排在途才消费）
+        when (event) {
+            is AvatarEvent.WalkArrived -> onFormationArrival(slotId)
+            is AvatarEvent.WalkInterrupted -> onFormationAbort(slotId)
+            else -> Unit
         }
         val relay = gaze ?: run { onDirectorEvent(slotId, event); return }
         when (event) {
@@ -354,17 +381,133 @@ class RoundtableSession(
         }
     }
 
+    // ── P3 站位编排（开题走向对谈位，互相对着、用户在侧）─────────────────
+
+    /**
+     * 开题的第一段：能排就排（全员走向对谈位，首轮批扣住），排不了
+     * （无 floor / 在位不足 2 人 / 全员没起步）直接交导演开轮。
+     */
+    private fun beginFormation(batch: List<RoundtableLine>) {
+        val relay = floor ?: return decideAndGrant(batch)
+        val online = specs.filter { sessionById[it.id] != null }
+        val positions = online.mapNotNull { s -> relay.positionOf(s.id)?.let { s.id to it } }.toMap()
+        Log.i(TAG, "formation: online=${online.map { it.id }} positions=$positions")
+        val plans = StageFormation.plan(
+            positions = positions,
+            anchors = online.mapNotNull { s ->
+                relay.conversationAnchor(s.id)?.let { (name, xz) -> s.id to xz }
+            }.toMap(),
+            camera = relay.cameraXZ(),
+        )
+        if (plans.isEmpty()) {
+            Log.i(TAG, "formation: no plans (online=${positions.size}) → direct grant")
+            return decideAndGrant(batch)
+        }
+
+        val pending = mutableSetOf<String>()
+        val faces = mutableMapOf<String, Pair<Float, Float>>()
+        for (plan in plans) {
+            val anchor = relay.conversationAnchor(plan.slotId)
+            fun dispatch(): Boolean =
+                if (anchor != null) relay.walkToAnchor(plan.slotId, anchor.first)
+                else relay.walkToPoint(plan.slotId, plan.x, plan.z)
+            var started = dispatch()
+            if (!started) {
+                // 走动中（坑 9 防抖拒绝）：开题是显式指令，编排走位让在途走动
+                // 让路——停步重试一次。防抖纪律管的是「模型连发 move 标签」，
+                // 不该拦住话题编排。
+                Log.i(TAG, "formation: ${plan.slotId} busy → stop & retry")
+                relay.stopWalking(plan.slotId)
+                started = dispatch()
+            }
+            Log.i(TAG, "formation: $plan anchor=${anchor?.first} started=$started")
+            if (started) {
+                pending += plan.slotId
+                faces[plan.slotId] = plan.faceX to plan.faceZ
+            }
+        }
+        if (pending.isEmpty()) {
+            Log.i(TAG, "formation: all walks rejected → direct grant")
+            return decideAndGrant(batch)
+        }
+        formationPending = pending
+        formationFaces = faces
+        heldBatch = batch
+        directorLogAdd("站位编排：${pending.joinToString("、")}走向对谈位")
+        formationJob = scope.launch {
+            kotlinx.coroutines.delay(FORMATION_TIMEOUT_MS)
+            onFormationTimeout()
+        }
+    }
+
+    /** 到达便签：多段腿中途的到达不算（isEnRoute 过滤），全员落地才收队。 */
+    private fun onFormationArrival(slotId: String) {
+        val pending = formationPending ?: return
+        if (slotId !in pending) return
+        val enRoute = floor?.isEnRoute(slotId) == true
+        Log.i(TAG, "formation: arrived $slotId enRoute=$enRoute left=${pending - slotId}")
+        if (enRoute) return
+        pending.remove(slotId)
+        if (pending.isEmpty()) finishFormation(face = true)
+    }
+
+    /** 中断便签（用户/模型半路停步）：该槽放弃对位（含对视目标），其余到齐照常收队。 */
+    private fun onFormationAbort(slotId: String) {
+        val pending = formationPending ?: return
+        if (!pending.remove(slotId)) return
+        formationFaces = formationFaces - slotId
+        if (pending.isEmpty()) finishFormation(face = formationFaces.isNotEmpty())
+    }
+
+    private fun onFormationTimeout() {
+        val pending = formationPending ?: return
+        directorLogAdd("站位超时（${pending.joinToString("、")}未到），原地开题")
+        finishFormation(face = false)
+    }
+
+    /** 收队：互相对着（可选），扣住的首轮批交导演。 */
+    private fun finishFormation(face: Boolean) {
+        formationJob?.cancel()
+        formationJob = null
+        val faces = formationFaces
+        formationPending = null
+        formationFaces = emptyMap()
+        val batch = heldBatch
+        heldBatch = null
+        Log.i(TAG, "formation: finish face=$face faces=${faces.keys}")
+        if (face && faces.isNotEmpty()) {
+            faces.forEach { (slotId, target) ->
+                val ok = floor?.faceTowards(slotId, target.first, target.second) ?: false
+                if (!ok) Log.i(TAG, "faceTowards rejected for $slotId")
+            }
+            directorLogAdd("对谈位就位，互相对着")
+        }
+        if (batch != null) decideAndGrant(batch)
+    }
+
+    /** 取消编排（打断/停题）：扣住的批丢弃；已起步的走动不追停。 */
+    private fun cancelFormation(logEntry: String) {
+        if (formationPending == null) return
+        formationJob?.cancel()
+        formationJob = null
+        formationPending = null
+        formationFaces = emptyMap()
+        heldBatch = null
+        directorLogAdd(logEntry)
+    }
+
     /**
      * 圆桌插话（话题进行中的 sendFromUser 分支）。点名（@/称呼）直授被点名
      * 者；无点名 = 广播进 transcript 由导演决定谁接（§4.6 规则 3）——此时
      * 不依赖 lastAddressed（没人被点过名也能插话，导演兜底）。
+     * P3：站位编排期间一律排队（首轮批还扣着，直授会把话塞进走位中）。
      */
     private fun roundtableInterject(text: String): String? {
         val target = router.route(text, lastAddressedId) as? RoutingDecision.Target
         if (target != null) lastAddressedId = target.slotId
         val cleaned = target?.cleanedText ?: text
-        if (grantedSlotId != null) {
-            // 正在发言/思考：排队等本轮结束（上一条未回应的插话被覆盖，日志留痕）
+        if (grantedSlotId != null || formationPending != null) {
+            // 正在发言/思考/走位：排队等本轮结束（上一条未回应的插话被覆盖，日志留痕）
             if (pendingUserLine != null) directorLogAdd("插话覆盖：上一条未及回应")
             pendingUserLine = cleaned
             directorLogAdd("用户插话排队：${cleaned.take(16)}")
@@ -554,6 +697,13 @@ class RoundtableSession(
 
         /** 连续复读 strikes 上限（第 N 次命中即收场，防互捧死循环）。 */
         private const val MAX_REPEAT_STRIKES = 2
+
+        /**
+         * 站位编排的等待上限（P3）：全员到齐提前收队；超时原地开题（边走边说
+         * 本就支持，不因走位卡死话题）。15s = 远点→锚点的 waypoint 两段腿
+         * （转身+走+终末段减速逼近）的实测余量。internal 供单测用虚拟时间驱动。
+         */
+        internal const val FORMATION_TIMEOUT_MS = 15_000L
 
         /** 受命者的逐轮前缀槽（§4.4：逐轮变化、不进 store、不碰钉住协议块）。 */
         private const val GRANTED_LINE =

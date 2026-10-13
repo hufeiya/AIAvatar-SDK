@@ -92,9 +92,14 @@ enum class WalkStartResult {
  * [arrived]=true means the state machine reached the target; false means the
  * walk was cancelled (user/LLM stop, interrupt). Coordinates are the final
  * root position (meters, world XZ).
+ *
+ * [avatarId]（多虚拟人 P3）：舞台路径（[com.neethu.corelib.stage.AvatarRuntime]）
+ * 填演员 id（"A"/"B"），单人路径为空串——合流消费方（站位编排/调试通道）凭它
+ * 归属事件，不靠「哪条流」猜。
  */
 data class WalkFinished(
     val arrived: Boolean,
     val x: Float,
     val z: Float,
+    val avatarId: String = "",
 )

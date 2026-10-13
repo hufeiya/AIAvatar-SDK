@@ -1,7 +1,7 @@
 {
   "anchors": [
     { "name": "carpet", "x": 0.0, "z": -4.0, "label": "地毯中央", "labelEn": "the carpet in the middle of the room",
-      "links": ["bed", "window", "tv", "desk"] },
+      "links": ["bed", "window", "tv", "desk", "stage_a", "stage_b"] },
     { "name": "bed", "x": -2.4, "z": -4.3, "label": "床边", "labelEn": "the bed",
       "links": ["carpet"] },
     { "name": "window", "x": 2.0, "z": -4.4, "label": "窗帘窗边", "labelEn": "the curtained window",
@@ -9,6 +9,10 @@
     { "name": "tv", "x": 1.2, "z": -4.8, "label": "电视柜前", "labelEn": "the TV stand",
       "links": ["carpet", "window"] },
     { "name": "desk", "x": 0.1, "z": -5.5, "label": "书桌前", "labelEn": "the desk",
+      "links": ["carpet"] },
+    { "name": "stage_a", "x": -0.8, "z": -4.0, "label": "圆桌左位", "labelEn": "the roundtable seat on the left",
+      "links": ["carpet"] },
+    { "name": "stage_b", "x": 0.8, "z": -4.0, "label": "圆桌右位", "labelEn": "the roundtable seat on the right",
       "links": ["carpet"] }
   ]
 }

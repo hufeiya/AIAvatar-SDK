@@ -406,3 +406,18 @@ stageSession.sendFromUser(text = "你们怎么看…")     // 内部走 InputRou
 **已知限制（记入后续期）**：语音三链路仍未接舞台（P1 遗留，打字/adb 已闭环）；LLM 档导演默认绑硅基流动一家（prefs 可换模型，不换商）；「交回用户」后无 UI 提示位（仅导演日志/字幕可见，state=WAITING_USER）；圆桌发言进记忆提炼走既有窗口节奏（批量提炼在话题收场后数轮才触发，属预期）；`<cam:>` 标签多人并发仍是 P1 的「最后说话者赢」仲裁。
 
 ---
+
+## 十四、P3 实现记录（2026-10-13，已真机验收）
+
+**落地形态：空间智能三件套（站位编排/原地转向/双人同框）+ 走动事件带身份，单人路径仅枚举扩值一处分支。**
+
+- **corelib**：`CameraShot.GROUP_SHOT`（双人同框）+ `internal/GroupShotMath.kt`（pivot=头部均值、距离按最远头距 ×3.2 缩放【竖屏水平视场窄，2.2 版真机两人挤边框，3.2 修正】、下限 3.0m；只吃世界骨锚不吃相机状态——坑 22 自参照固化在输入层面不成立）；`Stage.setGroupShot(显式名单)`/`setCameraShot(GROUP_SHOT)=全体同框`，group 与 follow 同为「永不到达」跟踪机位但 yaw/pitch 固定常量；单人 `SoulLinkRenderer` 仅在 when 加 GROUP_SHOT→FULL_SHOT 别名分支（枚举穷尽性所迫，语义安全）。`LocomotionEngine.startTurnTo`（原地转向纯转模式：只转不挪、对齐 ±3.4° 即到达、走动中拒绝、startWalk/stopWalk 退出）+ `AvatarRuntime.turnTo`（无步态要求；到达分支加 wasWalking 守卫——纯转向不播停步剪辑不灭 idle）+ `AvatarHandle.turnTo`；`WalkFinished` 加 `avatarId`（默认空串=单人路径零变化，舞台填演员 id，合流消费方凭它归属）。
+- **orchestrator**：`roundtable/StageFloor.kt`（新）——`StageFloorRelay` 能力缝（对谈锚点/走锚点/走坐标/原地转向/停步/位置/相机位/在途判定）+ `StageFormation` 纯数学（两人沿「相机→质心」垂直轴排开互指对方落点=「互相对着、用户在侧」，少走路择向；3+ 人正多边形环布面朝圆心；锚点坐标并入后互指按最终落点算）。`RoundtableSession` 加 `floor` 缝：开题先 `beginFormation`（全员走向对谈位、首轮批扣住），到达便签经 `WalkArrived` 事件（多段腿用 `isEnRoute` 过滤中途到达），全员落地→逐槽 `faceTowards` 互相对着→才交导演开轮；15s 超时原地开题（边走边说兜底）；打断/停题取消编排（扣住的批丢弃，已起步的走动不追停）；站位期间插话一律排队。**真机发现的真缺口**：开题时槽位还在走动中→`walkTo` 被坑 9 防抖全拒→静默跳过编排——修为「开题是显式指令，走位让路」：被拒先 `stopWalking` 再重试一次（防抖纪律管模型连发，不拦话题编排）。`AvatarSession` relay 生命周期修正：走动事件 collector 与续腿 relay 记名、`close()` 撤销——facade 重建（close 旧实例）后僵尸 relay 结构性不可能。`<cam:group>` 进 LLM 词表（CAMERA_SHOTS + PromptTexts）。
+- **app**：rig 实现 `StageFloorRelay`（锚点约定 `stage_<slot 小写>`；走动复用 `<move:锚点>` 全链=LocomotionDriver.walkTo；推导落点走合成锚点同名链）；home.anchors.json 加 `stage_a(-0.8,-4)/stage_b(0.8,-4)` 圆桌席位（carpet 互连，`<move:>` 词表同步可见）；STAGE_CMD 加 `cam group`/`turn A x z`，面板加「同框」按钮。
+- **导演注视接力零改动**（P1 的 SentenceStarted→听众看发言者、回合完回看镜头在圆桌链路天然成立），P3 补的是对谈位的身体朝向（turnTo）与注视分层（root 朝向+头部注视叠加，互不冲突）。
+
+**真机验收（Redmi K20 Pro / SD855，A=硅基 DeepSeek-V4-Flash/小柔，B=火山 doubao/小刚）**：走动中开题→日志时序「stop & retry→STARTED→B 到(3s)→A 到(6s)→finish face=true→faceTowards 双双受理→才开轮」，导演日志完整呈现「开题→站位编排→对谈位就位互相对着→授予」；到位后 heading A=89°/B=-88° 精确互相对着；话题 4 轮自然收场；`cam group` 三连截帧=静态双人全身同框→A 走动中机位持续跟踪→到达后随头距收紧，稳定不漂（修 2.2→3.2 取景）；`turn` 命令 bounds clamp 精确（目标 z=2 被 clamp 到 maxZ=-2.1 后 atan2 终向 57°/32° 与理论逐位吻合，正交方向 -89°≈-90°）；走动中 TTS 三段 clip 连续不断流；发言时听众转头看发言者（同框截帧目视）；×2 force-stop 零崩溃重启 54fps；全程 46-58fps。单测 +31 全量 818 全绿（GroupShotMath 6 / LocomotionEngine 纯转 5 / StageFormation 7 / 编排流程 8 + 让路接管等，含 advanceUntilIdle 会推过 10s 超时的虚拟时钟坑——编排用例改 runCurrent）。
+
+**已知限制（记入后续期）**：走动终末段减速逼近在 6cm 到达阈上偶有数秒爬行（P2 既有特性，编排靠 15s 超时+让路兜住；根治=到达判定与提取回灌解耦， locomotion 后续期）；`isEnRoute` 读当前 session 的 driver，跨槽混用 debug 场景未防；非焦点 runtime 降频未做（P0 的 stride=2 已覆盖双人）；`<cam:>` 标签仍会抢占 group 机位（最后说话者赢，P1 仲裁语义未变）；导演 LLM 档在火山侧偶发慢响应（B thinking 数十秒，服务商侧现象非本层）。
+
+---

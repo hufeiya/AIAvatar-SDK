@@ -257,6 +257,7 @@ object PromptTextsZh : PromptTexts {
         "long_shot" to "远景",
         "over_shoulder" to "侧景",
         "follow" to "跟拍（走动时用，镜头持续跟随）",
+        "group" to "双人同框（多人对话同框取景）",
     )
 
     override fun actionCategory(raw: String): String = raw

@@ -197,10 +197,19 @@ class AvatarStage internal constructor(
 
     /**
      * 滑向预设 [shot] 并锚定 [target]（null = 当前聚焦演员）——P0 的运镜
-     * 目标参数化：特写可以点名跟 A 还是跟 B。
+     * 目标参数化：特写可以点名跟 A 还是跟 B。GROUP_SHOT 同框全体在台演员。
      */
     fun setCameraShot(shot: CameraShot, target: AvatarHandle? = null) {
         impl?.setCameraShot(shot, target?.runtime)
+    }
+
+    /**
+     * 双人同框（P3）：显式同框名单（通常两个对谈中的演员）；名单里模型未
+     * 就绪或不足 2 人时拒绝（机位不动）。不传名单走 [setCameraShot] 的
+     * GROUP_SHOT = 全体在台演员。
+     */
+    fun setGroupShot(targets: List<AvatarHandle>) {
+        impl?.setGroupShot(targets.map { it.runtime })
     }
 
     fun clearCameraShot() = impl?.clearCameraShot()

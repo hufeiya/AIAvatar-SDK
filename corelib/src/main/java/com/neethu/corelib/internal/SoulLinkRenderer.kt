@@ -2712,6 +2712,13 @@ internal class SoulLinkRenderer(
                     pitch = yawPitch.second.coerceIn(toRadians(-60f), toRadians(60f)),
                 )
             }
+            // 多虚拟人 P3 的双人同框：单人路径只有一个演员，退化为全景
+            CameraShot.GROUP_SHOT -> ShotPose(
+                pivot = lerp3(head, hips, 1.10f),
+                distance = 3.9f * span,
+                yaw = 0f,
+                pitch = toRadians(5f),
+            )
         }
     }
 

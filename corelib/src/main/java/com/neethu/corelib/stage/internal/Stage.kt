@@ -168,6 +168,9 @@ internal class Stage(
 
     private var activeShot: CameraShot? = null
     private var shotTarget: AvatarRuntime? = null
+
+    /** GROUP_SHOT 的同框名单（null = 非 group 机位；空表 = 无演员可取景）。 */
+    private var shotTargets: List<AvatarRuntime>? = null
     private var shotSteering = false
     private var shotDeadlineNanos = 0L
     private var followYawPitch: Pair<Float, Float>? = null
@@ -241,6 +244,16 @@ internal class Stage(
             shotTarget = null
             activeShot = null
             shotSteering = false
+        }
+        // 同框名单里走了一个：不再构成「双人同框」，放手让相机停住
+        shotTargets?.let { list ->
+            val rest = list.filter { it !== runtime }
+            shotTargets = rest
+            if (activeShot == CameraShot.GROUP_SHOT && rest.size < 2) {
+                activeShot = null
+                shotTargets = null
+                shotSteering = false
+            }
         }
         if (focusedRuntime === runtime) focusedRuntime = runtimes.firstOrNull()
         runtime.destroyAsset()
@@ -824,24 +837,47 @@ internal class Stage(
 
     /**
      * 滑向预设 [shot]，取景锚定 [target] 演员的人体骨（null = 当前聚焦演员
-     * [focusedRuntime]）。FOLLOW 跟拍骑在目标的移动身体上。多演员共享一台
-     * 相机：镜头控制权在舞台（LLM 逐演员发运镜指令的仲裁留给 P1+ 路由层）。
+     * [focusedRuntime]）。FOLLOW 跟拍骑在目标的移动身体上。GROUP_SHOT 同框
+     * 全体在台演员（[target] 忽略——单人点不了「双人同框」，显式名单走
+     * [setGroupShot]）。多演员共享一台相机：镜头控制权在舞台。
      */
     fun setCameraShot(shot: CameraShot, target: AvatarRuntime? = null) {
+        if (shot == CameraShot.GROUP_SHOT) {
+            setGroupShot(synchronized(runtimes) { runtimes.toList() })
+            return
+        }
         activeShot = shot
         shotTarget = target ?: focusedRuntime ?: synchronized(runtimes) { runtimes.firstOrNull() }
+        shotTargets = null
         shotSteering = true
         shotDeadlineNanos = System.nanoTime() + SHOT_TIMEOUT_NANOS
-        if (shot == CameraShot.FOLLOW) {
-            followYawPitch = currentYawPitch()
-        } else {
-            followYawPitch = null
+        followYawPitch = if (shot == CameraShot.FOLLOW) currentYawPitch() else null
+    }
+
+    /**
+     * GROUP_SHOT 显式名单（多虚拟人 P3 双人同框）：pivot = 头部均值、距离随
+     * 头距缩放（[GroupShotMath]）。与 FOLLOW 同为「永不到达」的跟踪机位，
+     * 但 yaw/pitch 是固定常量——姿态只来自世界骨锚，不吃相机状态（坑 22
+     * 自参照固化的多目标版纪律）。少于 2 人在名单里时拒绝（那是特写的活）。
+     */
+    fun setGroupShot(targets: List<AvatarRuntime>) {
+        val cast = targets.filter { it.asset != null }
+        if (cast.size < 2) {
+            Log.w(TAG, "group shot needs ≥2 ready avatars (got ${cast.size})")
+            return
         }
+        activeShot = CameraShot.GROUP_SHOT
+        shotTarget = null
+        shotTargets = cast
+        shotSteering = true
+        shotDeadlineNanos = 0L
+        followYawPitch = null
     }
 
     fun clearCameraShot() {
         activeShot = null
         shotTarget = null
+        shotTargets = null
         shotSteering = false
         followYawPitch = null
     }
@@ -878,10 +914,26 @@ internal class Stage(
     private fun updateCameraShot(nowNanos: Long) {
         if (!shotSteering) return
         val shot = activeShot ?: return
-        val target = shotTarget ?: run { shotSteering = false; return }
+        val group = shot == CameraShot.GROUP_SHOT
         val follow = shot == CameraShot.FOLLOW
-        val pose = shotPose(shot, target) ?: run { shotSteering = false; return }
-        if (!follow && nowNanos > shotDeadlineNanos) {
+        val target = if (group) null else shotTarget ?: run { shotSteering = false; return }
+        val pose = if (group) {
+            // yaw/pitch 固定常量（正前方微俯）：姿态只来自世界骨锚，不吃相机
+            // 状态——坑 22 自参照固化在输入层面就不成立
+            GroupShotMath.frame(
+                shotTargets.orEmpty().mapNotNull { t ->
+                    if (t.asset == null) null
+                    else t.boneAnchor(t.headEntity, AvatarRuntime.STAGE_HEAD_FALLBACK_Y)
+                },
+            )?.let { frame ->
+                ShotPose(pivot = frame.pivot, distance = frame.distance, yaw = 0f, pitch = toRadians(8f))
+            } ?: run { shotSteering = false; return }
+        } else {
+            shotPose(shot, target!!) ?: run { shotSteering = false; return }
+        }
+        // group 与 follow 同为跟踪机位（演员在走位，pivot 一直动，不到达）；
+        // 静态机位 4s 转不到位视为失败放手
+        if (!follow && !group && nowNanos > shotDeadlineNanos) {
             Log.w(TAG, "Camera shot transition timed out")
             shotSteering = false
             return
@@ -890,7 +942,7 @@ internal class Stage(
         val h = surfaceView.height
         if (w <= 0 || h <= 0) return
         val dt = ((nowNanos - lastFrameTimeNanos) / 1_000_000_000.0f).coerceIn(0.001f, 0.05f)
-        val step = 1f - exp(-dt * (if (follow) FOLLOW_APPROACH_RATE else SHOT_APPROACH_RATE))
+        val step = 1f - exp(-dt * (if (follow || group) FOLLOW_APPROACH_RATE else SHOT_APPROACH_RATE))
 
         val goalDir = orbitDirection(pose.yaw, pose.pitch)
         val goalEye = floatArrayOf(
@@ -945,7 +997,7 @@ internal class Stage(
 
         cameraManipulator.getLookAt(eye, target3, up)
         val gazeDot = dot(normalize(floatArrayOf(target3[0] - eye[0], target3[1] - eye[1], target3[2] - eye[2])), goalDir)
-        if (!follow && dist3(eye, goalEye) < SHOT_ARRIVE_DIST && gazeDot > cos(SHOT_ARRIVE_ANGLE_RAD)) {
+        if (!follow && !group && dist3(eye, goalEye) < SHOT_ARRIVE_DIST && gazeDot > cos(SHOT_ARRIVE_ANGLE_RAD)) {
             shotSteering = false
         }
     }
@@ -1008,6 +1060,9 @@ internal class Stage(
                     pitch = yawPitch.second.coerceIn(toRadians(-60f), toRadians(60f)),
                 )
             }
+            // GROUP_SHOT 不走单目标 pose（updateCameraShot 的 group 分支吃
+            // [GroupShotMath]）；这里给 null 保 when 穷尽
+            CameraShot.GROUP_SHOT -> null
         }
     }
 
@@ -1083,6 +1138,7 @@ internal class Stage(
         shotSteering = false
         activeShot = null
         shotTarget = null
+        shotTargets = null
 
         // 演员：in-use 顺序（asset 先于 MToon 实例，SIGABRT 红线）
         synchronized(runtimes) {

@@ -12,13 +12,16 @@ import com.neethu.corelib.Lang
 import com.neethu.corelib.stage.AvatarHandle
 import com.neethu.orchestrator.facade.AIAvatarSdk
 import com.neethu.orchestrator.facade.ChatProvider
+import com.neethu.orchestrator.locomotion.LocomotionDriver
 import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.memory.RoomMemoryStore
 import com.neethu.orchestrator.roundtable.DirectorPolicy
 import com.neethu.orchestrator.roundtable.RoundtableSession
 import com.neethu.orchestrator.roundtable.StageEvent
+import com.neethu.orchestrator.roundtable.StageFloorRelay
 import com.neethu.orchestrator.roundtable.StageGazeRelay
 import com.neethu.orchestrator.roundtable.StageSlotSpec
+import com.neethu.corelib.WalkPhase
 import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -123,7 +126,7 @@ class StageChatRig(
     private val anchors: List<MoveAnchor>,
     /** 全局 TTS 并发预算（均分注入各 slot）。 */
     private val globalTtsBudget: Int = 4,
-) : StageGazeRelay {
+) : StageGazeRelay, StageFloorRelay {
 
     private val rigScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -250,6 +253,7 @@ class StageChatRig(
                 rigScope,
                 sessions,
                 gaze = this,
+                floor = this,
                 director = roundtable?.directorPolicy ?: loadDirectorPolicy(),
             )
         }
@@ -341,6 +345,68 @@ class StageChatRig(
 
     override fun lookAtCamera(slotId: String) {
         chats[slotId]?.handle?.lookAtCamera()
+    }
+
+    // ── StageFloorRelay（P3 站位编排的舞台实现）──────────────────────────
+
+    /**
+     * 对谈锚点约定：锚点表含 `stage_<slot 小写>`（home.anchors.json 的
+     * stage_a/stage_b）即用锚点；没配 = 回推导落点（StageFormation）。
+     */
+    override fun conversationAnchor(slotId: String): Pair<String, Pair<Float, Float>>? {
+        val name = "stage_${slotId.lowercase()}"
+        val anchor = anchors.firstOrNull { it.name == name } ?: return null
+        return name to (anchor.x to anchor.z)
+    }
+
+    override fun walkToAnchor(slotId: String, anchorName: String): Boolean {
+        val driver = chats[slotId]?.sdk?.session?.locomotionDriver
+        if (driver == null) {
+            android.util.Log.i("StageFloor", "walkToAnchor $slotId: no driver")
+            return false
+        }
+        val outcome = driver.walkTo(anchorName)
+        android.util.Log.i("StageFloor", "walkToAnchor $slotId → $anchorName: $outcome")
+        return outcome == LocomotionDriver.Outcome.STARTED
+    }
+
+    override fun walkToPoint(slotId: String, x: Float, z: Float): Boolean {
+        val driver = chats[slotId]?.sdk?.session?.locomotionDriver ?: return false
+        // 合成锚点走同一条 walkTo 链（防抖/bounds clamp）；不在表内 = 无图
+        // 路由直达（WaypointRouter 对表外名字回退直线）
+        val synthetic = MoveAnchor(name = "stage_spot_${slotId.lowercase()}", x = x, z = z)
+        val outcome = driver.walkTo(synthetic)
+        android.util.Log.i("StageFloor", "walkToPoint $slotId → (%.2f,%.2f): $outcome".format(x, z))
+        return outcome == LocomotionDriver.Outcome.STARTED
+    }
+
+    override fun faceTowards(slotId: String, x: Float, z: Float): Boolean {
+        val ok = chats[slotId]?.handle?.turnTo(x, z) ?: false
+        android.util.Log.i("StageFloor", "faceTowards $slotId → (%.2f,%.2f): $ok".format(x, z))
+        return ok
+    }
+
+    override fun stopWalking(slotId: String) {
+        chats[slotId]?.sdk?.session?.locomotionDriver?.stopWalking()
+            ?: chats[slotId]?.handle?.stopWalk()
+        android.util.Log.i("StageFloor", "stopWalking $slotId")
+    }
+
+    override fun positionOf(slotId: String): Pair<Float, Float>? {
+        val walk = chats[slotId]?.handle?.getWalkState() ?: return null
+        return walk.x to walk.z
+    }
+
+    override fun cameraXZ(): Pair<Float, Float>? {
+        val look = chats.values.firstOrNull()?.handle?.getCameraLookAt() ?: return null
+        return look.first[0] to look.first[2]
+    }
+
+    override fun isEnRoute(slotId: String): Boolean {
+        val chat = chats[slotId] ?: return false
+        val walking = chat.handle.getWalkState()?.let { it.phase != WalkPhase.IDLE } ?: false
+        val legsQueued = chat.sdk.session?.locomotionDriver?.pendingLegsSnapshot()?.isNotEmpty() == true
+        return walking || legsQueued
     }
 
     /** 调试快照：编排状态 + 各槽会话配置概要。 */

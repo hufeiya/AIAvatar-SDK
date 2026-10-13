@@ -91,6 +91,15 @@ internal class LocomotionEngine {
     private var lastZ = 0f
 
     /**
+     * 原地转向模式（多虚拟人 P3 对谈位互相对着）：只转不挪，朝向对齐目标
+     * 即到达（照常发 arrived 事件）。startWalk/stopWalk 都会退出本模式。
+     */
+    private var turnOnly = false
+
+    /** 原地转向的到达容差（rad，~3°）——比行进对齐门更紧，站定就正对。 */
+    private val TURN_ARRIVE_RAD = 0.06f
+
+    /**
      * Start (or retarget) a walk. Retargeting mid-walk keeps the heading and
      * the ease ramp; the align gate re-evaluates on the next update, so a
      * target behind the back turns in place first. Targets are clamped into
@@ -117,6 +126,7 @@ internal class LocomotionEngine {
         }
         this.speed = speed.coerceIn(0.2f, 3.0f)
         this.headingLocked = headingLocked
+        turnOnly = false
         if (phase == WalkPhase.IDLE) {
             easeElapsed = 0f
             startHoldRemaining = startHoldSeconds.coerceAtLeast(0f)
@@ -131,7 +141,28 @@ internal class LocomotionEngine {
         phase = WalkPhase.IDLE
         startHoldRemaining = 0f
         headingLocked = false
+        turnOnly = false
         arrivedFlag = false
+    }
+
+    /**
+     * 原地转向（多虚拟人 P3 对谈位互相对着）：目标是一个世界点，engine 只转
+     * 朝向不产生平移，|朝向误差| ≤ 容差即到达。bounds clamp 与 startWalk 同款。
+     * 走动中调用被忽略（调用方先停步——防抖纪律同坑 9，这里不静默改目标）。
+     */
+    fun startTurnTo(targetX: Float, targetZ: Float, bounds: WalkBounds?): Boolean {
+        if (phase != WalkPhase.IDLE) return false
+        if (bounds != null) {
+            this.targetX = targetX.coerceIn(bounds.minX, bounds.maxX)
+            this.targetZ = targetZ.coerceIn(bounds.minZ, bounds.maxZ)
+        } else {
+            this.targetX = targetX
+            this.targetZ = targetZ
+        }
+        turnOnly = true
+        phase = WalkPhase.TURNING
+        arrivedFlag = false
+        return true
     }
 
     /**
@@ -154,6 +185,29 @@ internal class LocomotionEngine {
         lastX = rootX
         lastZ = rootZ
         if (phase == WalkPhase.IDLE || dtSeconds <= 0f) return null
+
+        if (turnOnly) {
+            val dx = targetX - rootX
+            val dz = targetZ - rootZ
+            // 目标就在脚下：方向未定义，直接算到位（调用方给的是「另一个人的
+            // 位置」，正常不落这里；重叠站位兜底不空转）
+            if (dx * dx + dz * dz <= ARRIVE_EPS * ARRIVE_EPS) {
+                turnOnly = false
+                phase = WalkPhase.IDLE
+                arrivedFlag = true
+                return null
+            }
+            val desired = atan2(dx, dz)
+            val err = wrapAngle(desired - headingRad)
+            val d = err.coerceIn(-TURN_RATE_RAD_PER_S * dtSeconds, TURN_RATE_RAD_PER_S * dtSeconds)
+            headingRad += d
+            if (abs(err) <= TURN_ARRIVE_RAD) {
+                turnOnly = false
+                phase = WalkPhase.IDLE
+                arrivedFlag = true
+            }
+            return FrameMotion(0f, 0f, 0f, d)
+        }
 
         val dx = targetX - rootX
         val dz = targetZ - rootZ

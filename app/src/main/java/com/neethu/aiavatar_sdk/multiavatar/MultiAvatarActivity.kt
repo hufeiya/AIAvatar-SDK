@@ -351,6 +351,7 @@ private fun CameraControls(stage: AvatarStage, slots: Slots) {
     ) {
         SmallButton("特写A") { stage.setCameraShot(CameraShot.CLOSE_UP, slots.a) }
         SmallButton("特写B") { stage.setCameraShot(CameraShot.CLOSE_UP, slots.b) }
+        SmallButton("同框") { stage.setCameraShot(CameraShot.GROUP_SHOT) }
         SmallButton("全景") { stage.setCameraShot(CameraShot.FULL_SHOT) }
         SmallButton("远景") { stage.setCameraShot(CameraShot.LONG_SHOT) }
         SmallButton("跟拍A") { stage.setCameraShot(CameraShot.FOLLOW, slots.a) }
@@ -635,6 +636,13 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "director rounds 5"        # 轮数上限（验收收场白用）
  * ... --es cmd "director_log"             # 导演决策日志全量
  * ```
+ * 空间智能（P3）：
+ * ```
+ * ... --es cmd "cam group"                # 双人同框（GROUP_SHOT 跟踪机位）
+ * ... --es cmd "turn A 0.8 -4.0"          # 原地转向世界点（对谈位互相对着）
+ * ```
+ * topic 开题时若台上 ≥2 人就位，自动先走对谈位（stage_a/stage_b 锚点优先、
+ * 推导落点兜底）再开轮——站位编排，导演日志可见。
  *
  * 全部结果落 logcat（tag StageCmd）并回显到面板。
  */
@@ -854,6 +862,12 @@ private class StageCommandRouter(
                 }
             }
 
+            "turn" -> {
+                val h = slots[t[1]] ?: return log("no avatar ${t[1]}")
+                val ok = h.turnTo(t[2].toFloat(), t[3].toFloat())
+                log("${t[1]} turnTo (${t[2]},${t[3]}) → ${if (ok) "started" else "rejected"}")
+            }
+
             "cam" -> when (t[1].lowercase()) {
                 "clear" -> { stage.clearCameraShot(); log("shot cleared") }
                 "reset" -> { stage.resetCamera(); log("camera reset") }
@@ -866,11 +880,12 @@ private class StageCommandRouter(
                         "long" -> CameraShot.LONG_SHOT
                         "over" -> CameraShot.OVER_SHOULDER
                         "follow" -> CameraShot.FOLLOW
+                        "group" -> CameraShot.GROUP_SHOT
                         else -> return log("unknown shot ${t[1]}")
                     }
                     val target = t.getOrNull(2)?.let { slots[it] }
                     stage.setCameraShot(shot, target)
-                    log("cam $shot target=${target?.id ?: "focus"}")
+                    log("cam $shot target=${target?.id ?: if (shot == CameraShot.GROUP_SHOT) "全体同框" else "focus"}")
                 }
             }
 
@@ -915,7 +930,7 @@ private class StageCommandRouter(
                 log("${t[1]} springs=${t[2]}")
             }
 
-            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|shot|load|remove|expr|idle|play|gaze|walk|cam|scene|drag|focus|move|fade|springs)")
+            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|shot|load|remove|expr|idle|play|gaze|walk|turn|cam|scene|drag|focus|move|fade|springs)")
         }
     }
 

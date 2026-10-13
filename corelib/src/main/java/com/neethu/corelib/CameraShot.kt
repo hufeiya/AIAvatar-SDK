@@ -59,7 +59,17 @@ enum class CameraShot(val label: String, val labelEn: String) {
      * (`<cam:follow>`); while standing still it behaves like a slightly
      * wider full shot.
      */
-    FOLLOW("跟拍 FL", "Follow FL");
+    FOLLOW("跟拍 FL", "Follow FL"),
+
+    /**
+     * 双人同框（多虚拟人 P3）— group two-shot: the pivot is the midpoint of
+     * all cast head anchors and the distance scales with the head-to-head
+     * span, so 2~3 avatars in conversation stay framed as they move. Like
+     * FOLLOW the steering never arrives (tracking shot), but unlike FOLLOW
+     * the yaw/pitch are fixed constants — pose derives only from world bone
+     * anchors, never from camera state (坑 22 自参照固化的多目标版纪律).
+     */
+    GROUP_SHOT("双人同框 GS", "Group Shot GS");
 
     /** Language-aware label for UI badges and prompt lines. */
     fun label(lang: Lang): String = if (lang == Lang.EN) labelEn else label

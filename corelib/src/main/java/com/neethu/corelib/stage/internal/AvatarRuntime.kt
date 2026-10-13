@@ -768,8 +768,23 @@ internal class AvatarRuntime(
         }
         if (wasWalking) {
             Log.i(TAG, "avatar $id stopWalk at (%.2f, %.2f)".format(s.x, s.z))
-            onWalkFinished?.invoke(WalkFinished(arrived = false, x = s.x, z = s.z))
+            onWalkFinished?.invoke(WalkFinished(arrived = false, x = s.x, z = s.z, avatarId = id))
         }
+    }
+
+    /**
+     * 原地转向世界点（多虚拟人 P3 对谈位互相对着）：只转不挪，无步态要求；
+     * 转到位照常发 [onWalkFinished]（arrived=true）。走动中/mimic 中拒绝
+     * （防抖纪律同坑 9：改目标语义不进编排）。
+     */
+    fun turnTo(targetX: Float, targetZ: Float): Boolean {
+        if (asset == null) return false
+        if (mimicInfo()?.engaged == true) return false
+        if (!locomotionEngine.startTurnTo(targetX, targetZ, stage.activeScenePlacement?.bounds)) {
+            return false
+        }
+        Log.i(TAG, "avatar $id turnTo (%.2f, %.2f)".format(targetX, targetZ))
+        return true
     }
 
     fun walkSnapshot(): WalkSnapshot = locomotionEngine.snapshot()
@@ -837,14 +852,19 @@ internal class AvatarRuntime(
         }
         if (locomotionEngine.consumeArrived()) {
             val s = locomotionEngine.snapshot()
+            // wasWalking=false = 原地转向（turnTo）到达：没走过路，不播停步
+            // 剪辑、不淡出当前动画（idle 还在上面）——只发到达事件
+            val wasWalking = activeGait != null
             activeGait = null
-            val stopClip = walkStopClip
-            if (stopClip != null && loadVrmaAnimation(stopClip.clipAssetPath)) {
-                playVrmaAnimationInternal(loop = false, speed = 1f, fadeSeconds = 0f, extractor = null)
-            } else {
-                stopVrmaAnimation(walkFadeSeconds)
+            if (wasWalking) {
+                val stopClip = walkStopClip
+                if (stopClip != null && loadVrmaAnimation(stopClip.clipAssetPath)) {
+                    playVrmaAnimationInternal(loop = false, speed = 1f, fadeSeconds = 0f, extractor = null)
+                } else {
+                    stopVrmaAnimation(walkFadeSeconds)
+                }
             }
-            onWalkFinished?.invoke(WalkFinished(arrived = true, x = s.x, z = s.z))
+            onWalkFinished?.invoke(WalkFinished(arrived = true, x = s.x, z = s.z, avatarId = id))
         }
     }
 

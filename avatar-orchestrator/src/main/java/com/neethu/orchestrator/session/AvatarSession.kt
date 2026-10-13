@@ -466,8 +466,11 @@ class AvatarSession(
         // collector 收走事件只会转给它自己的空队列 driver（真机实测多段腿断
         // 在第二段即此因）；锚点注入（[locomotionAnchors] setter）时再注册，
         // 读的是当下确定的 driver。
+        // P3 修正：两条订阅都记名，[close] 时撤销——facade 重建走 close 旧
+        // 实例，僵尸 relay 从「无害但常驻」变成结构性不可能（多个旧实例同时
+        // 收事件，站位编排等按事件归属的消费方不能再踩重建窗口）。
         controller?.walkFinished?.let { walkFlow ->
-            scope.launch {
+            walkEventJob = scope.launch {
                 walkFlow.collect { finished ->
                     if (finished.arrived) {
                         emit(AvatarEvent.WalkArrived(finished.x, finished.z))
@@ -949,6 +952,12 @@ class AvatarSession(
         interrupt("close")
         faceDriver?.stop()
         queue.release()
+        // P3：撤销走动订阅（事件转出 + 续腿 relay）——本实例的共享 scope 还
+        // 活着（rig 的槽 scope 跨重建共享），不撤就是常驻僵尸 collector
+        walkEventJob?.cancel()
+        walkEventJob = null
+        walkLegRelayJob?.cancel()
+        walkLegRelayJob = null
     }
 
     /**
@@ -958,6 +967,7 @@ class AvatarSession(
      * 到位），[locomotionAnchors] 注入时（会话接线 effect）再调一次；
      * 重复调用不重复订阅。
      */
+    private var walkEventJob: kotlinx.coroutines.Job? = null
     private var walkLegRelayJob: kotlinx.coroutines.Job? = null
     private fun ensureWalkLegRelay() {
         if (walkLegRelayJob != null) return
@@ -1501,6 +1511,7 @@ class AvatarSession(
         "long_shot" to CameraShot.LONG_SHOT,
         "over_shoulder" to CameraShot.OVER_SHOULDER,
         "follow" to CameraShot.FOLLOW,
+        "group" to CameraShot.GROUP_SHOT,
     )
     }
 }

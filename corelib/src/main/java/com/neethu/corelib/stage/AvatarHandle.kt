@@ -204,6 +204,12 @@ class AvatarHandle internal constructor(
     override fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult =
         runtime.startWalk(targetX, targetZ, speed)
 
+    /**
+     * 原地转向世界点（P3 对谈位互相对着）：只转不挪、无步态要求；转到位
+     * 照常发 [walkFinished]（arrived=true）。走动中/mimic 中返回 false。
+     */
+    fun turnTo(x: Float, z: Float): Boolean = runtime.turnTo(x, z)
+
     fun startStrafe(left: Boolean, meters: Float, speed: Float = 1.0f): WalkStartResult =
         runtime.startStrafe(left, meters, speed)
 
