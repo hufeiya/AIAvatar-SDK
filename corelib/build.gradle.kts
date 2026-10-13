@@ -46,6 +46,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // 纯 JVM 单测（SpawnMath/VrmaClipCache 等）触及 android.util.Log 时
+        // 返回默认值而非抛 "not mocked"（与 avatar-orchestrator 同惯例）
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

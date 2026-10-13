@@ -50,6 +50,13 @@
             android:name=".SimpleDemoActivity"
             android:exported="true"
             android:label="@string/simple_demo_label" />
+
+        <!-- 多虚拟人舞台（docs/multi-avatar-feasibility.md P0 调试/演示）；
+             exported 供 adb 直达与 STAGE_CMD 广播调试通道 -->
+        <activity
+            android:name=".multiavatar.MultiAvatarActivity"
+            android:exported="true"
+            android:label="Multi-Avatar Stage" />
     </application>
 
 </manifest>
