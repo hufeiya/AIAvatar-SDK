@@ -245,6 +245,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 | 人物卡 | 卡片面板 / `import_card` | SillyTavern V1/V2/V3 PNG+JSON 解析；18 预置卡 grid；人设提示词可编辑覆写 | `CharacterCardParser`、`PresetCards*`、`CardLibrary` |
 | 多上下文历史 | 设置→上下文 / `new_context` | Room 持久化；请求带最近 40 条；换 LLM 模型/换 VRM 模型自动轮换上下文 | `RoomConversationStore`、`llmIdentitySignature` |
 | 中英双语 | 设置→语言 | Lang 枚举贯穿；提示词四目录+UI Strings+预置卡翻译；语言变化重建会话不轮换上下文 | `i18n/` 四目录、`Strings.kt` |
+| 长期记忆 | 设置→长期记忆 / `memory_list` 等 5 命令 | 提炼式记忆（docs/memory-feasibility.md）：remember/recall/forget 三工具 + 攒批自动提炼（5 轮或 600 字双阈值、12 字静默门、窗口持久化跨会话）+ 检索注入末尾 user 槽（`1.2×cosine+0.2×新鲜度`，身份/关系/偏好豁免衰减 + 重要度≥8 常驻槽）；bge-m3 向量主路（硅基流动 Key 复用 ASR）→ 2-gram 关键词降级；Room `agent_memory.db` 跨上下文共享；管理面板列表/搜索/删除/清空 | `memory/`（MemoryStore/Retriever/Extractor/Coordinator/Tools）、`OpenAiCompatibleEmbeddingAdapter`、`MemoryPanel` |
 | 智能体工具调用 | 自动（模型请求）/ `tools_call` `observe` | 回合内工具循环（≤3 轮）；内置 get_device_time/get_current_view/observe_camera + P0.5 设备六件（get_device_status/set_flashlight/send_haptic/read_clipboard〔独立开关默认关〕/set_ambience/take_photo）；工具失败转 isError 回灌；400 自动降级禁用；Qwen3.8 关思考的悬空衔接句→required 静默重试+模板文本解析兜底（⚠ 视觉+工具选型优先 Qwen3-VL-32B/doubao，见矩阵可靠性节） | `agent/ToolRegistry`、`AgentToolCatalog`、`TemplateToolCalls`、`AgentDeviceTools`、`OpenAiCompatibleLlmAdapter` |
 | 新手引导 | 未配 Key 冷启动自动弹 | 双受众（CN=硅基流动 / INTL=OpenRouter free+Edge-TTS+系统 ASR），一键配置，点输入框重弹 | `OnboardingGuide` |
 
@@ -324,8 +325,8 @@ adb logcat -s FreeSpeech         # VAD 电平/门限
 
 | 项 | 出处 | 现状 |
 |---|---|---|
-| **自由走动（Locomotion）** | `docs/locomotion-feasibility.md` | **P0+P1 已完成+真机验收通过**（2026-10-12：锚点踩点标定〔5 锚点实标+bounds 收紧〕、`<move:>` 标签链 LLM 自然触发+运镜自发编排+事件/UI 行+TTS 跨走动不断流、clamp/开关/过渡 A/B/拖拽/mimic 互斥/双模型全过；顺手修两 bug=sceneMetaAssetName 缺 scene/ 前缀〔bounds 曾静默失效〕+mimic 断供自愈无触发口〔engaged 永久卡互斥〕；DeepSeek 走动触发 3 走 1 成，提取器伪工具抑制兜底已加，单测 737 全绿；详见交接文档 2026-10-12 条目+坑 25/26/27）→ P2 crossfade/mask/waypoint/方案 C 位移提取 |
-| **智能体化（Agent 化）** | `docs/agent-feasibility.md` | **P0 原生工具调用已完成**（2026-10-11，工具循环+三内置工具+Skill.tools() 缝+降级，矩阵 docs/agent-provider-matrix.md；真机待验收）；剩 P1 主动性（定时/主动搭话，基建已就位）→ P2 长期记忆（Room+向量）→ P3 web_search/MCP |
+| **自由走动（Locomotion）** | `docs/locomotion-feasibility.md` | **P0+P1+P2 已完成+真机验收通过**（P1 2026-10-12：锚点踩点/`<move:>` 全链自然触发/clamp/互斥/双模型；P2 2026-10-13：双槽 crossfade、上半身 mask 边走边比划、方案 C 位移提取〔默认步态实测带 1.49m/循环烘焙位移，提取模式脚步零滑步+速度按模型比例自然〕、waypoint 图多段腿、跑步/侧移步态；顺手修 bindToModel 陈旧世界读数〔hips 高度错 7×，坑 40〕+session 重建僵尸 collector〔坑 41〕；单测 832 全绿；详见交接文档 2026-10-13 条目+坑 40/41） |
+| **智能体化（Agent 化）** | `docs/agent-feasibility.md`、`docs/memory-feasibility.md` | **P0 原生工具调用已完成**（2026-10-11）；**P2 长期记忆 M1+M2 已实现**（2026-10-13：存储/检索/提炼/工具/管理面板全链，单测 832 全绿；真机验收 §7 九场景未跑——提炼 JSON 可靠性 curl 矩阵〔§10〕+真机九场景待做）；剩 P1 主动性（定时/主动搭话）→ M3 记忆整理/独立提炼模型 → P3 web_search/MCP |
 | 流式 TTS | handoff 任务 7 远期项 | 现在 TTS 是句级整段（每句新建连接 ~1s 延迟）；远期=streaming 变体（Flow\<AudioChunk\>，对齐 AIRI bidirectional-ws） |
 | CameraDirector | handoff 任务 7.2 | phase→CameraShot 规则式映射（THINKING→特写等），默认关闭；未做 |
 | 空闲行为状态机 | `docs/avatar-realism-feasibility.md` #2 | idle 槽已在 corelib，缺行为调度器（随机换待机/伸懒腰等） |
@@ -378,7 +379,7 @@ adb logcat -s FreeSpeech         # VAD 电平/门限
 | AI 层交接文档 | `docs/ai-layer-handoff.md` | **动 AI 链路前必读**：逐日攻坚史、15 条坑清单、调参速查 |
 | 调试命令手册 | `docs/ai-debug-intents.md` | 真机验证任何功能时 |
 | 弹簧骨骼交接 | `docs/springbone-debug-context.md` | 改弹簧骨骼前；含 5 轮修复史与验证工具 |
-| 可行性报告 | `docs/agent-feasibility.md`、`docs/avatar-realism-feasibility.md`、`docs/{rps,lookhere,mimic}-skill-feasibility.md` | 开对应新功能前 |
+| 可行性报告 | `docs/agent-feasibility.md`、`docs/memory-feasibility.md`、`docs/avatar-realism-feasibility.md`、`docs/{rps,lookhere,mimic}-skill-feasibility.md` | 开对应新功能前 |
 | 模拟器 | `tools/breath_sim/`、`tools/springbone-sim/` | 改呼吸/弹簧骨骼算法前先跑 Python 仿真对拍 |
 | 发布脚本 | `tools/release.sh` + publish-release 技能 | 发版时（版本号递增/NOTES_FILE 规则见技能） |
 | 上下文锚点 | 记忆库 `airi-source-anchors` | 对齐 AIRI 行为时（本地源码 /home/neethu/projects/airi） |

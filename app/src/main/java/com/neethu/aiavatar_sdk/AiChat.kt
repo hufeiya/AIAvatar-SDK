@@ -3,10 +3,14 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.mutableStateOf
+import com.neethu.aiadapter.api.EmbeddingConfig
+import com.neethu.aiadapter.openai.OpenAiCompatibleEmbeddingAdapter
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.facade.AIAvatarSdk
 import com.neethu.orchestrator.facade.ChatProvider
+import com.neethu.orchestrator.memory.MemoryStore
+import com.neethu.orchestrator.memory.RoomMemoryStore
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.skill.SkillHost
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +73,18 @@ data class AiChatPrefs(
      * 上下文）。
      */
     val llmMove: Boolean = true,
+    /**
+     * 长期记忆总开关（docs/memory-feasibility.md）：默认开。关闭 = 三记忆工具
+     * 退场 + 检索注入消失 + 待提炼窗口清空（运行时切换，不重建会话）。
+     * 身份签名刻意不含（与 agentTools/observeCamera 同列：不改变模型能力面，
+     * 不轮换上下文）。
+     */
+    val memory: Boolean = true,
+    /**
+     * 自动提炼子开关（通道 B 攒批提炼）：默认开。关 = 只保留 remember 工具
+     * 显式写入与检索注入，对话不再自动进记忆。
+     */
+    val memoryAutoExtract: Boolean = true,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -144,6 +160,8 @@ private const val KEY_AI_AGENT_TOOLS = "ai_agent_tools"
 private const val KEY_AI_OBSERVE_CAMERA = "ai_observe_camera"
 private const val KEY_AI_READ_CLIPBOARD = "ai_read_clipboard"
 private const val KEY_AI_LLM_MOVE = "ai_llm_move"
+private const val KEY_AI_MEMORY = "ai_agent_memory"
+private const val KEY_AI_MEMORY_AUTO_EXTRACT = "ai_memory_auto_extract"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -177,6 +195,8 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         observeCamera = getBoolean(KEY_AI_OBSERVE_CAMERA, false),
         readClipboard = getBoolean(KEY_AI_READ_CLIPBOARD, false),
         llmMove = getBoolean(KEY_AI_LLM_MOVE, true),
+        memory = getBoolean(KEY_AI_MEMORY, true),
+        memoryAutoExtract = getBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, true),
     )
 }
 
@@ -198,6 +218,8 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_OBSERVE_CAMERA, p.observeCamera)
         .putBoolean(KEY_AI_READ_CLIPBOARD, p.readClipboard)
         .putBoolean(KEY_AI_LLM_MOVE, p.llmMove)
+        .putBoolean(KEY_AI_MEMORY, p.memory)
+        .putBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, p.memoryAutoExtract)
         .apply()
 }
 
@@ -282,10 +304,31 @@ class AiChatController(
         controller = avatarController,
         appContext = appContext,
         skillHost = skillHost,
+        // 长期记忆（docs/memory-feasibility.md）：应用级 Room 库 + 硅基流动
+        // 向量化（Key 每次现取，走「语音识别与向量化」同一位）。memoryStore
+        // 跨会话/跨上下文共享；不配硅基流动 Key 时检索自动走关键词降级。
+        memoryStore = RoomMemoryStore.from(appContext),
+        embeddingAdapter = OpenAiCompatibleEmbeddingAdapter(),
     )
 
     /** 当前会话（[ensure] 装配成功后非空）；进阶定制直接操作它。 */
     val session: AvatarSession? get() = sdk.session
+
+    /**
+     * 长期记忆库直取缝（管理面板/ai_cmd 用）：与门面同一实例，会话未配置时
+     * 管理面板照常可查/可删。
+     */
+    val memoryStore: MemoryStore = checkNotNull(sdk.memoryStore)
+
+    /**
+     * 向量化配置缝：由 demo 注入（每次现取当前硅基流动 Key——Key 变化立即
+     * 生效，无需重建会话；Key 空 = 关键词降级检索）。
+     */
+    var embeddingConfigProvider: (() -> EmbeddingConfig?)?
+        get() = sdk.embeddingConfigProvider
+        set(value) {
+            sdk.embeddingConfigProvider = value
+        }
 
     /**
      * 确保存在一个与 [prefs]/[contextId]/[lang] 匹配、且在模型 [ready] 后启动
@@ -307,6 +350,16 @@ class AiChatController(
             prefs.toChatConfig(contextId, characterId, lang),
             modelReady = ready,
         )
+    }
+
+    /** 长期记忆总开关（运行时切换，不重建会话）。 */
+    fun setMemoryEnabled(enabled: Boolean) {
+        sdk.session?.setMemoryEnabled(enabled)
+    }
+
+    /** 自动提炼子开关（运行时）。 */
+    fun setMemoryAutoExtract(enabled: Boolean) {
+        sdk.session?.setMemoryAutoExtract(enabled)
     }
 
     fun shutdown() {

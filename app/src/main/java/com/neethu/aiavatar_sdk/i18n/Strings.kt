@@ -259,7 +259,7 @@ class Strings(val lang: Lang) {
     fun asrGroupLabel(p: AiProvider, volcanoFallback: Boolean): String =
         zh("语音输入（按住说话 · ASR 走${provider(p)}${if (volcanoFallback) "（火山回落）" else ""}）",
             "Voice input (hold-to-talk · ASR via ${provider(p)}${if (volcanoFallback) ", falls back to SiliconFlow" else ""})")
-    val sfAsrKeyTitle: String get() = zh("硅基流动 API Key（语音识别用）", "SiliconFlow API key (for ASR)")
+    val sfAsrKeyTitle: String get() = zh("硅基流动 API Key（语音识别与向量化用）", "SiliconFlow API key (for ASR & embeddings)")
     val recognitionEngineTitle: String get() = zh("识别引擎", "Recognition engine")
     val systemAsrAvailableHint: String get() =
         zh("本机可用：系统语音识别服务已就绪（免费、无 Key、不消耗云端额度）；虚拟人说话期间自动暂停聆听",
@@ -293,6 +293,39 @@ class Strings(val lang: Lang) {
     val llmMoveSubtitle: String get() =
         zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",
             "Let the model walk to room anchors with <move:…> tags (\"go to the window\"…); the move_to tool comes with it; a scene must be loaded first")
+
+    // ── 长期记忆（docs/memory-feasibility.md）─────────────────────────────
+    val memoryTitle: String get() = zh("长期记忆", "Long-term memory")
+    val memorySubtitle: String get() =
+        zh("让模型记住你的身份、偏好和聊过的事，跨对话随时想起（remember/recall/forget 工具 + 自动提炼）",
+            "Let the model remember your identity, preferences and shared history across conversations (remember/recall/forget tools + auto extraction)")
+    val memoryAutoTitle: String get() = zh("自动提炼记忆", "Auto memory extraction")
+    val memoryAutoSubtitle: String get() =
+        zh("对话攒满几轮后在后台自动提炼值得记的事实；关闭后只有你明确说「记住…」才会写入",
+            "Extract memorable facts in the background every few turns; when off, only explicit \"remember…\" requests are stored")
+    val memoryPrivacyHint: String get() =
+        zh("记忆内容保存在本机；提炼记忆会把对话发送给你的大模型服务商，向量化会把记忆文本发送到硅基流动（需配置其 Key，未配置时按关键词检索）。可在记忆管理中查看和删除。",
+            "Memories stay on this device; extraction sends conversation text to your LLM provider, and embedding sends memory text to SiliconFlow (add its key for vector recall; keyword recall works without). View or delete in Memory manager.")
+    val memoryManageEntry: String get() = zh("记忆管理", "Memory manager")
+    val memoryManageSubtitle: String get() =
+        zh("查看/搜索/删除已保存的记忆条目", "View, search and delete saved memory entries")
+    val memoryPanelTitle: String get() = zh("记忆管理", "Memory manager")
+    val memoryEmpty: String get() = zh("还没有任何记忆。聊几轮天，或直接说「记住…」试试。",
+        "No memories yet. Chat a few turns, or just say \"remember…\".")
+    val memorySearchHint: String get() = zh("搜索记忆…", "Search memories…")
+    val memoryClear: String get() = zh("清空全部记忆", "Clear all memories")
+    val memoryClearConfirmTitle: String get() = zh("清空全部记忆？", "Clear all memories?")
+    val memoryClearConfirmText: String get() =
+        zh("所有记忆条目将立即删除，且无法恢复。", "Every memory entry will be deleted immediately. This cannot be undone.")
+    val memoryClearConfirmYes: String get() = zh("清空", "Clear")
+    val memoryClearCancel: String get() = zh("取消", "Cancel")
+    fun memoryCount(n: Int): String = zh("共 $n 条记忆", "$n memories")
+    fun memorySource(src: String): String = when (src) {
+        "tool" -> zh("手动", "manual")
+        "auto" -> zh("自动", "auto")
+        else -> zh("面板", "panel")
+    }
+    fun memoryImportance(v: Int): String = zh("重要度 $v", "importance $v")
 
     val sectionCard: String get() = zh("人物卡 (Character Card · 人设提示词)", "Character Card (persona prompt)")
     val cardNotActive: String get() =

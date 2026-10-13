@@ -83,6 +83,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleOwner
 import com.neethu.aiadapter.model.AsrConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleAsrAdapter
+import com.neethu.aiadapter.api.EmbeddingConfig
+import com.neethu.aiadapter.openai.OpenAiCompatibleEmbeddingAdapter
+import com.neethu.orchestrator.memory.memoryTextsOf
 import com.neethu.aiavatar_sdk.ui.SECTION_AI
 import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
 import com.neethu.aiavatar_sdk.ui.SECTION_CARD
@@ -92,6 +95,7 @@ import com.neethu.aiavatar_sdk.ui.SECTION_LANGUAGE
 import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
 import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.OnboardingGuideSheet
+import com.neethu.aiavatar_sdk.ui.MemoryPanel
 import com.neethu.aiavatar_sdk.ui.GuideVariant
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.onboardingGuideVariant
@@ -205,7 +209,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Which panel is currently shown */
-internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, CARDS, SETTINGS }
+internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, CARDS, SETTINGS, MEMORY }
 
 // ── 设置持久化（SharedPreferences）─────────────────────────────────────
 
@@ -998,6 +1002,17 @@ private fun DemoScreen(
     val aiChat = remember {
         AiChatController(scope, controller, context.applicationContext, skillHost)
     }
+    // 长期记忆（docs/memory-feasibility.md §4.6）：向量化配置每次现取当前硅基
+    // 流动 Key（换 Key 立即生效，无需重建会话；Key 空 = 关键词降级检索）。
+    aiChat.embeddingConfigProvider = {
+        val key = uiState.aiPrefs.apiKeySiliconflow.trim()
+        if (key.isEmpty()) null
+        else EmbeddingConfig(
+            baseUrl = AiProvider.SILICONFLOW.baseUrl,
+            apiKey = key,
+            model = "BAAI/bge-m3",
+        )
+    }
 
     // Room 会话库（任务 3）：设置页「上下文」类别的数据源
     val convoDb = remember { ConversationDatabase.getInstance(context) }
@@ -1321,6 +1336,14 @@ private fun DemoScreen(
     // get_current_view 然后如实回答"看不到"，用户无从知道差什么，真机踩过）。
     // 切换即 register/unregister，工具集合变化 → 协议块自动重钉（指纹机制）。
     // get_device_time / get_current_view 是纯本地工具，会话构造时已默认注册。
+    // 记忆开关运行时切换（docs/memory-feasibility.md §4.6，observeCamera 先例：
+    // 不重建会话不轮换上下文）——总开关 = 三工具 register/unregister + 协调器
+    // flag + 窗口清空；自动提炼子开关只关通道 B。effect 键随 prefs 变化重跑。
+    LaunchedEffect(session, uiState.aiPrefs.memory, uiState.aiPrefs.memoryAutoExtract) {
+        val s = session ?: return@LaunchedEffect
+        s.setMemoryEnabled(uiState.aiPrefs.memory)
+        s.setMemoryAutoExtract(uiState.aiPrefs.memoryAutoExtract)
+    }
     LaunchedEffect(
         session, uiState.aiPrefs.agentTools, uiState.aiPrefs.observeCamera,
         uiState.aiPrefs.llmModel, uiState.lang,
@@ -2351,6 +2374,65 @@ private fun DemoScreen(
             agentState = {
                 session?.agentSnapshot() ?: "no session (configure the AI service first)"
             },
+            memoryList = { filter ->
+                val rows = aiChat.memoryStore.all()
+                val texts = memoryTextsOf(uiState.lang)
+                val shown = rows.sortedByDescending { it.updatedAt }
+                    .filter { filter.isNullOrBlank() || it.content.contains(filter.trim(), ignoreCase = true) }
+                if (shown.isEmpty()) "no memories${if (filter.isNullOrBlank()) "" else " matching '$filter'"} " +
+                    "(total ${rows.size})"
+                else shown.joinToString("\n") {
+                    texts.listLine(it.id, texts.categoryLabel(it.category), it.content) +
+                        " (imp=${it.importance} src=${it.source})"
+                }
+            },
+            memoryStats = {
+                val rows = aiChat.memoryStore.all()
+                val byCategory = rows.groupingBy { it.category }.eachCount()
+                    .entries.sortedByDescending { it.value }
+                    .joinToString(", ") { "${it.key}=${it.value}" }
+                val embedded = rows.count { it.embedding != null }
+                val window = session?.memoryCoordinator?.windowLine()
+                    ?: "coordinator=off (no session or llm missing)"
+                "total=${rows.size} embedded=$embedded categories={${byCategory.ifEmpty { "none" }}}\nwindow: $window"
+            },
+            memoryForget = { prefix ->
+                val rows = aiChat.memoryStore.all()
+                val matches = rows.filter { it.id.startsWith(prefix.trim()) }
+                when {
+                    matches.isEmpty() -> throw IllegalArgumentException(
+                        "no memory id starts with '$prefix' (send ai_cmd memory_list to see ids)",
+                    )
+                    matches.size > 1 -> throw IllegalArgumentException(
+                        "id prefix '$prefix' is ambiguous (${matches.size} matches): " +
+                            matches.joinToString(", ") { it.id },
+                    )
+                    else -> {
+                        aiChat.memoryStore.delete(matches[0].id)
+                        "deleted: ${matches[0].id} [${matches[0].category}] ${matches[0].content}"
+                    }
+                }
+            },
+            memoryClear = {
+                // 面板清空同一路径：记忆条目 + 待提炼窗口一并清
+                aiChat.memoryStore.clear()
+                session?.memoryCoordinator?.clearAll()
+                "all memories and the pending window cleared"
+            },
+            memoryConfig = { arg ->
+                val parts = arg?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }.orEmpty()
+                if (parts.isEmpty()) {
+                    session?.memoryConfigLine()
+                        ?: "no memory coordinator (no session or memory store missing)"
+                } else {
+                    val turns = parts.getOrNull(0)?.toIntOrNull()
+                        ?: throw IllegalArgumentException("memory_config turns must be an int >= 1")
+                    val chars = parts.getOrNull(1)?.toIntOrNull()
+                        ?: throw IllegalArgumentException("memory_config chars must be an int >= 0")
+                    session?.memoryCoordinator?.configure(turns, chars)
+                    "extraction thresholds updated: ${session?.memoryConfigLine() ?: "coordinator off"}"
+                }
+            },
             session = { session },
         )
     }
@@ -2934,7 +3016,28 @@ private fun DemoScreen(
                         if (summary.id == uiState.contextId) uiState.newContext() else contextListVersion++
                     }
                 },
-                onDismiss = { uiState.activePanel = PanelType.NONE }
+                onDismiss = { uiState.activePanel = PanelType.NONE },
+                onOpenMemoryPanel = { uiState.activePanel = PanelType.MEMORY },
+            )
+        }
+
+        // 记忆管理面板（docs/memory-feasibility.md §4.7）：列表/搜索/删除/清空。
+        // 数据直取应用级记忆库（与门面同一实例，会话未配置也可用）。
+        AnimatedVisibility(
+            visible = uiState.activePanel == PanelType.MEMORY,
+            enter = fadeIn() + slideInVertically { it },
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            var memoryListVersion by remember { mutableStateOf(0) }
+            LaunchedEffect(uiState.activePanel) {
+                if (uiState.activePanel == PanelType.MEMORY) memoryListVersion++
+            }
+            MemoryPanel(
+                store = aiChat.memoryStore,
+                lang = uiState.lang,
+                version = memoryListVersion,
+                onDismiss = { uiState.activePanel = PanelType.SETTINGS },
             )
         }
 

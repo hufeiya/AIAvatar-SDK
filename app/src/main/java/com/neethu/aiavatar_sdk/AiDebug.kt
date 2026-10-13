@@ -250,6 +250,15 @@ fun aiDebugHelp(): String = """
 |                           toggle + video mode + a vision LLM
 |  agent_state              Dump agent tool state (registry / last tool calls /
 |                           disabled models / round limit / timeout)
+|Long-term memory (entries survive force-stop; panel = settings > Memory):
+|  memory_list [arg]        List memory entries (optional content filter),
+|                           newest first: "id [category] content (imp= src=)"
+|  memory_stats             Totals / category distribution / embedding
+|                           coverage / pending extraction window state
+|  memory_forget <arg>      Delete one entry by unambiguous id prefix
+|  memory_clear             Wipe ALL memories and the pending window
+|  memory_config [t] [c]    View (no args) or set extraction thresholds
+|                           (t turns OR c chars triggers a request)
 |Providers (SiliconFlow + Volcano + OpenRouter; LLM/TTS/ASR dropdowns in ⚙️):
 |  set_provider <arg>       Switch LLM provider: siliconflow | volcano |
 |                           openrouter (model list follows; empty model =

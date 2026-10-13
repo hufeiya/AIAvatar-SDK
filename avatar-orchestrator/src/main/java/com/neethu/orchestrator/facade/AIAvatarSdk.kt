@@ -7,12 +7,15 @@ import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
 import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
 import com.neethu.aiadapter.volcengine.VolcanoEngineTtsAdapter
+import com.neethu.aiadapter.api.EmbeddingAdapter
+import com.neethu.aiadapter.api.EmbeddingConfig
 import com.neethu.corelib.AvatarController
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.history.ConversationStore
 import com.neethu.orchestrator.history.RoomConversationStore
+import com.neethu.orchestrator.memory.MemoryStore
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
@@ -72,7 +75,24 @@ class AIAvatarSdk(
      * 即接管存储。
      */
     private val storeFactory: ((contextId: String, characterId: String?) -> ConversationStore)? = null,
+    /**
+     * 长期记忆存储（docs/memory-feasibility.md §4.6）：null = 无记忆（SDK 缺省
+     * 语义）；demo 注入 RoomMemoryStore。记忆跨上下文全局共享，会话重建不换。
+     * 公开只读：管理面板/调试命令在会话未配置时也能查删记忆。
+     */
+    val memoryStore: MemoryStore? = null,
+    /**
+     * 文本嵌入适配器（记忆检索主路，bge-m3 等 OpenAI 兼容 /embeddings）；
+     * null = 关键词降级检索。Key 等配置经 [embeddingConfigProvider] 每次现取。
+     */
+    private val embeddingAdapter: EmbeddingAdapter? = null,
 ) {
+
+    /**
+     * 向量化配置缝：每次检索/提炼时现取（null = 该次走关键词降级）。demo 在
+     * 配置变化时更新本属性即可换 Key，无需重建会话。
+     */
+    var embeddingConfigProvider: (() -> EmbeddingConfig?)? = null
 
     /**
      * 对话配置：[AIAvatarSdk] 的全部装配输入。data class 全量相等即会话身份
@@ -286,6 +306,11 @@ class AIAvatarSdk(
             ),
             store = store,
             skillHost = skillHost,
+            // 长期记忆（docs/memory-feasibility.md）：store 跨会话共享；向量化
+            // 配置经 provider 缝每次现取（换 Key 不重建会话）。
+            memoryStore = memoryStore,
+            embeddingAdapter = embeddingAdapter,
+            embeddingConfig = { embeddingConfigProvider?.invoke() },
         )
         session.llmConfig = LlmConfig(
             baseUrl = config.llmBaseUrl,

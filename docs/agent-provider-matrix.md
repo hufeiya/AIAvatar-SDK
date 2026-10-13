@@ -70,3 +70,16 @@ P0.5 六工具真机验收中发现(P0 的 curl A/B 只测「能不能调用」,
 - `tool_choice:"required"` 的真实行为(实现已支持三种字符串形态,矩阵只实测了 auto 语义的缺省)。
 - 工具相关 400 的真实文案样本:五家都通过了,没采到降级正则的实战样本——`isToolRelatedError` 正则表沿用 airi 实战积累(`ToolErrors.kt`),真机遇到新文案再补。
 - 视觉描述请求(observe_camera 的独立 VLM 调用)走的是已验证的图片链路(视频模式同款),无新增协议面。
+
+## 记忆提炼 JSON 可靠性(2026-10-13,memory-feasibility.md §10)
+
+提炼不走 tools 通道(纯 JSON 文本输出),关注点与工具矩阵不同。用 `MemoryTextsZh.extractSystem` 逐字一致的 prompt + 含 2 个可记事实(考驾照科目二/橘猫叫团团)的 6 轮样例对话,temperature 0.2 非流式,每组 5 次:
+
+| Provider | 模型 | 关思考参数 | HTTP | 单行 JSON | 合法 ops | 双事实命中 | 结论 |
+|---|---|---|---|---|---|---|---|
+| 硅基流动 | `deepseek-ai/DeepSeek-V4-Flash` | — | 5/5 | 5/5 | 5/5 | 5/5 | ✅ 可靠 |
+| 硅基流动 | `Qwen/Qwen3.8-27B` | `enable_thinking:false` | 5/5 | 5/5 | 5/5 | 5/5 | ✅ 可靠——印证「提炼不走工具通道,关思考无坑」预判 |
+| 火山 | `doubao-seed-2-0-mini-260428` | `thinking:disabled` | 5/5 | 5/5 | 5/5 | 5/5 | ✅ 可靠,~1s 全场最快 |
+| OpenRouter | `openrouter/free` | — | 5/5 | 2/5 | **1/5** | 1/5 | ❌ 3 次空回/输出「User Safety: safe」杂语、1 次 JSON 截断——**免费路由下别开自动提炼**(§8 风险 1 预案成立) |
+
+真机验收(同日)侧证:DeepSeek-V4-Flash 与 doubao-mini 双主模型对照跑九场景,提炼请求全部一次成功(无解析失败重试形态),攒批 5 轮触发节奏精确(30 轮寒暄恰 6 次「window drained by 5」)。

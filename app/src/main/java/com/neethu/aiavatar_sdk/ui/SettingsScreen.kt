@@ -211,6 +211,8 @@ internal fun SettingsScreen(
     onNewContext: () -> Unit,
     onSelectContext: (String) -> Unit,
     onDeleteContext: (ConversationContextSummary) -> Unit,
+    /** 打开记忆管理面板（长期记忆隐私文案下的入口）。 */
+    onOpenMemoryPanel: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -533,6 +535,26 @@ internal fun SettingsScreen(
                                 subtitle = s.llmMoveSubtitle,
                                 checked = aiPrefs.llmMove
                             ) { onAiPrefsChange(aiPrefs.copy(llmMove = it)) }
+
+                            // ── 长期记忆（docs/memory-feasibility.md §4.7）──
+                            // 两开关都刻意不进会话身份（observeCamera 先例）：
+                            // 切换走 register/unregister + 协调器 flag，不重建
+                            // 会话不轮换上下文（接线在 MainActivity 的 effect）。
+                            SettingsSwitchRow(
+                                title = s.memoryTitle,
+                                subtitle = s.memorySubtitle,
+                                checked = aiPrefs.memory
+                            ) { onAiPrefsChange(aiPrefs.copy(memory = it)) }
+                            SettingsSwitchRow(
+                                title = s.memoryAutoTitle,
+                                subtitle = s.memoryAutoSubtitle,
+                                checked = aiPrefs.memoryAutoExtract
+                            ) { onAiPrefsChange(aiPrefs.copy(memoryAutoExtract = it)) }
+                            SettingsGroupLabel(s.memoryPrivacyHint)
+                            SettingsActionRow(
+                                title = s.memoryManageEntry,
+                                subtitle = s.memoryManageSubtitle
+                            ) { onOpenMemoryPanel() }
                         }
                     }
 

@@ -109,6 +109,10 @@ class AvatarSessionSkillDirectiveTest {
             lipSyncProcessor = null,
             store = store,
             skillHost = host,
+            // TTS 解码/口型分析走与调度器同源的 dispatcher：默认 Dispatchers.Default
+            // 是真实线程池，裁判回合的收尾（skills.onTurnCompleted → ARMED）与
+            // 断言之间存在跨线程竞态（偶发 ARMED 期读到 JUDGING）
+            heavyWorkDispatcher = UnconfinedTestDispatcher(),
         )
         session.llmConfig = LlmConfig("http://t", "k", model = "llm")
         session.ttsConfig = TtsConfig(model = "tts", voice = "v")

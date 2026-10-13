@@ -29,6 +29,13 @@ import com.neethu.orchestrator.agent.isDanglingBridgeReply
 import com.neethu.orchestrator.agent.parseTemplateToolCalls
 import com.neethu.orchestrator.i18n.PromptTexts
 import com.neethu.orchestrator.i18n.promptTextsOf
+import com.neethu.aiadapter.api.EmbeddingAdapter
+import com.neethu.aiadapter.api.EmbeddingConfig
+import com.neethu.orchestrator.memory.MemoryCoordinator
+import com.neethu.orchestrator.memory.MemoryRetriever
+import com.neethu.orchestrator.memory.MemoryStore
+import com.neethu.orchestrator.memory.MemoryTools
+import com.neethu.orchestrator.memory.memoryTextsOf
 import com.neethu.orchestrator.locomotion.LocomotionDriver
 import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
@@ -113,6 +120,19 @@ class AvatarSession(
      */
     store: ConversationStore = InMemoryConversationStore(),
     /**
+     * 长期记忆存储（docs/memory-feasibility.md §4.6）：null = SDK 默认无记忆
+     * （与 [store] 同性质的缺省语义）；demo 注入
+     * [com.neethu.orchestrator.memory.RoomMemoryStore]。记忆跨上下文全局共享。
+     */
+    private val memoryStore: MemoryStore? = null,
+    /**
+     * 文本嵌入适配器（记忆检索主路）：null 或 [embeddingConfig] 返回 null 时
+     * 检索走关键词降级路。配置（Key/模型）经 [embeddingConfig] 每次现取，
+     * 运行时换 Key 不需要重建会话。
+     */
+    private val embeddingAdapter: EmbeddingAdapter? = null,
+    private val embeddingConfig: (() -> EmbeddingConfig?)? = null,
+    /**
      * 技能框架的能力缝（docs/rps-skill-feasibility.md §4）：null = 未接线，
      * 技能状态机照常运转但能力调用（出动作/抓拍/VAD 调参）全部落空。
      */
@@ -190,6 +210,25 @@ class AvatarSession(
          * observe_camera 走注册表手动 register/unregister（隐私开关控制）。
          */
         val tools: List<Pair<ToolSpec, ToolExecutor>> = emptyList(),
+        /**
+         * 长期记忆总开关（docs/memory-feasibility.md §4.6）：与 [memoryStore]
+         * 非空同时成立才生效（注入+提炼+三工具）。运行时切换走
+         * [setMemoryEnabled]（不重建会话，observeCamera 先例）。
+         */
+        val memoryEnabled: Boolean = true,
+        /** 自动提炼子开关（通道 B）；关 = 只保留 remember 工具写入与检索注入。 */
+        val memoryAutoExtract: Boolean = true,
+        /**
+         * 攒批触发阈值：累计轮次（与 memoryExtractMinChars **或**关系，§2.1）。
+         * 调大批次更省 token、调小批次更及时；真机调试用 ai_cmd memory_config。
+         */
+        val memoryExtractEveryTurns: Int = 5,
+        /** 攒批触发阈值：窗口累计字符（内容密集的少轮次对话也能及时提炼）。 */
+        val memoryExtractMinChars: Int = 600,
+        /** 每轮检索注入的命中条数上限（注入 token 恒定，与库大小无关）。 */
+        val memoryTopK: Int = 3,
+        /** 常驻槽上限：身份/关系类且重要度 ≥8 的事实恒注入 ≤N 条。 */
+        val memoryPinnedMax: Int = 3,
     )
 
     /** LLM request parameters; must be set before [send]. */
@@ -281,6 +320,51 @@ class AvatarSession(
      */
     val tools: ToolRegistry = ToolRegistry(options.toolTimeoutMs)
 
+    /** 长期记忆提示词目录（随 [Options.lang]，与 [texts] 同惯例）。 */
+    private val memoryTexts = memoryTextsOf(options.lang)
+
+    /**
+     * 长期记忆协调器（docs/memory-feasibility.md §4.3）：null = 未注入
+     * memoryStore 或纯 TTS 会话（llm=null，§9.7）。检索注入 / 攒批提炼 /
+     * 运行时开关都经它；三记忆工具独立注册（只依赖 store，llm 缺失时读写
+     * 本地仍可用，提炼自然停摆）。
+     */
+    val memoryCoordinator: MemoryCoordinator? = run {
+        val store = memoryStore ?: return@run null
+        if (llm == null) return@run null
+        MemoryCoordinator(
+            store = store,
+            scope = scope,
+            texts = memoryTexts,
+            retriever = MemoryRetriever(
+                store,
+                embeddingAdapter,
+                { embeddingConfig?.invoke() },
+                MemoryRetriever.Config(topK = options.memoryTopK, pinnedMax = options.memoryPinnedMax),
+            ),
+            llmProvider = { llm },
+            llmConfigProvider = { llmConfig },
+            charName = { characterName.ifBlank { memoryTexts.defaultCharName } },
+            embedder = embeddingAdapter,
+            embeddingConfig = { embeddingConfig?.invoke() },
+            everyTurns = options.memoryExtractEveryTurns,
+            minChars = options.memoryExtractMinChars,
+        ).also { it.autoExtract = options.memoryAutoExtract }
+    }
+
+    /** 检索缝独立持有：llm=null 的纯 TTS 会话里三工具仍可本地读写记忆。 */
+    private val memoryRetriever: MemoryRetriever? = memoryStore?.let {
+        MemoryRetriever(
+            it,
+            embeddingAdapter,
+            { embeddingConfig?.invoke() },
+            MemoryRetriever.Config(topK = options.memoryTopK, pinnedMax = options.memoryPinnedMax),
+        )
+    }
+
+    /** 当前人物卡名（提炼 prompt 里助手行前缀；无卡用 MemoryTexts 缺省）。 */
+    private var characterName: String = ""
+
     /**
      * 技能注册表（docs/rps-skill-feasibility.md §4.2）：app 喂事件
      * （语音文本/VAD 时机/相机手势），session 喂回合结果
@@ -351,6 +435,12 @@ class AvatarSession(
             AgentToolCatalog.getCurrentView(texts) { controller?.getActiveCameraShot() }
                 .let { (spec, exec) -> tools.register(spec, exec) }
             options.tools.forEach { (spec, exec) -> tools.register(spec, exec) }
+        }
+        // 记忆三工具（docs/memory-feasibility.md §4.4）：memoryStore 非空 +
+        // 总开关开 + agentTools 开才注册。运行时切换走 [setMemoryEnabled]
+        // （register/unregister + 协调器 flag，revision 重钉自动发生）。
+        if (memoryStore != null && options.agentToolsEnabled && options.memoryEnabled) {
+            registerMemoryTools()
         }
         pipeline.listener = object : SpeechPipeline.Listener {
         override fun onSentenceFailed(sequence: Int, text: String, error: Throwable) {
@@ -429,11 +519,14 @@ class AvatarSession(
     /** Load persona from a character card and rebuild the system prompt. */
     fun setCharacterCard(card: CharacterCard) {
         systemPrompt = options.assembler.assemble(card)
+        // 提炼 prompt 的助手行前缀用卡名（无卡回 MemoryTexts 缺省「虚拟人」）
+        characterName = card.name
     }
 
     /** Drop the card persona (system prompt reverts to empty). */
     fun clearCharacterCard() {
         systemPrompt = ""
+        characterName = ""
     }
 
     /**
@@ -473,6 +566,47 @@ class AvatarSession(
     /** Clear dialog history (a fresh conversation). */
     fun clearHistory() {
         store.clear()
+    }
+
+    // ── Long-term memory (docs/memory-feasibility.md §4.6) ───────────────
+
+    /**
+     * 长期记忆总开关（运行时切换，不重建会话——observeCamera 先例）：开 =
+     * 三工具注册 + 检索注入 + 自动提炼；关 = 全部退场 + 待提炼窗口清空。
+     * 工具集合变化 → 协议块按指纹自动重钉。
+     */
+    fun setMemoryEnabled(enabled: Boolean) {
+        if (memoryStore == null) return
+        memoryCoordinator?.setEnabled(enabled)
+        if (enabled && options.agentToolsEnabled) {
+            registerMemoryTools()
+        } else {
+            unregisterMemoryTools()
+        }
+    }
+
+    /** 自动提炼子开关（运行时）：只关通道 B，注入与工具写入照常。 */
+    fun setMemoryAutoExtract(enabled: Boolean) {
+        memoryCoordinator?.autoExtract = enabled
+    }
+
+    /** 当前记忆配置快照（ai_cmd memory_config 无参查看用）。 */
+    fun memoryConfigLine(): String? = memoryCoordinator?.windowLine()
+
+    private fun registerMemoryTools() {
+        val store = memoryStore ?: return
+        val retriever = memoryRetriever ?: return
+        if (tools.find(MemoryTools.NAME_REMEMBER) != null) return // 幂等
+        MemoryTools.remember(store, embeddingAdapter, { embeddingConfig?.invoke() }, memoryTexts)
+            .let { (spec, exec) -> tools.register(spec, exec) }
+        MemoryTools.recall(store, retriever, memoryTexts)
+            .let { (spec, exec) -> tools.register(spec, exec) }
+        MemoryTools.forget(store, memoryTexts)
+            .let { (spec, exec) -> tools.register(spec, exec) }
+    }
+
+    private fun unregisterMemoryTools() {
+        MemoryTools.ALL_NAMES.forEach { tools.unregister(it) }
     }
 
     // ── Conversation control ──────────────────────────────────────────────
@@ -518,7 +652,12 @@ class AvatarSession(
             var ttfbMs = -1L
             var usage: LlmUsage? = null
             try {
-                val built = buildRequestMessages(images, contextFirstTurn)
+                // 记忆检索（docs/memory-feasibility.md §4.5）：在本轮用户输入上
+                // 检索（空库短路 0ms；embed ≤800ms 超时→关键词降级）。挂末尾
+                // user 前缀槽，与视角行/技能行同缝——逐轮变化、不进 store、
+                // 不碰钉住协议块。
+                val memoryLine = memoryCoordinator?.lineFor(text)
+                val built = buildRequestMessages(images, contextFirstTurn, memoryLine)
                 // 工具循环（docs/agent-feasibility.md §4.5）：文本增量照旧走既有
                 // 断句/TTS/口型流水（跨轮句序号连续，语音无感）；模型请求工具时
                 // 在「流结束」与「回合完成」之间插入「执行→结果回灌→再请求」，
@@ -678,6 +817,11 @@ class AvatarSession(
                 logChunked(PROMPT_TAG, "RESPONSE raw", replyBuffer.toString())
                 logChunked(PROMPT_TAG, "RESPONSE clean", cleanBuffer.toString())
                 store.appendAssistant(replyBuffer.toString())
+                // 记忆窗口追加（通道 B，docs/memory-feasibility.md §4.3）：放在
+                // try 块内 TurnCompleted 之前——被打断/失败的回合走取消或异常
+                // 路径天然跳过（半截对话提炼出来的事实不可信）；内部达阈值才
+                // 后台提炼，fire-and-forget 永不在此处抛。
+                memoryCoordinator?.onTurnCompleted(text, cleanBuffer.toString())
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
                 // 技能缝：回合结果广播给技能（猜拳 INVITED→ARMED / JUDGING→ARMED）
@@ -866,6 +1010,9 @@ class AvatarSession(
         append(" tools=[${tools.list().joinToString(", ") { it.name }}]")
         append(" lastToolCalls=[${lastToolCalls.joinToString(", ")}]")
         append(" disabledModels=[${toolsDisabledModels.joinToString(", ")}]")
+        memoryCoordinator?.let {
+            append(" memoryCoordinator=yes")
+        } ?: run { if (memoryStore != null) append(" memoryCoordinator=no(llm null)") }
     }
 
     private fun modelKey(cfg: LlmConfig): String = "${cfg.baseUrl}|${cfg.model}"
@@ -1047,7 +1194,11 @@ class AvatarSession(
     /** 一次组好的请求：消息序列 + 本轮携带的完整身份块文本（null=没有身份内容）。 */
     private data class BuiltRequest(val messages: List<ChatMessage>, val identityBlock: String?)
 
-    private fun buildRequestMessages(turnImages: List<String>, contextFirstTurn: Boolean): BuiltRequest {
+    private fun buildRequestMessages(
+        turnImages: List<String>,
+        contextFirstTurn: Boolean,
+        memoryLine: String? = null,
+    ): BuiltRequest {
         val list = mutableListOf<ChatMessage>()
         // system 结构（单条——部分服务商对多条 system 直接 400，A.1 第 34 条）：
         //   完整形态（上下文首轮，或上次没送达/指纹变化后的重发轮）：
@@ -1076,13 +1227,15 @@ class AvatarSession(
         // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两段
         // 都不进 store，天然不受 recentTurnLimit 影响。
         list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
-        // 视角行 + 技能指令行 + 本轮抓拍（视频模式）：都挂到刚 append 的末尾
-        // user 消息上——请求里带，store 里的历史始终只有干净文字（见 send 的
-        // 注释）。技能指令与视角行同级：逐轮变化、只改本轮请求副本、不碰
-        // system/协议（前缀缓存友好，A.1 第 34 条的"system 恒一条"不受影响）。
+        // 视角行 + 记忆参考块 + 技能指令行 + 本轮抓拍（视频模式）：都挂到刚
+        // append 的末尾 user 消息上——请求里带，store 里的历史始终只有干净文字
+        // （见 send 的注释）。技能指令与视角行/记忆块同级：逐轮变化、只改本轮
+        // 请求副本、不碰 system/协议（前缀缓存友好，A.1 第 34 条的"system 恒
+        // 一条"不受影响）。排序 viewLine→memoryLine→skillLine：技能指令仍最
+        // 靠近生成位置（§7.10 近因效应）。
         val viewLine = currentViewLine()
         val skillLine = skills.activeDirective()
-        val directivePrefix = listOfNotNull(viewLine, skillLine).joinToString("\n\n")
+        val directivePrefix = listOfNotNull(viewLine, memoryLine, skillLine).joinToString("\n\n")
         if ((directivePrefix.isNotEmpty() || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
             val last = list.last()
             list[list.size - 1] = last.copy(
@@ -1107,7 +1260,7 @@ class AvatarSession(
         Log.i(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
-                "view=${viewLine ?: "n/a"} skill=${skillLine?.length ?: 0}ch " +
+                "view=${viewLine ?: "n/a"} mem=${memoryLine?.length ?: 0}ch skill=${skillLine?.length ?: 0}ch " +
                 "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",

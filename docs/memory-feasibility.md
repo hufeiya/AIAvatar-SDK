@@ -1,5 +1,10 @@
 # 长期记忆可行性分析 + 落地方案(自动提炼式记忆)
 
+> **实现状态(2026-10-13):M1+M2 已全部实现,单测 +60 全量 832 全绿(app181/corelib114/adapter108/orchestrator429 debug 变体)。**
+> 与本文的对照:§4 全部按定稿落地——存储(MemoryStore+Room `agent_memory.db`+待提炼窗口持久化)/检索(MemoryRetriever,公式+常驻槽+关键词降级)/提炼(MemoryExtractor+Parser+MemoryCoordinator 攒批触发+静默门+快照语义)/三工具(remember/recall/forget)/注入缝(末尾 user 槽 viewLine→memoryLine→skillLine)/运行时开关(AvatarSession.setMemoryEnabled/setMemoryAutoExtract)/MemoryTexts 双语/设置页两开关+隐私文案/管理面板(MemoryPanel)/ai_cmd 五命令(memory_list/memory_stats/memory_forget/memory_clear/memory_config)。
+> 差异与补充:①AvatarSession 构造缝多一个 `embeddingConfig: (() -> EmbeddingConfig?)?` lambda(配置每次现取,换 Key 不重建会话,AIAvatarSdk.embeddingConfigProvider 转发);②MemoryParser 返回 null(垃圾输出,保留窗口)与空列表(合法空 ops,成功清窗)两种语义,比 §4.3 草案更细;③AIAvatarSdk 公开 `memoryStore` 只读属性(管理面板/调试命令在会话未配置时也可查删)。
+> **真机验收(2026-10-13):§10 curl 矩阵 + §7 九场景全部通过**(2c3769db,硅基 DeepSeek-V4-Flash 主链 + 火山 doubao 对照,结果详见 `agent-provider-matrix.md`「记忆提炼」节与 `ai-layer-handoff.md` 第二节)。要点:三家主路由提炼 JSON 单行合规 + 双事实命中全 5/5(**OpenRouter free 仅 1/5,免费路由按预案别开自动提炼**);九场景含 force-stop 持久化、跨上下文纯向量检索、`memory_config 1 0` 运行时热更新、纯通道 B 写入(src=auto 分类正确)、0.92 去重同 id 原地升级(imp 5→8)、无 Key 关键词降级、开关 tools 13↔10、30 轮寒暄恰 6 次提炼仅 +1 条、管理面板单条删除+清空恢复「不认识」。**两个模型侧发现(非代码缺陷)**:①DeepSeek 调 remember 常不传可选 category(入库全「其他」),doubao 传对——分类质量随模型浮动;②弱祈使「记一下」偶发「宣布记住零调用」(DeepSeek 已知形态),自动提炼数秒内兜住不丢事实。剩 M3(整理/独立提炼模型/开场白个性化)按需另立。
+
 > 生成时间:2026-10-11。对应代码状态:P0 工具调用已实现并真机验收通过(`docs/agent-feasibility.md`)。
 > 外部调研对象:①**claude-code 源码**(`/home/neethu/projects/claude-code`,file:line 锚点已核实)——其 auto-memory 是「LLM 自动提炼对话 → 存本地 → 后续会话召回」的成熟工业实现,与本需求形态一致;②**airi** 的 telegram 记忆闭环(向量检索路线,已在 `agent-feasibility.md` §1.4 盘点)。
 > 与既有文档的关系:**本文接管 `agent-feasibility.md` §6(P2 长期记忆草图)并扩展**——§6.1 数据模型 / §6.2 EmbeddingAdapter / §6.4 检索公式三处定案原样保留;新增的核心是 **claude-code 式的「回合结束自动提炼」通道**(用户本需求的主通道)、常驻身份槽、时间衰减豁免、互斥规则与完整的工程落点。

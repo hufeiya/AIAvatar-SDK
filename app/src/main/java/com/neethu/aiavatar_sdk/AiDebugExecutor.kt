@@ -113,6 +113,26 @@ internal class AiChatDebugHooks(
     },
     /** ai_cmd agent_state：智能体工具状态快照（注册表/最近调用/禁用模型/上限配置）。 */
     val agentState: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd memory_list [query]：长期记忆条目（可选过滤词）。挂起。 */
+    val memoryList: suspend (String?) -> String = { _ ->
+        "memory not wired in this screen"
+    },
+    /** ai_cmd memory_stats：总数/分类分布/来源分布/待提炼窗口状态。挂起。 */
+    val memoryStats: suspend () -> String = {
+        "memory not wired in this screen"
+    },
+    /** ai_cmd memory_forget <id前缀>：按 id 前缀删一条（唯一匹配才删）。挂起。 */
+    val memoryForget: suspend (String) -> String = { _ ->
+        "memory not wired in this screen"
+    },
+    /** ai_cmd memory_clear：清空全部记忆与待提炼窗口（面板清空同一路径）。挂起。 */
+    val memoryClear: suspend () -> String = {
+        "memory not wired in this screen"
+    },
+    /** ai_cmd memory_config [turns] [chars]：无参=查看提炼阈值；带参=运行时调整。 */
+    val memoryConfig: (String?) -> String = { _ ->
+        "memory not wired in this screen"
+    },
     /** 会话直取缝（ai_cmd anchors / walk_to <锚点名> 等 P1 走动调试命令用）；null = 无会话。 */
     val session: () -> AvatarSession? = { null },
 )
@@ -436,6 +456,31 @@ internal suspend fun executeAiCommand(
             "agent_state" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.agentState()
+            }
+            "memory_list" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.memoryList(command.arg)
+            }
+            "memory_stats" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.memoryStats()
+            }
+            "memory_forget" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.memoryForget(
+                    command.arg?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: throw IllegalArgumentException(
+                            "memory_forget expects ai_arg = memory id prefix (send ai_cmd memory_list to see ids)",
+                        ),
+                )
+            }
+            "memory_clear" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.memoryClear()
+            }
+            "memory_config" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.memoryConfig(command.arg)
             }
             else -> throw IllegalArgumentException(
                 "Unknown command '${command.name}'. Send ai_cmd=help for the command list."
