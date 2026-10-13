@@ -1,13 +1,21 @@
 {
   "version": 1,
   "title": "默认双人团播",
+  "music": "music/showtime-45s.mp3",
   "acts": [
     { "type": "camera", "shot": "group" },
+    { "type": "music", "action": "start" },
+    { "type": "move", "performer": "A", "target": "stage_a" },
+    { "type": "move", "performer": "B", "target": "stage_b" },
+    { "type": "say", "performer": "A", "text": "欢迎来到今晚的团播现场，我是小柔～" },
+    { "type": "move", "performer": "A", "target": "stage_front_a" },
     { "type": "dance", "performer": "A", "clip": "08_舞蹈与表演/Bboy Hip Hop Variation One", "camera": "full", "fans": ["clap"] },
-    { "type": "dance", "performer": "B", "clip": "08_舞蹈与表演/Female Hip Hop 'Running Man' Dancing", "camera": "full", "fans": ["clap"] },
+    { "type": "move", "performer": "B", "target": "stage_front_b" },
+    { "type": "dance", "performer": "B", "clip": "08_舞蹈与表演/Female Hip Hop 'Running Man' Dancing", "camera": "full", "fans": ["clap"], "line": "下面看我啦～" },
     { "type": "wait", "seconds": 1.5 },
     { "type": "group_dance", "clip": "08_舞蹈与表演/Doing The Shuffling Dance", "seconds": 12, "camera": "group" },
     { "type": "bow", "camera": "group" },
+    { "type": "music", "action": "stop" },
     { "type": "camera", "shot": "group" }
   ]
 }

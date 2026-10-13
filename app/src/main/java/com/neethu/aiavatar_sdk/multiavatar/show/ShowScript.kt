@@ -6,8 +6,8 @@ import kotlinx.serialization.json.Json
 
 /**
  * 团播节目单（docs/multi-dance-feasibility.md §4.4）：一份 JSON 描述整场演出的
- * 幕次序列（切机位/独舞/齐舞/谢幕/停顿/串场词）。手写资产，**解析失败整单拒绝**
- * 不做容错续跑——早失败优于演一半。
+ * 幕次序列（切机位/走位/独舞/齐舞/谢幕/停顿/串场词/配乐）。手写资产，
+ * **解析失败整单拒绝**不做容错续跑——早失败优于演一半。
  *
  * `clip` 写类别目录下的文件名（可省 `.vrma`、可省 `animations/` 前缀），
  * [resolveClipAsset] 归一成完整 assets 路径；白名单校验在控制器侧（要扫 assets）。
@@ -16,7 +16,7 @@ import kotlinx.serialization.json.Json
 data class ShowScript(
     val version: Int = DEFAULT_VERSION,
     val title: String = "未命名团播",
-    /** 背景音乐（P1，P0 忽略）。 */
+    /** 背景音乐（assets 相对路径，如 `music/show.mp3`；music action=start 播它）。 */
     val music: String? = null,
     val acts: List<ShowAct>,
 ) {
@@ -49,11 +49,26 @@ object CameraNames {
     val KNOWN = setOf("closeup", "macro", "medium", "full", "long", "over", "follow", "group")
 }
 
-/** 观众席行为词表（§4.4：gaze 默认恒开；sway 为 P1，P0 记日志跳过）。 */
+/** 观众席行为词表（§4.4：gaze 默认恒开）。 */
 object FanActions {
     const val GAZE = "gaze"
     const val CLAP = "clap"
     const val SWAY = "sway"
+}
+
+/** music 幕的 action 词表（P1 §4.4）：start/stop 直接控制；duck/full 是音量两档。 */
+object MusicActions {
+    const val START = "start"
+    const val STOP = "stop"
+    const val DUCK = "duck"
+    const val FULL = "full"
+    val ALL = setOf(START, STOP, DUCK, FULL)
+
+    /** duck 档音量（串场词让主旋律，§4.8 的手动 duck act）。 */
+    const val DUCK_VOLUME = 0.35f
+
+    /** 背景音乐常驻音量（开演 start 的默认档，压在 TTS 之下）。 */
+    const val BASE_VOLUME = 0.65f
 }
 
 @Serializable
@@ -69,12 +84,16 @@ data class ShowAct(
     val shot: String? = null,
     /** dance/group_dance/bow 幕内的机位切换（同词表）。 */
     val camera: String? = null,
-    /** camera 幕的目标演员 id（缺省 = 焦点/同框由舞台语义决定）。 */
+    /** camera 幕的目标演员 id；move 幕的目标锚点名（词表 = home.anchors.json）。 */
     val target: String? = null,
     /** say 的串场词。 */
     val text: String? = null,
     /** dance 的观众席行为（["clap"]；gaze 恒开无需声明）。 */
     val fans: List<String>? = null,
+    /** dance 开跳前的表演者串场词（P1：接 TTS，说完才起舞）。 */
+    val line: String? = null,
+    /** music 幕的动作（词表见 [MusicActions]）。 */
+    val action: String? = null,
 )
 
 /**
@@ -127,11 +146,18 @@ object ShowScriptParser {
                     if (act.performer.isNullOrBlank()) errors += "$at: 缺 performer"
                     if (act.text.isNullOrBlank()) errors += "$at: 缺 text"
                 }
-                ActTypes.MOVE -> if (act.performer.isNullOrBlank() && act.target.isNullOrBlank()) {
-                    errors += "$at: 缺 performer/target"
+                ActTypes.MOVE -> {
+                    if (act.performer.isNullOrBlank()) errors += "$at: 缺 performer"
+                    if (act.target.isNullOrBlank()) errors += "$at: 缺 target（锚点名）"
                 }
                 ActTypes.CAMERA -> if (act.shot.isNullOrBlank()) errors += "$at: 缺 shot"
-                ActTypes.MUSIC -> Unit
+                ActTypes.MUSIC -> {
+                    if (act.action !in MusicActions.ALL) {
+                        errors += "$at: 缺/未知 action（可用 ${MusicActions.ALL.sorted().joinToString("/") }）"
+                    } else if (act.action == MusicActions.START && script.music.isNullOrBlank()) {
+                        errors += "$at: action=start 但节目单未声明 music 文件"
+                    }
+                }
                 ActTypes.WAIT -> if (act.seconds == null || act.seconds <= 0f) {
                     errors += "$at: 缺/非法 seconds"
                 }

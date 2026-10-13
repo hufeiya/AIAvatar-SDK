@@ -2,11 +2,15 @@ package com.neethu.aiavatar_sdk.multiavatar.show
 
 import android.content.Context
 import android.util.Log
+import com.neethu.aiavatar_sdk.loadWalkAnchors
 import com.neethu.aiavatar_sdk.multiavatar.Slots
 import com.neethu.aiavatar_sdk.multiavatar.StageChatRig
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.WalkStartResult
 import com.neethu.corelib.stage.AvatarHandle
+import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.roundtable.RoundtableState
+import com.neethu.orchestrator.session.AvatarEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,10 +54,16 @@ internal class DanceShowController(
     /** 曲目白名单（归一后的完整 assets 路径），启动时全库扫描。 */
     val whitelist: Set<String> = scanAnimationWhitelist(context)
 
+    /** 背景音乐（P1：music 幕的落点；随停演/页面停止收干净）。 */
+    private val music = MusicPlayer(context, ::log)
+
+    /** 锚点表（move 幕词表 = `<move:>` 同一张 home.anchors.json，P1 扩前排表演位）。 */
+    private val anchors: List<MoveAnchor> = loadWalkAnchors(context)
+
     private var cast: List<String> = emptyList()
 
-    /** 开演时的队列 mark（x,z）——独舞漂移后的幕间回位锚（§4.7）。 */
-    private var marks: Map<String, Pair<Float, Float>> = emptyMap()
+    /** 本场发起的原地转向（turnTo 完成也发 walkFinished，这里吞掉防误推进）。 */
+    private val pendingTurns = mutableSetOf<String>()
 
     /** `dance load` 装载待演的节目单（`dance start` 不带名时优先用它）。 */
     var loadedScript: ShowScript? = null
@@ -128,27 +138,31 @@ internal class DanceShowController(
             return false
         }
         cast = ready
-        marks = cast.associateWith { id ->
-            slots[id]?.getWalkState()?.let { it.x to it.z } ?: (0f to -4f)
-        }
+        pendingTurns.clear()
         restartCollectors()
         // 在途发言让路（圆桌停题后可能仍有收尾 TTS）
         rig.roundtable?.interrupt()
+        resolved.music?.let { m ->
+            runCatching { appContext.assets.open(m).close() }
+                .onFailure { log("warn: 配乐文件缺失 $m（music start 时报错跳过）") }
+        }
         log("开演: ${resolved.title} cast=[${cast.joinToString(",")}] ${resolved.acts.size} 幕")
-        director.start(resolved, cast, ::execute, ::durationOf)
+        director.start(resolved, cast, ::execute, ::durationOf, ::anchorOf, ::positionOf)
         return true
     }
 
-    /** 停演三清：导演停 + 全员停舞回 idle + 走动停 + 观众席复位。 */
+    /** 停演四清：音乐停 + 导演停 + 串场词打断 + 全员停舞走动停 + 观众席复位。 */
     fun stopShow() {
         director.stop()
         cancelCollectors()
+        music.stop()
+        rig.roundtable?.interrupt()
         slots.entries().forEach { (_, h) ->
             h?.stopWalk()
             h?.stopVrmaAnimation(0.3f)
             if (h?.isReady == true) h.lookAtCamera()
         }
-        log("停演（三清完成）")
+        log("停演（音乐停/停舞回 idle/走动停/注视复位）")
     }
 
     /** 跳过当前幕。 */
@@ -164,15 +178,21 @@ internal class DanceShowController(
     fun close() {
         director.stop()
         cancelCollectors()
+        music.release()
         scope.cancel()
     }
+
+    /** 页面不可见：音乐暂停（风险 9 最低语义）；回来续播。 */
+    fun onHostPause() = music.pause()
+
+    fun onHostResume() = music.resume()
 
     // ── 回显 ─────────────────────────────────────────────────────────────
 
     fun statusLine(): String {
         val p = director.progress.value
         return "show=${director.state.value} act=${p.summary} cast=[${cast.joinToString(",")}] " +
-            "fps=${stage.fps.value}"
+            "music=${if (music.isPlaying) "on" else "off"} fps=${stage.fps.value}"
     }
 
     fun listLine(): String {
@@ -190,6 +210,17 @@ internal class DanceShowController(
     private fun validateAgainstStage(script: ShowScript, ready: List<String>): String? {
         for ((i, act) in script.acts.withIndex()) {
             val at = "act ${i + 1} (${act.type})"
+            if (act.type == ActTypes.MOVE) {
+                // move 的 target 是锚点名（其余幕的 target 是机位锚定演员 id）
+                act.performer?.let {
+                    if (it.uppercase() !in ready) return "$at: 演员 $it 不在台上（就位: ${ready.joinToString("/")}) "
+                }
+                val anchor = act.target
+                if (anchor == null || anchorOf(anchor) == null) {
+                    return "$at: 锚点 '$anchor' 不在表内（home.anchors.json）"
+                }
+                continue
+            }
             act.performer?.let {
                 if (it.uppercase() !in ready) return "$at: 演员 $it 不在台上（就位: ${ready.joinToString("/")}) "
             }
@@ -204,6 +235,14 @@ internal class DanceShowController(
         return null
     }
 
+    /** move 幕锚点解析（名字不区分大小写，与解析层的小写归一对齐）。 */
+    private fun anchorOf(name: String): Pair<Float, Float>? =
+        anchors.firstOrNull { it.name == name.lowercase() }?.let { it.x to it.z }
+
+    /** 演员当前世界位（导演「已在位」判定与 mark 初值的活查询）。 */
+    private fun positionOf(id: String): Pair<Float, Float>? =
+        slots[id]?.getWalkState()?.let { it.x to it.z }
+
     private fun durationOf(performer: String, @Suppress("UNUSED_PARAMETER") clip: String): Float? =
         slots[performer]?.getVrmaAnimationDuration()?.takeIf { it > 0f }
 
@@ -215,7 +254,17 @@ internal class DanceShowController(
                 val shot = parseCameraShot(cmd.shot) ?: return
                 stage.setCameraShot(shot, cmd.target?.let { slots[it] })
             }
-            is DirectorCmd.Say -> log("show say: ${cmd.performer}: ${cmd.text}") // P1 接 sayAsync
+            is DirectorCmd.Say -> sayLine(cmd.performer, cmd.text)
+            is DirectorCmd.Walk -> executeWalk(cmd.performer, cmd.x, cmd.z)
+            is DirectorCmd.FaceCamera -> {
+                val h = slots[cmd.performer] ?: return
+                val ok = h.getCameraLookAt()?.let { (eye, _, _) -> h.turnTo(eye[0], eye[2]) } ?: false
+                // turnTo 完成也发 walkFinished——登记后由收集器吞掉，防误推进
+                if (ok) pendingTurns.add(cmd.performer.uppercase())
+            }
+            is DirectorCmd.MusicStart -> music.start(cmd.assetPath)
+            is DirectorCmd.MusicStop -> music.stop()
+            is DirectorCmd.MusicVolume -> music.setVolume(cmd.volume, cmd.tag)
             is DirectorCmd.PlayDance -> slots[cmd.performer]?.let { h ->
                 if (h.loadVrmaAnimation(cmd.clip)) {
                     h.playVrmaAnimation(loop = cmd.loop, fadeSeconds = 0.25f)
@@ -234,24 +283,40 @@ internal class DanceShowController(
                     h.playVrmaAnimation(loop = false, fadeSeconds = 0.2f)
                 }
             }
-            is DirectorCmd.ReturnToMark -> returnToMark(cmd.performer)
             is DirectorCmd.Log -> log(cmd.text)
         }
     }
 
-    /** 幕间回位（§4.7 最简版）：snap 回开演 mark + 转回镜头方向（fire-and-forget）。 */
-    private fun returnToMark(id: String) {
+    /**
+     * 走位落地（「已在位」判定在导演侧）：起步失败时**就地合成收尾事件**
+     * （arrived=false）——导演的 awaitWalk 不空等，演出继续不卡场。
+     */
+    private fun executeWalk(id: String, x: Float, z: Float) {
         val h = slots[id] ?: return
-        val mark = marks[id] ?: return
-        h.getWalkState()?.let { cur ->
-            val dx = mark.first - cur.x
-            val dz = mark.second - cur.z
-            if (dx * dx + dz * dz > 0.0004f) h.moveAvatar(dx, 0f, dz)
+        log("$id 起步 → (%.2f, %.2f)".format(x, z))
+        val result = h.startWalk(x, z, WALK_SPEED_MPS)
+        if (result != WalkStartResult.STARTED) {
+            log("warn: $id 起步失败 $result（就地继续）")
+            director.onWalkFinished(id, arrived = false)
         }
-        h.getCameraLookAt()?.let { (eye, _, _) -> h.turnTo(eye[0], eye[2]) }
     }
 
-    // ── 播完事件收集（vrmaFinished → 导演）───────────────────────────────
+    /**
+     * 串场词落地（P1）：接圆桌 say 全链（TTS→口型→字幕）。该槽无会话 =
+     * 秒回完成事件（团播可纯渲染不带 AI 跑，§7-P1），只留警告行。
+     */
+    private fun sayLine(id: String, text: String) {
+        val rt = rig.roundtable
+        if (rt == null || rt.sessionOf(id.uppercase()) == null) {
+            log("warn: $id 无会话，串场词跳过: $text")
+            director.onSayCompleted(id)
+            return
+        }
+        log("show say: $id: $text")
+        scope.launch { rt.say(id.uppercase(), text) }
+    }
+
+    // ── 事件收集（vrmaFinished/walkFinished/stageEvents → 导演）──────────
 
     private fun restartCollectors() {
         cancelCollectors()
@@ -260,7 +325,30 @@ internal class DanceShowController(
             scope.launch {
                 h.vrmaFinished.collect { director.onVrmaFinished(id) }
             }
-        }
+        } + cast.mapNotNull { id ->
+            val h = slots[id] ?: return@mapNotNull null
+            scope.launch {
+                h.walkFinished.collect { f ->
+                    if (pendingTurns.remove(id)) return@collect // 本场转向的事件，吞
+                    director.onWalkFinished(id, f.arrived)
+                }
+            }
+        } + listOfNotNull(
+            rig.roundtable?.let { rt ->
+                scope.launch {
+                    rt.events.collect { (slotId, event) ->
+                        when (event) {
+                            is AvatarEvent.TurnCompleted,
+                            is AvatarEvent.TurnFailed,
+                            is AvatarEvent.PlaybackInterrupted,
+                            -> director.onSayCompleted(slotId)
+
+                            else -> Unit
+                        }
+                    }
+                }
+            }
+        )
     }
 
     private fun cancelCollectors() {
@@ -281,6 +369,9 @@ internal class DanceShowController(
 
         /** 应援鼓掌曲目（04_交流手势；多为坐姿起手，真机验收挑选后可换）。 */
         const val FANS_CLAP_CLIP = "animations/04_交流手势/Sitting Ethusiastic Clap.vrma"
+
+        /** 团播走位速度（m/s；步态时间标度由引擎换算）。 */
+        const val WALK_SPEED_MPS = 1.0f
 
         /** 全库扫描 animations/ 下所有 .vrma（归一完整路径），生成曲目白名单。 */
         fun scanAnimationWhitelist(context: Context): Set<String> {

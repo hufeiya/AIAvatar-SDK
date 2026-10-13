@@ -124,6 +124,53 @@ class ShowScriptTest {
         assertTrue(msg, msg.contains("缺 text"))
     }
 
+    // ── P1：move / music 幕校验 ──────────────────────────────────────────────
+
+    @Test
+    fun `move缺performer与target都报出`() {
+        val result = parse("""{"version":1,"acts":[{"type":"move"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("缺 performer"))
+        assertTrue(msg, msg.contains("缺 target"))
+    }
+
+    @Test
+    fun `move幕齐备通过且target是锚点名`() {
+        val script = parse(
+            """{"version":1,"acts":[{"type":"move","performer":"A","target":"stage_front_a"}]}"""
+        ).getOrThrow()
+        assertEquals("stage_front_a", script.acts[0].target)
+    }
+
+    @Test
+    fun `music缺action拒绝`() {
+        val result = parse("""{"version":1,"acts":[{"type":"music"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("action"))
+    }
+
+    @Test
+    fun `music未知action拒绝`() {
+        val result = parse("""{"version":1,"acts":[{"type":"music","action":"loud"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("action"))
+    }
+
+    @Test
+    fun `music start缺节目单music声明拒绝`() {
+        val result = parse("""{"version":1,"acts":[{"type":"music","action":"start"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("music"))
+    }
+
+    @Test
+    fun `music stop无需节目单music声明`() {
+        val script = parse(
+            """{"version":1,"acts":[{"type":"music","action":"stop"}]}"""
+        ).getOrThrow()
+        assertEquals("stop", script.acts[0].action)
+    }
+
     @Test
     fun `clip路径归一三形态`() {
         assertEquals(

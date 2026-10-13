@@ -84,9 +84,22 @@ import java.io.File
  */
 class MultiAvatarActivity : ComponentActivity() {
 
+    /** 团播控制器（composition 内装配，生命周期回调经此转音乐暂停/恢复）。 */
+    internal var showRef: DanceShowController? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { MultiAvatarScreen() }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        showRef?.onHostResume()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        showRef?.onHostPause()
     }
 }
 
@@ -152,10 +165,12 @@ private fun MultiAvatarScreen() {
     // P0 团播：节目单导演的落地层（互斥检查/白名单/指令执行都在控制器）
     val show = remember {
         DanceShowController(context, stage, slots, rig) { msg -> lastLog = msg.take(120) }
+            .also { (context as? MultiAvatarActivity)?.showRef = it }
     }
     // 关闭顺序：先停演出（导演协程/事件收集还引用 rig）再关聊天装配
     DisposableEffect(Unit) {
         onDispose {
+            (context as? MultiAvatarActivity)?.showRef = null
             show.close()
             rig.close()
         }
@@ -321,6 +336,7 @@ private fun StageUi(
                     SlotControls(id, handle, others)
                 }
                 CameraControls(stage, slots)
+                DanceControls(show)
                 Text("› $lastLog", color = Color(0xFF9FE29F), fontSize = 11.sp, maxLines = 1)
             }
         }
@@ -378,6 +394,32 @@ private fun CameraControls(stage: AvatarStage, slots: Slots) {
         SmallButton("清除运镜") { stage.clearCameraShot() }
         SmallButton("相机复位") { stage.resetCamera() }
         SmallButton("拖拽") { stage.setDragMode(!stage.isDragMode()) }
+    }
+}
+
+/** 团播面板（P1 §7：极简四件——开演/停演/下一幕 + 幕次进度行）。 */
+@Composable
+private fun DanceControls(show: DanceShowController) {
+    val state by show.state.collectAsState()
+    val progress by show.progress.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            SmallButton("开演") { show.startShow(null) }
+            SmallButton("停演") { show.stopShow() }
+            SmallButton("下一幕") { show.skip() }
+        }
+        Text(
+            "dance ${state.name.lowercase()} ${progress.summary}",
+            color = Color(0xFF9FE29F),
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
     }
 }
 
@@ -670,12 +712,12 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "cam group"                # 双人同框（GROUP_SHOT 跟踪机位）
  * ... --es cmd "turn A 0.8 -4.0"          # 原地转向世界点（对谈位互相对着）
  * ```
- * 团播（P0，docs/multi-dance-feasibility.md §4.5）：
+ * 团播（P0/P1，docs/multi-dance-feasibility.md §4.5）：
  * ```
- * ... --es cmd "dance"                    # 快照：state/幕次/cast/fps
+ * ... --es cmd "dance"                    # 快照：state/幕次/cast/音乐/fps
  * ... --es cmd "dance start [名]"         # 开演（缺省=内置默认单；圆桌 ACTIVE 时拒绝）
  * ... --es cmd "dance load <名>"          # filesDir/shows/（回落 assets/shows/）装载并校验
- * ... --es cmd "dance stop"               # 停演三清（停舞回 idle/走动停/注视复位）
+ * ... --es cmd "dance stop"               # 停演四清（音乐停/说话打断/停舞走动停/注视复位）
  * ... --es cmd "dance next"               # 跳过当前幕
  * ... --es cmd "dance list"               # 曲目白名单数 + 已装载节目单幕次表
  * ```
