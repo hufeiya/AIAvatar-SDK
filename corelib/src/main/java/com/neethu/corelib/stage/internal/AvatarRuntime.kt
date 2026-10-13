@@ -133,6 +133,14 @@ internal class AvatarRuntime(
     /** 走动结束事件（arrived/cancelled），[AvatarHandle] 中继为 flow。 */
     var onWalkFinished: ((WalkFinished) -> Unit)? = null
 
+    /**
+     * 一次性动作播完事件（`isOneShotActive()` true→false 翻沿，淡出过渡结束、
+     * 视觉回到 idle 的瞬间；stop 停播同样触发），[AvatarHandle] 中继为 flow。
+     * 初值 prev=false 不误触发；演出编排（团播）等「播完做某事」消费。
+     */
+    var onVrmaFinished: ((String) -> Unit)? = null
+    private var prevOneShotActive = false
+
     // ── 视锥剔除开关（默认关，眼球丢失 bug 的既有结论）───────────────────
 
     private var avatarCullingEnabled = false
@@ -405,6 +413,10 @@ internal class AvatarRuntime(
         val oneShotActive = (vrmaEngine?.isOneShotActive() == true) ||
             (animator != null && currentAnimationIndex >= 0 && !isAnimationLooping)
         mimicEngine?.update(dt, nowElapsedMs, animationWrote, oneShotActive)
+        if (prevOneShotActive && !oneShotActive) {
+            onVrmaFinished?.invoke(id)
+        }
+        prevOneShotActive = oneShotActive
     }
 
     /**

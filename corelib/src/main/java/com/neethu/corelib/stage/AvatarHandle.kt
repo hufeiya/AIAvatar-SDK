@@ -8,6 +8,7 @@ import com.neethu.corelib.LookAtInfo
 import com.neethu.corelib.MimicInfo
 import com.neethu.corelib.MimicPose
 import com.neethu.corelib.RenderMode
+import com.neethu.corelib.VrmaFinished
 import com.neethu.corelib.WalkFinished
 import com.neethu.corelib.WalkSnapshot
 import com.neethu.corelib.WalkStartResult
@@ -58,12 +59,23 @@ class AvatarHandle internal constructor(
     /** 每次走动结束一条（arrived / cancelled）。 */
     override val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
 
+    private val _vrmaFinished = MutableSharedFlow<VrmaFinished>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+
+    /** 每次一次性动作播完（回 idle/停播）一条（团播编排等「播完做某事」消费）。 */
+    val vrmaFinished: SharedFlow<VrmaFinished> = _vrmaFinished.asSharedFlow()
+
     init {
         runtime.onRenderModeDetected = { mode ->
             _detectedRenderMode.value = mode
         }
         runtime.onWalkFinished = { finished ->
             _walkFinished.tryEmit(finished)
+        }
+        runtime.onVrmaFinished = { avatarId ->
+            _vrmaFinished.tryEmit(VrmaFinished(avatarId))
         }
     }
 

@@ -5,6 +5,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    // 团播节目单 ShowScript 的 @Serializable（docs/multi-dance-feasibility.md §4.4）
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // ── 正式签名配置（根目录 keystore.properties 存在则启用）────────────────
@@ -103,6 +105,8 @@ dependencies {
     // org.json 是抛 "not mocked" 的桩，进不了单测）
     implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
+    // ShowDirectorTest：导演状态机的虚拟时间（runTest/advanceTimeBy/runCurrent）
+    testImplementation(libs.kotlinx.coroutines.test)
     // StringsI18nTest 反射扫 Strings 全部属性做「EN 无中文」不变量
     testImplementation(kotlin("reflect"))
     androidTestImplementation(libs.androidx.junit)

@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,6 +50,8 @@ import com.neethu.aiavatar_sdk.DEFAULT_WALK_BASE_SPEED
 import com.neethu.aiavatar_sdk.DEFAULT_WALK_CLIP
 import com.neethu.aiavatar_sdk.loadAiPrefs
 import com.neethu.aiavatar_sdk.loadWalkAnchors
+import com.neethu.aiavatar_sdk.multiavatar.show.DanceShowController
+import com.neethu.aiavatar_sdk.multiavatar.show.parseCameraShot
 import com.neethu.aiavatar_sdk.parseSceneMeta
 import com.neethu.aiavatar_sdk.sceneMetaAssetName
 import com.neethu.corelib.AvatarConfig
@@ -77,7 +80,7 @@ import java.io.File
  * adb 直达：`adb shell am start -n com.neethu.aiavatar_sdk/.multiavatar.MultiAvatarActivity`
  * adb 调试：`adb shell am broadcast -a com.neethu.aiavatar_sdk.STAGE_CMD --es cmd "<命令>"`
  * （命令表见 [StageCommandRouter]：渲染类 state/shot/load/… + 聊天类
- * chat/say/interrupt/chat_state/cfg/memory）
+ * chat/say/interrupt/chat_state/cfg/memory + 圆桌类 topic/director + 团播类 dance）
  */
 class MultiAvatarActivity : ComponentActivity() {
 
@@ -99,25 +102,23 @@ private const val DEFAULT_IDLE = "animations/01_待机与站姿/Female Idle.vrma
 
 private const val DEFAULT_SCENE = "home.glb"
 
-/** 双槽位状态（broadcast 路由与 Compose 共用的可变引用）。 */
-private class Slots {
-    var a by mutableStateOf<AvatarHandle?>(null)
-    var b by mutableStateOf<AvatarHandle?>(null)
+/** 槽位表（broadcast 路由与 Compose 共用的可变引用）：Map 承载，A/B 语义保留，
+ *  `load C <模型>` 按需扩第三人（团播 P0，§3.5）。 */
+internal class Slots {
+    private val map = mutableStateMapOf<String, AvatarHandle?>("A" to null, "B" to null)
 
-    operator fun get(id: String): AvatarHandle? = when (id.uppercase()) {
-        "A" -> a
-        "B" -> b
-        else -> null
-    }
+    operator fun get(id: String): AvatarHandle? = map[id.uppercase()]
 
     operator fun set(id: String, value: AvatarHandle?) {
-        when (id.uppercase()) {
-            "A" -> a = value
-            "B" -> b = value
-        }
+        map[id.uppercase()] = value
     }
 
-    fun entries(): List<Pair<String, AvatarHandle?>> = listOf("A" to a, "B" to b)
+    fun entries(): List<Pair<String, AvatarHandle?>> =
+        map.entries.sortedBy { it.key }.map { it.key to it.value }
+
+    /** 就位演员 id（团播 cast 的来源）。 */
+    fun readyIds(): List<String> =
+        entries().filter { it.second?.isReady == true }.map { it.first }
 }
 
 /** 字幕分道的一行（P1 §4.9：ChatLine 加 speaker 语义的舞台版）。 */
@@ -148,8 +149,16 @@ private fun MultiAvatarScreen() {
             anchors = loadWalkAnchors(context),
         )
     }
+    // P0 团播：节目单导演的落地层（互斥检查/白名单/指令执行都在控制器）
+    val show = remember {
+        DanceShowController(context, stage, slots, rig) { msg -> lastLog = msg.take(120) }
+    }
+    // 关闭顺序：先停演出（导演协程/事件收集还引用 rig）再关聊天装配
     DisposableEffect(Unit) {
-        onDispose { rig.close() }
+        onDispose {
+            show.close()
+            rig.close()
+        }
     }
 
     val transcript = remember { mutableStateListOf<StageChatLine>() }
@@ -162,30 +171,30 @@ private fun MultiAvatarScreen() {
             stage = stage,
         )
 
-        if (attached) {
-            // 开场装配：场景 + 双人（spawn 并排站位）
-            LaunchedEffect(stage) {
-                if (slots.a == null && slots.b == null) {
-                    val meta = runCatching {
-                        context.assets.open(sceneMetaAssetName(DEFAULT_SCENE))
-                            .use { it.readBytes().toString(Charsets.UTF_8) }
-                    }.getOrNull()?.let { parseSceneMeta(it) }
-                    stage.loadScene("scene/$DEFAULT_SCENE", meta)
-                    slots.a = stage.loadAvatar(
-                        AvatarSpec(modelAssetPath = DEFAULT_MODEL_A, spawn = AvatarSpawn.LEFT)
-                    )
-                    slots.b = stage.loadAvatar(
-                        AvatarSpec(modelAssetPath = DEFAULT_MODEL_B, spawn = AvatarSpawn.RIGHT)
-                    )
+            if (attached) {
+                // 开场装配：场景 + 双人（spawn 并排站位）
+                LaunchedEffect(stage) {
+                    if (slots["A"] == null && slots["B"] == null) {
+                        val meta = runCatching {
+                            context.assets.open(sceneMetaAssetName(DEFAULT_SCENE))
+                                .use { it.readBytes().toString(Charsets.UTF_8) }
+                        }.getOrNull()?.let { parseSceneMeta(it) }
+                        stage.loadScene("scene/$DEFAULT_SCENE", meta)
+                        slots["A"] = stage.loadAvatar(
+                            AvatarSpec(modelAssetPath = DEFAULT_MODEL_A, spawn = AvatarSpawn.LEFT)
+                        )
+                        slots["B"] = stage.loadAvatar(
+                            AvatarSpec(modelAssetPath = DEFAULT_MODEL_B, spawn = AvatarSpawn.RIGHT)
+                        )
+                    }
                 }
-            }
 
-            SlotBootstrap("A", slots.a, rig)
-            SlotBootstrap("B", slots.b, rig)
+            SlotBootstrap(slots.entries(), rig)
 
             StageUi(
                 stage = stage,
                 slots = slots,
+                show = show,
                 lastLog = lastLog,
                 panelVisible = panelVisible,
                 onTogglePanel = { panelVisible = !panelVisible },
@@ -198,6 +207,7 @@ private fun MultiAvatarScreen() {
                 transcript = transcript,
                 speaker = currentSpeaker,
                 onLog = { lastLog = it.take(120) },
+                canStartTopic = { !show.isRunning },
             )
 
             // 舞台事件 → 字幕分道（发言句 + 失败行）；同时跟踪当前发言者（高亮）
@@ -216,9 +226,9 @@ private fun MultiAvatarScreen() {
                 }
             }
 
-            // adb 调试通道（槽位变化时重建路由，闭包永远拿到最新引用）
-            DisposableEffect(slots.a, slots.b) {
-                val router = StageCommandRouter(context, stage, slots, rig) { msg -> lastLog = msg }
+            // adb 调试通道（槽位/控制器变化时重建路由，闭包永远拿到最新引用）
+            DisposableEffect(slots.entries()) {
+                val router = StageCommandRouter(context, stage, slots, rig, show) { msg -> lastLog = msg }
                 val filter = IntentFilter(ACTION_STAGE_CMD)
                 if (Build.VERSION.SDK_INT >= 33) {
                     context.registerReceiver(router, filter, Context.RECEIVER_EXPORTED)
@@ -246,14 +256,16 @@ private fun onStageEvent(slotId: String, event: AvatarEvent, transcript: Mutable
 
 /** 槽位就绪后挂 idle + 默认走动步态 + 上线聊天（呼吸/眨眼引擎默认开，无需接线）。 */
 @Composable
-private fun SlotBootstrap(id: String, slot: AvatarHandle?, rig: StageChatRig) {
-    if (slot == null) return
-    val state by slot.state.collectAsState()
-    LaunchedEffect(slot, state) {
-        if (state is AvatarState.Ready) {
-            slot.setVrmaIdleAnimation(DEFAULT_IDLE)
-            slot.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
-            rig.ensureSlot(id, slot)
+private fun SlotBootstrap(slotEntries: List<Pair<String, AvatarHandle?>>, rig: StageChatRig) {
+    slotEntries.forEach { (id, slot) ->
+        if (slot == null) return@forEach
+        val state by slot.state.collectAsState()
+        LaunchedEffect(slot, state) {
+            if (state is AvatarState.Ready) {
+                slot.setVrmaIdleAnimation(DEFAULT_IDLE)
+                slot.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
+                rig.ensureSlot(id, slot)
+            }
         }
     }
 }
@@ -264,12 +276,14 @@ private fun SlotBootstrap(id: String, slot: AvatarHandle?, rig: StageChatRig) {
 private fun StageUi(
     stage: AvatarStage,
     slots: Slots,
+    show: DanceShowController,
     lastLog: String,
     panelVisible: Boolean,
     onTogglePanel: () -> Unit,
 ) {
     val fps by stage.fps.collectAsState()
     val scenePath by stage.scenePath.collectAsState()
+    val showState by show.state.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -284,6 +298,7 @@ private fun StageUi(
                 "fps=$fps  avatars=${stage.avatars.size}  " +
                     "scene=${if (scenePath != null) "on" else "off"}  " +
                     "shot=${stage.getActiveCameraShot()?.name ?: "-"}  " +
+                    "show=${showState.name.lowercase()}  " +
                     "drag=${if (stage.isDragMode()) "on" else "off"}",
                 color = Color.White,
                 fontSize = 12.sp,
@@ -299,8 +314,12 @@ private fun StageUi(
                     .padding(4.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                SlotControls("A", slots.a, slots.b)
-                SlotControls("B", slots.b, slots.a)
+                slots.entries().forEach { (id, handle) ->
+                    val others = slots.entries()
+                        .filter { it.first != id }
+                        .mapNotNull { it.second?.takeIf { h -> h.isReady } }
+                    SlotControls(id, handle, others)
+                }
                 CameraControls(stage, slots)
                 Text("› $lastLog", color = Color(0xFF9FE29F), fontSize = 11.sp, maxLines = 1)
             }
@@ -309,7 +328,7 @@ private fun StageUi(
 }
 
 @Composable
-private fun SlotControls(id: String, slot: AvatarHandle?, other: AvatarHandle?) {
+private fun SlotControls(id: String, slot: AvatarHandle?, others: List<AvatarHandle>) {
     val state = slot?.state?.collectAsState()?.value
     Row(
         modifier = Modifier
@@ -331,7 +350,7 @@ private fun SlotControls(id: String, slot: AvatarHandle?, other: AvatarHandle?) 
             SmallButton("悲伤") { slot.setExpression("sorrow", 1f); slot.setExpression("sad", 1f) }
             SmallButton("闭眼") { slot.setExpression("blink", 1f) }
             SmallButton("复位脸") { slot.clearAllExpressions() }
-            if (other != null && other.isReady) {
+            others.forEach { other ->
                 SmallButton("看${other.id}") { slot.lookAt(other) }
             }
             SmallButton("看镜头") { slot.lookAtCamera() }
@@ -349,13 +368,13 @@ private fun CameraControls(stage: AvatarStage, slots: Slots) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        SmallButton("特写A") { stage.setCameraShot(CameraShot.CLOSE_UP, slots.a) }
-        SmallButton("特写B") { stage.setCameraShot(CameraShot.CLOSE_UP, slots.b) }
+        slots.entries().forEach { (id, handle) ->
+            SmallButton("特写$id") { stage.setCameraShot(CameraShot.CLOSE_UP, handle) }
+            SmallButton("跟拍$id") { stage.setCameraShot(CameraShot.FOLLOW, handle) }
+        }
         SmallButton("同框") { stage.setCameraShot(CameraShot.GROUP_SHOT) }
         SmallButton("全景") { stage.setCameraShot(CameraShot.FULL_SHOT) }
         SmallButton("远景") { stage.setCameraShot(CameraShot.LONG_SHOT) }
-        SmallButton("跟拍A") { stage.setCameraShot(CameraShot.FOLLOW, slots.a) }
-        SmallButton("跟拍B") { stage.setCameraShot(CameraShot.FOLLOW, slots.b) }
         SmallButton("清除运镜") { stage.clearCameraShot() }
         SmallButton("相机复位") { stage.resetCamera() }
         SmallButton("拖拽") { stage.setDragMode(!stage.isDragMode()) }
@@ -372,6 +391,7 @@ private fun ChatPanel(
     transcript: MutableList<StageChatLine>,
     speaker: String?,
     onLog: (String) -> Unit,
+    canStartTopic: () -> Boolean,
 ) {
     var input by remember { mutableStateOf("") }
     var configVisible by remember { mutableStateOf(false) }
@@ -412,7 +432,7 @@ private fun ChatPanel(
         }
 
         // 圆桌话题行（P2 §4.9 StagePanel）：开题/停题 + 导演档位切换
-        RoundtablePanel(rig, rt, onLog)
+        RoundtablePanel(rig, rt, onLog, canStartTopic)
 
         // 输入行：点名路由（@名字 / 默认 lastAddressed）
         Row(
@@ -474,7 +494,12 @@ private fun ChatPanel(
 
 /** 圆桌面板（P2）：话题输入 + 开题/停题 + 导演档位 + 最近一条导演决策。 */
 @Composable
-private fun RoundtablePanel(rig: StageChatRig, rt: RoundtableSession?, onLog: (String) -> Unit) {
+private fun RoundtablePanel(
+    rig: StageChatRig,
+    rt: RoundtableSession?,
+    onLog: (String) -> Unit,
+    canStartTopic: () -> Boolean,
+) {
     var topic by remember { mutableStateOf("") }
     val local = rt
     val state = if (local != null) local.state.collectAsState().value else RoundtableState.IDLE
@@ -516,10 +541,14 @@ private fun RoundtablePanel(rig: StageChatRig, rt: RoundtableSession?, onLog: (S
         )
         SmallButton("开题") {
             val t = topic.trim()
-            if (t.isNotEmpty()) {
-                val ok = rig.startTopic(t)
-                onLog(if (ok) "topic 开题：$t" else "topic 失败（会话未配置？）")
-                if (ok) topic = ""
+            when {
+                t.isEmpty() -> Unit
+                !canStartTopic() -> onLog("拒: 团播演出中，先 dance stop")
+                else -> {
+                    val ok = rig.startTopic(t)
+                    onLog(if (ok) "topic 开题：$t" else "topic 失败（会话未配置？）")
+                    if (ok) topic = ""
+                }
             }
         }
         SmallButton("停题") {
@@ -641,8 +670,17 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "cam group"                # 双人同框（GROUP_SHOT 跟踪机位）
  * ... --es cmd "turn A 0.8 -4.0"          # 原地转向世界点（对谈位互相对着）
  * ```
+ * 团播（P0，docs/multi-dance-feasibility.md §4.5）：
+ * ```
+ * ... --es cmd "dance"                    # 快照：state/幕次/cast/fps
+ * ... --es cmd "dance start [名]"         # 开演（缺省=内置默认单；圆桌 ACTIVE 时拒绝）
+ * ... --es cmd "dance load <名>"          # filesDir/shows/（回落 assets/shows/）装载并校验
+ * ... --es cmd "dance stop"               # 停演三清（停舞回 idle/走动停/注视复位）
+ * ... --es cmd "dance next"               # 跳过当前幕
+ * ... --es cmd "dance list"               # 曲目白名单数 + 已装载节目单幕次表
+ * ```
  * topic 开题时若台上 ≥2 人就位，自动先走对谈位（stage_a/stage_b 锚点优先、
- * 推导落点兜底）再开轮——站位编排，导演日志可见。
+ * 推导落点兜底）再开轮——站位编排，导演日志可见；团播演出中开题被拒（两导演互斥）。
  *
  * 全部结果落 logcat（tag StageCmd）并回显到面板。
  */
@@ -651,6 +689,7 @@ private class StageCommandRouter(
     private val stage: AvatarStage,
     private val slots: Slots,
     private val rig: StageChatRig,
+    private val show: DanceShowController,
     private val onLog: (String) -> Unit,
 ) : BroadcastReceiver() {
 
@@ -674,14 +713,34 @@ private class StageCommandRouter(
             "state" -> dumpState()
             "chat_state" -> log(rig.snapshot())
 
+            // ── P0 团播（确定性节目单导演）───────────────────────────────
+            "dance" -> {
+                val sub = t.getOrNull(1)?.lowercase() ?: "status"
+                val arg = t.drop(2).joinToString(" ").trim().ifEmpty { null }
+                when (sub) {
+                    "status" -> log(show.statusLine())
+                    "start" -> {
+                        val ok = show.startShow(arg)
+                        if (ok) log("dance start 受理（幕次推进见 DanceShow）")
+                    }
+                    "load" -> log(show.loadShow(arg))
+                    "stop" -> show.stopShow()
+                    "next" -> show.skip()
+                    "list" -> log(show.listLine())
+                    else -> log("usage: dance [status|start [名]|load <名>|stop|next|list]")
+                }
+            }
+
             // ── P2 圆桌（导演制）─────────────────────────────────────────
             "topic" -> {
                 val text = t.drop(1).joinToString(" ").trim()
-                if (text.isEmpty()) {
-                    log("usage: topic <话题...>")
-                } else {
-                    val ok = rig.startTopic(text)
-                    log(if (ok) "topic 开题：$text" else "topic 失败（会话未配置？）")
+                when {
+                    text.isEmpty() -> log("usage: topic <话题...>")
+                    show.isRunning -> log("拒: 团播演出中，先 dance stop")
+                    else -> {
+                        val ok = rig.startTopic(text)
+                        log(if (ok) "topic 开题：$text" else "topic 失败（会话未配置？）")
+                    }
                 }
             }
 
@@ -872,17 +931,7 @@ private class StageCommandRouter(
                 "clear" -> { stage.clearCameraShot(); log("shot cleared") }
                 "reset" -> { stage.resetCamera(); log("camera reset") }
                 else -> {
-                    val shot = when (t[1].lowercase()) {
-                        "closeup" -> CameraShot.CLOSE_UP
-                        "macro" -> CameraShot.MACRO
-                        "medium" -> CameraShot.MEDIUM_SHOT
-                        "full" -> CameraShot.FULL_SHOT
-                        "long" -> CameraShot.LONG_SHOT
-                        "over" -> CameraShot.OVER_SHOULDER
-                        "follow" -> CameraShot.FOLLOW
-                        "group" -> CameraShot.GROUP_SHOT
-                        else -> return log("unknown shot ${t[1]}")
-                    }
+                    val shot = parseCameraShot(t[1]) ?: return log("unknown shot ${t[1]}")
                     val target = t.getOrNull(2)?.let { slots[it] }
                     stage.setCameraShot(shot, target)
                     log("cam $shot target=${target?.id ?: if (shot == CameraShot.GROUP_SHOT) "全体同框" else "focus"}")
@@ -930,7 +979,7 @@ private class StageCommandRouter(
                 log("${t[1]} springs=${t[2]}")
             }
 
-            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|shot|load|remove|expr|idle|play|gaze|walk|turn|cam|scene|drag|focus|move|fade|springs)")
+            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|dance|shot|load|remove|expr|idle|play|gaze|walk|turn|cam|scene|drag|focus|move|fade|springs)")
         }
     }
 

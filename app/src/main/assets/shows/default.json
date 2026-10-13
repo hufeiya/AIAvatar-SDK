@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "title": "默认双人团播",
+  "acts": [
+    { "type": "camera", "shot": "group" },
+    { "type": "dance", "performer": "A", "clip": "08_舞蹈与表演/Bboy Hip Hop Variation One", "camera": "full", "fans": ["clap"] },
+    { "type": "dance", "performer": "B", "clip": "08_舞蹈与表演/Female Hip Hop 'Running Man' Dancing", "camera": "full", "fans": ["clap"] },
+    { "type": "wait", "seconds": 1.5 },
+    { "type": "group_dance", "clip": "08_舞蹈与表演/Doing The Shuffling Dance", "seconds": 12, "camera": "group" },
+    { "type": "bow", "camera": "group" },
+    { "type": "camera", "shot": "group" }
+  ]
+}
