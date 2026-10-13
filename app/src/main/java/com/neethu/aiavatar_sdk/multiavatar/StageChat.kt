@@ -3,13 +3,18 @@ package com.neethu.aiavatar_sdk.multiavatar
 import android.content.Context
 import android.content.SharedPreferences
 import com.neethu.aiadapter.openai.OpenAiCompatibleEmbeddingAdapter
+import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
+import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.AiProvider
+import com.neethu.aiavatar_sdk.llmExtraBody
 import com.neethu.corelib.Lang
 import com.neethu.corelib.stage.AvatarHandle
 import com.neethu.orchestrator.facade.AIAvatarSdk
+import com.neethu.orchestrator.facade.ChatProvider
 import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.memory.RoomMemoryStore
+import com.neethu.orchestrator.roundtable.DirectorPolicy
 import com.neethu.orchestrator.roundtable.RoundtableSession
 import com.neethu.orchestrator.roundtable.StageEvent
 import com.neethu.orchestrator.roundtable.StageGazeRelay
@@ -22,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
@@ -157,9 +163,13 @@ class StageChatRig(
             // 舞台 N 槽均分 TTS 预算（§4.2）；v1 两个槽位。
             // 人设走 ChatConfig.persona（每轮恒带的身份前言缝）——真机实测
             // doubao-mini 在 brief 轮会把「只随首轮发」的人设忘成自称豆包。
+            // 圆桌同场规则（P2 §4.4 静态协议）并入同一条前言：每轮恒带、
+            // 逐字节稳定，前缀缓存不破坏。
             val cfg = base.copy(
                 ttsMaxConcurrent = RoundtableSession.perSlotTtsBudget(globalTtsBudget, 2),
-                persona = slot.persona,
+                persona = listOf(slot.persona, roundtablePreamble(slotId))
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n"),
             )
             val session = sdk.configure(cfg, modelReady = modelReady)
             if (session != null) {
@@ -179,9 +189,14 @@ class StageChatRig(
 
     private val chats = LinkedHashMap<String, SlotChat>()
 
-    /** 舞台会话编排（路由/令牌/注视接力）；槽位集合或会话重建时换代。 */
+    /**
+     * 舞台会话编排（路由/令牌/注视接力/圆桌导演）；槽位集合或会话重建时换代。
+     */
     var roundtable: RoundtableSession? = null
         private set
+
+    /** [roundtable] 的 State 形态（Compose collectAsState 用，换代自动重组）。 */
+    val roundtableState: StateFlow<RoundtableSession?> get() = _events
 
     private val _events = MutableStateFlow<RoundtableSession?>(null)
 
@@ -198,9 +213,7 @@ class StageChatRig(
         val existing = chats[slotId]
         if (existing != null && existing.handle === handle) return
         existing?.close()
-        val chat = SlotChat(slotId, handle)
-        chats[slotId] = chat
-        chat.ensureSession()
+        chats[slotId] = SlotChat(slotId, handle)
         rebuildRoundtable()
     }
 
@@ -216,16 +229,105 @@ class StageChatRig(
         rebuildRoundtable()
     }
 
+    /**
+     * 编排重建的单一漏斗：先按**当前在场名单**重配每个槽（圆桌前言依赖在场
+     * 者名单——后上的槽位改变先上槽位的前言，这里统一收敛，facade 身份判据
+     * 未变时是 no-op），再建 RoundtableSession（导演策略跨重建保留）。
+     */
     private fun rebuildRoundtable() {
         val sessions = chats.mapNotNull { (slotId, chat) ->
-            val session = chat.sdk.session ?: return@mapNotNull null
+            val session = chat.ensureSession() ?: return@mapNotNull null
             StageSlotSpec(
                 id = slotId,
                 displayName = chat.prefs.displayName,
+                intro = chat.prefs.persona.take(60),
             ) to session
         }
-        roundtable = if (sessions.isEmpty()) null else RoundtableSession(rigScope, sessions, gaze = this)
+        roundtable = if (sessions.isEmpty()) {
+            null
+        } else {
+            RoundtableSession(
+                rigScope,
+                sessions,
+                gaze = this,
+                director = roundtable?.directorPolicy ?: loadDirectorPolicy(),
+            )
+        }
         _events.value = roundtable
+    }
+
+    // ── P2 圆桌话题（导演制）─────────────────────────────────────────────
+
+    /** 圆桌静态同场规则（§4.4：走 identityPreamble 缝，每轮恒带）；单槽无前言。 */
+    private fun roundtablePreamble(slotId: String): String {
+        val others = chats.keys.filter { it != slotId }
+            .mapNotNull { chats[it]?.prefs?.displayName }
+            .joinToString("、")
+        if (others.isEmpty()) return ""
+        return "【圆桌同场】你与${others}和一位真实用户同在舞台。他人发言时保持倾听" +
+            "（看向对方即可）；只在被点名或收到「轮到你发言」提示时才开口，" +
+            "每次发言一两句口语，不要替别人说话，不要输出旁白。"
+    }
+
+    /** 导演档位 prefs 键：rule（默认，零成本）/ llm（轻量调用裁决）。 */
+    private fun directorModePref(): String =
+        prefs.getString(KEY_DIRECTOR_MODE, "rule") ?: "rule"
+
+    /** 导演 LLM 档的模型（默认硅基流动 Qwen3.8——提炼类结构化输出矩阵 5/5 可靠档）。 */
+    private fun directorModelPref(): String =
+        prefs.getString(KEY_DIRECTOR_MODEL, null)?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_DIRECTOR_MODEL
+
+    /** 导演轮数上限 prefs（验收「轮数上限触发收场白」可调小）。 */
+    private fun directorRoundsPref(): Int =
+        prefs.getInt(KEY_DIRECTOR_ROUNDS, DEFAULT_DIRECTOR_ROUNDS)
+
+    /** 从 prefs 装配导演策略；LLM 档缺 Key 时静默落规则档。 */
+    private fun loadDirectorPolicy(): DirectorPolicy {
+        val maxRounds = directorRoundsPref()
+        if (!directorModePref().equals("llm", true)) {
+            return DirectorPolicy.Rule(maxRounds = maxRounds)
+        }
+        val key = globalPrefs().apiKeySiliconflow
+        if (key.isBlank()) return DirectorPolicy.Rule(maxRounds = maxRounds)
+        val model = directorModelPref()
+        val llm = OpenAiCompatibleLlmAdapter(ChatProvider.SILICONFLOW.baseUrl, key)
+        return DirectorPolicy.Llm(
+            llm = llm,
+            config = {
+                LlmConfig(
+                    baseUrl = ChatProvider.SILICONFLOW.baseUrl,
+                    apiKey = key,
+                    model = model,
+                    // 关思考（首答延迟）：Qwen3 系默认开思考，导演一次裁决多等数秒
+                    extraBody = llmExtraBody(AiProvider.SILICONFLOW, model),
+                )
+            },
+            maxRounds = maxRounds,
+        )
+    }
+
+    /** 开题（STAGE_CMD topic / StagePanel）：false = 无会话或话题为空。 */
+    fun startTopic(topicText: String): Boolean =
+        roundtable?.startRoundtable(topicText) ?: false
+
+    /** 停题（不打收场白）。 */
+    fun stopTopic() {
+        roundtable?.stopRoundtable()
+    }
+
+    /** 导演热切换（rule/llm），持久化；llm 缺 Key 实际落 rule（返回实际档名）。 */
+    fun setDirectorMode(mode: String): String {
+        val normalized = if (mode.equals("llm", true)) "llm" else "rule"
+        prefs.edit().putString(KEY_DIRECTOR_MODE, normalized).apply()
+        roundtable?.setDirector(loadDirectorPolicy())
+        return roundtable?.directorPolicy?.label ?: normalized
+    }
+
+    /** 导演轮数上限调整（验收用），持久化并即时生效。 */
+    fun setDirectorRounds(rounds: Int) {
+        prefs.edit().putInt(KEY_DIRECTOR_ROUNDS, rounds).apply()
+        roundtable?.setDirector(loadDirectorPolicy())
     }
 
     // ── StageGazeRelay（倾听注视的舞台实现）──────────────────────────────
@@ -246,6 +348,7 @@ class StageChatRig(
         val rt = roundtable
         return buildString {
             append(if (rt == null) "roundtable=off" else "roundtable=[${rt.snapshot()}]")
+            rt?.directorLog?.value?.lastOrNull()?.let { append(" last=\"${it.take(40)}\"") }
             chats.forEach { (slotId, chat) ->
                 append(" | $slotId=")
                 if (chat.sdk.session == null) {
@@ -293,5 +396,26 @@ class StageChatRig(
         chats.values.forEach { it.close() }
         chats.clear()
         roundtable = null
+    }
+
+    companion object {
+        /** 导演档位（stage_director_mode：rule|llm）。 */
+        private const val KEY_DIRECTOR_MODE = "stage_director_mode"
+
+        /** 导演 LLM 档模型（空 = 默认 Qwen3.8）。 */
+        private const val KEY_DIRECTOR_MODEL = "stage_director_model"
+
+        /** 导演轮数上限（防失控三件套之一，验收时可调小观察收场白）。 */
+        private const val KEY_DIRECTOR_ROUNDS = "stage_director_rounds"
+
+        /** 默认轮数上限（docs/multi-avatar-feasibility.md §4.3 建议值）。 */
+        private const val DEFAULT_DIRECTOR_ROUNDS = 20
+
+        /**
+         * 导演 LLM 档默认模型：硅基流动 Qwen3.8——记忆提炼类结构化输出的
+         * 可靠性矩阵 5/5 档（docs/memory-feasibility.md 结论），导演裁决同
+         * 形态（一个 JSON 对象），关思考后一次调用秒级返回。
+         */
+        private const val DEFAULT_DIRECTOR_MODEL = "Qwen/Qwen3.8-27B"
     }
 }

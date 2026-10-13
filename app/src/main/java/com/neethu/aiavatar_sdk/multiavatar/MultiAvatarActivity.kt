@@ -60,6 +60,8 @@ import com.neethu.corelib.stage.AvatarSpawn
 import com.neethu.corelib.stage.AvatarStage
 import com.neethu.corelib.stage.AvatarStageView
 import com.neethu.corelib.stage.rememberAvatarStage
+import com.neethu.orchestrator.roundtable.RoundtableSession
+import com.neethu.orchestrator.roundtable.RoundtableState
 import com.neethu.orchestrator.session.AvatarEvent
 import java.io.File
 
@@ -151,6 +153,7 @@ private fun MultiAvatarScreen() {
     }
 
     val transcript = remember { mutableStateListOf<StageChatLine>() }
+    var currentSpeaker by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AvatarStageView(
@@ -193,12 +196,24 @@ private fun MultiAvatarScreen() {
                 rig = rig,
                 slots = slots,
                 transcript = transcript,
+                speaker = currentSpeaker,
                 onLog = { lastLog = it.take(120) },
             )
 
-            // 舞台事件 → 字幕分道（发言句 + 失败行）
+            // 舞台事件 → 字幕分道（发言句 + 失败行）；同时跟踪当前发言者（高亮）
             LaunchedEffect(rig) {
-                rig.stageEvents.collect { (slotId, event) -> onStageEvent(slotId, event, transcript) }
+                rig.stageEvents.collect { (slotId, event) ->
+                    onStageEvent(slotId, event, transcript)
+                    when (event) {
+                        is AvatarEvent.SentenceStarted -> currentSpeaker = slotId
+                        is AvatarEvent.TurnCompleted,
+                        is AvatarEvent.TurnFailed,
+                        is AvatarEvent.PlaybackInterrupted,
+                        -> currentSpeaker = null
+
+                        else -> Unit
+                    }
+                }
             }
 
             // adb 调试通道（槽位变化时重建路由，闭包永远拿到最新引用）
@@ -354,13 +369,15 @@ private fun ChatPanel(
     rig: StageChatRig,
     slots: Slots,
     transcript: MutableList<StageChatLine>,
+    speaker: String?,
     onLog: (String) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     var configVisible by remember { mutableStateOf(false) }
-    val rt = rig.roundtable
+    // 编排实例换代（配置变化）自动重组；导演日志/话题状态随实例收集
+    val rt by rig.roundtableState.collectAsState()
     val targetName = rt?.lastAddressedId?.let { id ->
-        val spec = rt.slotSpecs().firstOrNull { it.id == id }
+        val spec = rt?.slotSpecs()?.firstOrNull { it.id == id }
         "${spec?.id ?: id}(${spec?.displayName ?: "?"})"
     } ?: "未配置"
 
@@ -371,7 +388,7 @@ private fun ChatPanel(
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        // 字幕分道（最近 4 行，说话人着色）
+        // 字幕分道（最近 4 行，说话人着色；▶=正在发言）
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -379,8 +396,9 @@ private fun ChatPanel(
                 .verticalScroll(rememberScrollState()),
         ) {
             transcript.takeLast(6).forEach { line ->
+                val mark = if (!line.isUser && line.slotId == speaker) "▶ " else ""
                 Text(
-                    "${if (line.isUser) "我" else line.slotId}·${line.text}",
+                    "$mark${if (line.isUser) "我" else line.slotId}·${line.text}",
                     color = when {
                         line.isUser -> Color.White
                         line.slotId == "A" -> Color(0xFF8FD8FF)
@@ -391,6 +409,9 @@ private fun ChatPanel(
                 )
             }
         }
+
+        // 圆桌话题行（P2 §4.9 StagePanel）：开题/停题 + 导演档位切换
+        RoundtablePanel(rig, rt, onLog)
 
         // 输入行：点名路由（@名字 / 默认 lastAddressed）
         Row(
@@ -447,6 +468,76 @@ private fun ChatPanel(
                 }
             }
         }
+    }
+}
+
+/** 圆桌面板（P2）：话题输入 + 开题/停题 + 导演档位 + 最近一条导演决策。 */
+@Composable
+private fun RoundtablePanel(rig: StageChatRig, rt: RoundtableSession?, onLog: (String) -> Unit) {
+    var topic by remember { mutableStateOf("") }
+    val local = rt
+    val state = if (local != null) local.state.collectAsState().value else RoundtableState.IDLE
+    val lastDecision = if (local != null) {
+        local.directorLog.collectAsState().value.lastOrNull()
+    } else {
+        null
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        BasicTextField(
+            value = topic,
+            onValueChange = { topic = it },
+            modifier = Modifier
+                .weight(1f)
+                .background(Color(0xFF22262E))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                color = Color(0xFFB9C2CE),
+                fontSize = 12.sp,
+            ),
+            cursorBrush = SolidColor(Color.White),
+            decorationBox = { inner ->
+                Box {
+                    if (topic.isEmpty()) {
+                        Text(
+                            "圆桌话题（state=${state.name.lowercase()}）",
+                            color = Color(0xFF79828F),
+                            fontSize = 12.sp,
+                        )
+                    }
+                    inner()
+                }
+            },
+        )
+        SmallButton("开题") {
+            val t = topic.trim()
+            if (t.isNotEmpty()) {
+                val ok = rig.startTopic(t)
+                onLog(if (ok) "topic 开题：$t" else "topic 失败（会话未配置？）")
+                if (ok) topic = ""
+            }
+        }
+        SmallButton("停题") {
+            rig.stopTopic()
+            onLog("topic stopped")
+        }
+        SmallButton("导演:${rt?.directorPolicy?.label ?: "rule"}") {
+            val next = if (rt?.directorPolicy?.label == "llm") "rule" else "llm"
+            val actual = rig.setDirectorMode(next)
+            onLog("director → $actual")
+        }
+    }
+    if (lastDecision != null) {
+        Text(
+            "导演 $lastDecision",
+            color = Color(0xFF9F9FE2),
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
     }
 }
 
@@ -536,6 +627,14 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "cfg A provider volcano"   # 槽位配置（name/provider/model/voice/persona）
  * ... --es cmd "memory A list"            # 槽位记忆分库（list/count/clear）
  * ```
+ * 圆桌类（P2）：
+ * ```
+ * ... --es cmd "topic 周末去哪玩"         # 开题（导演接管发言权）
+ * ... --es cmd "stop"                     # 停题
+ * ... --es cmd "director llm"             # 导演热切换（rule|llm）
+ * ... --es cmd "director rounds 5"        # 轮数上限（验收收场白用）
+ * ... --es cmd "director_log"             # 导演决策日志全量
+ * ```
  *
  * 全部结果落 logcat（tag StageCmd）并回显到面板。
  */
@@ -567,6 +666,33 @@ private class StageCommandRouter(
             "state" -> dumpState()
             "chat_state" -> log(rig.snapshot())
 
+            // ── P2 圆桌（导演制）─────────────────────────────────────────
+            "topic" -> {
+                val text = t.drop(1).joinToString(" ").trim()
+                if (text.isEmpty()) {
+                    log("usage: topic <话题...>")
+                } else {
+                    val ok = rig.startTopic(text)
+                    log(if (ok) "topic 开题：$text" else "topic 失败（会话未配置？）")
+                }
+            }
+
+            "stop" -> {
+                rig.stopTopic()
+                log("roundtable stopped")
+            }
+
+            "director" -> when {
+                t.size >= 3 && t[1].equals("rounds", true) ->
+                    t[2].toIntOrNull()?.let { rig.setDirectorRounds(it); log("director rounds → $it") }
+                        ?: log("usage: director rounds <n>")
+                t.size >= 2 -> log("director → ${rig.setDirectorMode(t[1])}")
+                else -> log("director=${rig.roundtable?.directorPolicy?.label ?: "-"} " +
+                    "log=${rig.roundtable?.directorLog?.value ?: emptyList()}")
+            }
+
+            "director_log" -> log("log=${rig.roundtable?.directorLog?.value ?: emptyList()}")
+
             // ── P1 聊天类 ────────────────────────────────────────────────
             "chat" -> {
                 val rt = rig.roundtable ?: return log("roundtable off (sessions not configured)")
@@ -580,7 +706,13 @@ private class StageCommandRouter(
                     rt.sessionOf(slotToken)?.send(text)
                     slotToken
                 }
-                log("chat '$text' → ${hit ?: "unroutable"}")
+                val echo = when {
+                    hit != null -> hit
+                    rt.state.value != com.neethu.orchestrator.roundtable.RoundtableState.IDLE ->
+                        "插话已受理（导演安排接话人）"
+                    else -> "unroutable"
+                }
+                log("chat '$text' → $echo")
             }
 
             "say" -> {
@@ -783,7 +915,7 @@ private class StageCommandRouter(
                 log("${t[1]} springs=${t[2]}")
             }
 
-            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|cfg|memory|shot|load|remove|expr|idle|play|gaze|walk|cam|scene|drag|focus|move|fade|springs)")
+            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|shot|load|remove|expr|idle|play|gaze|walk|cam|scene|drag|focus|move|fade|springs)")
         }
     }
 

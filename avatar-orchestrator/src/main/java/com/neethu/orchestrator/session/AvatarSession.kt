@@ -240,6 +240,16 @@ class AvatarSession(
     /** Base system prompt. [setCharacterCard] fills this from a card. */
     var systemPrompt: String = ""
 
+    /**
+     * 圆桌逐轮发言权提示（一屏多虚拟人 P2，docs/multi-avatar-feasibility.md
+     * §4.4）：挂在末尾 user 前缀槽（viewLine→memoryLine→skillLine 之后的
+     * roundtableLine——离生成位置最近，逐轮变化、不进 store、不碰钉住协议块）。
+     * null = 不注入（单虚拟人路径零变化）。舞台层在每次授予发言权时写、
+     * 回合收尾/停题时清。
+     */
+    @Volatile
+    var roundtableLine: String? = null
+
     private val _phase = MutableStateFlow(ConversationPhase.IDLE)
     val phase: StateFlow<ConversationPhase> = _phase.asStateFlow()
 
@@ -566,6 +576,16 @@ class AvatarSession(
     /** Clear dialog history (a fresh conversation). */
     fun clearHistory() {
         store.clear()
+    }
+
+    /**
+     * 文本进历史（user 角色）但**不发起生成**（圆桌 P2 的听众 fanout 缝）：
+     * 话题与别人的发言以此形态广播进倾听者的上下文（§4.4「其他 avatar 的
+     * 发言：role=user，前缀【B】:…」），等它被授予发言权时上下文已经齐了。
+     * 单虚拟人接入方不会用到；与 [send] 的区别仅在于不跑 LLM/TTS 流水。
+     */
+    fun injectUserMessage(text: String) {
+        if (text.isNotBlank()) store.appendUser(text)
     }
 
     // ── Long-term memory (docs/memory-feasibility.md §4.6) ───────────────
@@ -1227,15 +1247,17 @@ class AvatarSession(
         // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两段
         // 都不进 store，天然不受 recentTurnLimit 影响。
         list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
-        // 视角行 + 记忆参考块 + 技能指令行 + 本轮抓拍（视频模式）：都挂到刚
-        // append 的末尾 user 消息上——请求里带，store 里的历史始终只有干净文字
-        // （见 send 的注释）。技能指令与视角行/记忆块同级：逐轮变化、只改本轮
-        // 请求副本、不碰 system/协议（前缀缓存友好，A.1 第 34 条的"system 恒
-        // 一条"不受影响）。排序 viewLine→memoryLine→skillLine：技能指令仍最
-        // 靠近生成位置（§7.10 近因效应）。
+        // 视角行 + 记忆参考块 + 技能指令行 + 圆桌发言权行 + 本轮抓拍（视频模式）：
+        // 都挂到刚 append 的末尾 user 消息上——请求里带，store 里的历史始终只有
+        // 干净文字（见 send 的注释）。技能指令与视角行/记忆块同级：逐轮变化、
+        // 只改本轮请求副本、不碰 system/协议（前缀缓存友好，A.1 第 34 条的
+        // "system 恒一条"不受影响）。排序 viewLine→memoryLine→skillLine→
+        // roundtableLine：越靠后离生成位置越近（§7.10 近因效应），圆桌的
+        // 「轮到你发言」是本轮最硬的指令，放最末。
         val viewLine = currentViewLine()
         val skillLine = skills.activeDirective()
-        val directivePrefix = listOfNotNull(viewLine, memoryLine, skillLine).joinToString("\n\n")
+        val roundtableLine = this.roundtableLine
+        val directivePrefix = listOfNotNull(viewLine, memoryLine, skillLine, roundtableLine).joinToString("\n\n")
         if ((directivePrefix.isNotEmpty() || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
             val last = list.last()
             list[list.size - 1] = last.copy(
@@ -1261,6 +1283,7 @@ class AvatarSession(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
                 "view=${viewLine ?: "n/a"} mem=${memoryLine?.length ?: 0}ch skill=${skillLine?.length ?: 0}ch " +
+                "rt=${roundtableLine?.length ?: 0}ch " +
                 "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",

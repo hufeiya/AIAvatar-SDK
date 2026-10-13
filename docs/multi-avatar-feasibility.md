@@ -386,3 +386,23 @@ stageSession.sendFromUser(text = "你们怎么看…")     // 内部走 InputRou
 **验收（Redmi K20 Pro / SD855 真机，A=硅基 DeepSeek-V4-Flash/小柔，B=火山 doubao-seed-2-0-mini/小刚）**：双人 50-60fps + home.glb；`chat auto @A 你好` 只点亮 A（B 零请求），无点名自动落 lastAddressed（UI 回显「→ B(小刚)」）；分别问名字 A 答「小柔」B 答「小刚」（人设不串）；A 用 remember 工具落库（preference/imp=8）后 `memory A count`=1、`memory B count`=0，问 B「我喜欢喝什么」如实答不知道（检索隔离闭环）；打断命中非空闲会话、令牌释放全员回 IDLE；A 的 `<cam:close_up>` 经演员代理把舞台相机切到自己特写（shot=CLOSE_UP）；×3 force-stop 重启零崩溃、会话自动重配；单测 +38 全量 875 全绿（InputRouter 14 / RoundtableSession 9 / MemoryStoreScope 6 / facade persona 2 / 既有全量回归）。
 
 **已知限制（记入后续期）**：虚拟人互聊与圆桌=P2 导演制（本期的 RoundtableSession 刻意无 Director）；语音三链路（按住/自由/ASR）未接舞台——路由器语音无关，接上即通（打字已闭环）；`AvatarHandle.id`（舞台顺延分配）与 slot 键（"A"/"B"）在 remove 后重载会错位——路由/配置/记忆全按 slot 键，仅诊断显示可能混名；表情标签驱动需要模型加载后 `startFaceDriving`（facade configure 的 modelReady 路径，rig 已接线）。
+
+---
+
+## 十三、P2 实现记录（2026-10-13，已真机验收）
+
+**落地形态：导演进 RoundtableSession，单人/舞台既有语义零变化。** P1 刻意留白的位置（「本类刻意无 Director」）由 P2 填上：
+
+- **`roundtable/ConversationDirector.kt`（新）**：`DirectorPolicy.Rule/Llm` 两档同一接口热切换。规则档=开题点名优先 → 插话点名优先 → 声明序 round-robin（排除上一发言者）→ 单槽连续上限；LLM 档=一次非流式轻量调用（便宜模型 + temperature 0.2 + 关思考，MemoryExtractor 同款收集法）输出 `{"next": id|USER|END, "reason"}`，解析复用 MemoryParser 的截首平衡 JSON；**任何失败（无配置/网络/垃圾输出/无效槽位/连续授予上一发言者）静默回退规则档**。防失控三件套是舞台层硬守卫、两档共同底线，不依赖模型自觉：轮数上限（决策前短路）+ 复读检测（DialogueGuards：归一化相等或 bigram Jaccard ≥0.6，<4 字符不判）连续 2 strike → END → 收场白（话题发起者 speak，不进历史）。
+- **多人消息进上下文（§4.4 落地）**：每轮「新发言批」= 上一发言者回复 + 未回应插话；受命者经 `send()` 以 `【用户】/【名字】` 前缀行追加并生成，其余槽位经 `AvatarSession.injectUserMessage`（P2 新缝：入历史不生成）同步收听——自己的话在自己的历史里永远是 assistant 原文，不重复注入；任何人被授予发言权时上下文已齐。
+- **逐轮发言权提示（§4.4 前缀槽）**：`AvatarSession.roundtableLine`（P2 第二针，@Volatile 可空）挂末尾 user 前缀槽 **viewLine→memoryLine→skillLine→roundtableLine**（离生成最近），REQUEST 日志加 `rt=Nch`；受命者「轮到你发言」、其余人「保持倾听」，回合收尾/停题/打断清空。null 时与既有形态逐字节一致。
+- **RoundtableSession P2 状态机**：`RoundtableState.IDLE/ACTIVE/WAITING_USER` + `startRoundtable/stopRoundtable/setDirector` + directorLog（StateFlow，最近 8 条决策含 LLM reason）。插话三分支：发言中=排队（本轮结束进批）；点名=直授（§4.6 规则 1 优先于导演）；否则广播+导演裁决。TurnFailed=失败轮计入轮数、下一位以「继续」提示接力（批已分发无需补账）。打断同步清授予（迟到的 PlaybackInterrupted 靠 phase 检查忽略）；开题先 interrupt 在途发言防旧回合盖新话题。`InputRouter.Target` 加 `explicit`（@token/称呼命中 vs lastAddressed 兜底）；`StageSlotSpec` 加 `intro`（导演 LLM 花名册的人设简介）。
+- **app**：StageChatRig 挂圆桌静态同场规则进 `ChatConfig.persona`（identityPreamble 缝，每轮恒带）+ 导演策略 prefs（`stage_director_mode/model/rounds`；LLM 档默认硅基流动 Qwen3.8-27B 关思考，缺 Key 静默落规则档）+ rebuildRoundtable 收敛为单一漏斗（先按在场名单重配每槽再建编排，圆桌前言依赖在场者名单）；MultiAvatarActivity 加 RoundtablePanel（话题输入/开题/停题/导演切换 + 最近一条导演决策 + ▶说话人高亮）；STAGE_CMD 扩 `topic/stop/director[/rounds]/director_log`。
+
+**真机发现并修复的一个真缺口**：无点名且从无 lastAddressed 时插话被 InputRouter 的 Unroutable 拦截返回 null——话题模式下插话不该依赖「有人被点过名」，修为 Unroutable 时以原文作插话行直接交导演（`chat auto 插一句…` → 「插话已受理（导演安排接话人）」→ 下一轮带【用户】前缀进受命者请求）。
+
+**验收（Redmi K20 Pro / SD855 真机，A=硅基 DeepSeek-V4-Flash/小柔，B=火山 doubao-seed-2-0-mini/小刚，导演 LLM 档=硅基 Qwen3.8-27B）**：「你们聊聊周末去哪玩」12 轮交替（回复实质不重样，人设语言风格分明）→ 12 轮上限触发收场白（speak 播放确认）；rounds=1 ×3 复跑收场白 3/3 稳定；话题中途 `director llm` 热切换，决策 reason 全部落日志（「小刚补充工程师视角的省心细节」「用户追问细节，小柔活泼适合接话」）；B 发言中插话排队 → 下一轮批带【用户】行；LlmPrompt 核对：`rt=37ch` 每轮恒在、首轮 `sys=full` 后恒 `brief`（钉住协议未打穿）、cached=1280~1536；全程问名 A 答「我叫小柔」B 答「我叫小刚，沉稳踏实的工程师」（人设不漂移）；stop 停题 + ×2 force-stop 重启零崩溃；StagePanel 截图核对（字幕分道着色/▶ 高亮/导演日志行）。单测 +22 全量 1690 全绿（Director 全分支 10 / 圆桌流程 9 / 前缀槽+inject 3，含插话无点名回归）。
+
+**已知限制（记入后续期）**：语音三链路仍未接舞台（P1 遗留，打字/adb 已闭环）；LLM 档导演默认绑硅基流动一家（prefs 可换模型，不换商）；「交回用户」后无 UI 提示位（仅导演日志/字幕可见，state=WAITING_USER）；圆桌发言进记忆提炼走既有窗口节奏（批量提炼在话题收场后数轮才触发，属预期）；`<cam:>` 标签多人并发仍是 P1 的「最后说话者赢」仲裁。
+
+---

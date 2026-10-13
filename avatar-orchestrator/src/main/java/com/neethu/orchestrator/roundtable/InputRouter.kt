@@ -6,11 +6,13 @@ package com.neethu.orchestrator.roundtable
  * @property id 舞台内唯一 id（"A"/"B"/…，与 corelib AvatarHandle.id 对齐）。
  * @property displayName 点名匹配用的人设名（人设卡 name）。
  * @property aliases 别名字表（昵称/称呼，§4.6「点名别名字表」）。
+ * @property intro 一句人设简介（圆桌 P2 导演 LLM 档的花名册输入；可空）。
  */
 data class StageSlotSpec(
     val id: String,
     val displayName: String,
     val aliases: List<String> = emptyList(),
+    val intro: String = "",
 ) {
     /** 全部可点名的称呼（id 不区分大小写 + 名字 + 别名），按表内声明序。 */
     val names: List<String> =
@@ -18,7 +20,8 @@ data class StageSlotSpec(
 }
 
 /**
- * 一句话的路由决策（§4.6 听觉路由，P1 两档；圆桌广播是 P2 导演的话题模式）。
+ * 一句话的路由决策（§4.6 听觉路由；圆桌话题模式下 [Target.explicit] 区分
+ * 「用户真的点名了」与「默认路由兜底」——点名直授发言权，兜底交给导演）。
  */
 sealed interface RoutingDecision {
 
@@ -26,9 +29,15 @@ sealed interface RoutingDecision {
      * 点名/默认命中一个槽位。[matchedBy] 命中的称呼（调试回显）；
      * [cleanedText] 是剥掉「@称呼」前缀后的文本——@token 是 UI 语义，模型
      * 听到只会困惑；自然语言称呼（"小柔你好"）保留原样（被叫名字很自然）。
+     * [explicit] true = @token 或自然语言点名命中；false = lastAddressed
+     * 默认兜底（无任何称呼出现）。
      */
-    data class Target(val slotId: String, val matchedBy: String, val cleanedText: String) :
-        RoutingDecision
+    data class Target(
+        val slotId: String,
+        val matchedBy: String,
+        val cleanedText: String,
+        val explicit: Boolean,
+    ) : RoutingDecision
 
     /** 舞台为空 / lastAddressed 已不在台上——无可路由对象。 */
     data object Unroutable : RoutingDecision
@@ -62,6 +71,7 @@ class InputRouter(private val slots: List<StageSlotSpec>) {
                     slotId = slot.id,
                     matchedBy = "@$token",
                     cleanedText = stripMention(trimmed, token),
+                    explicit = true,
                 )
             }
         }
@@ -81,13 +91,13 @@ class InputRouter(private val slots: List<StageSlotSpec>) {
             }
         }
         best?.let { (_, slot, _) ->
-            return RoutingDecision.Target(slot.id, slot.displayName, trimmed)
+            return RoutingDecision.Target(slot.id, slot.displayName, trimmed, explicit = true)
         }
 
         // 2. 默认路由：lastAddressed（还在线的话）
         val last = lastAddressed?.let { id -> slots.firstOrNull { it.id == id } }
             ?: return RoutingDecision.Unroutable
-        return RoutingDecision.Target(last.id, last.displayName, trimmed)
+        return RoutingDecision.Target(last.id, last.displayName, trimmed, explicit = false)
     }
 
     companion object {
