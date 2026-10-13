@@ -11,6 +11,8 @@ package com.neethu.orchestrator.memory
  * @property source "tool"(remember 工具) | "auto"(自动提炼) | "manual"(管理面板)。
  * @property embedding bge-m3 1024 维向量；null = 未嵌入（写入时 embed 失败或
  *   集成方没配 embeddings 服务）——检索走关键词路，内容不丢。
+ * @property avatarId 所属虚拟人分片（一屏多虚拟人 P1，[MemoryStore.scoped]
+ *   写入时盖章）；"" = 全局共享（单虚拟人时代的历史数据/无分片写入）。
  */
 data class AgentMemory(
     val id: String,
@@ -23,6 +25,7 @@ data class AgentMemory(
     val lastAccessedAt: Long,
     val accessCount: Int = 1,
     val embedding: FloatArray? = null,
+    val avatarId: String = "",
 ) {
     /** embedding 是数组，data class 默认相等语义会退化成引用比较——覆盖修正。 */
     override fun equals(other: Any?): Boolean =
@@ -36,6 +39,7 @@ data class AgentMemory(
             updatedAt == other.updatedAt &&
             lastAccessedAt == other.lastAccessedAt &&
             accessCount == other.accessCount &&
+            avatarId == other.avatarId &&
             embedding.contentEquals(other.embedding)
 
     override fun hashCode(): Int = id.hashCode() * 31 + content.hashCode()

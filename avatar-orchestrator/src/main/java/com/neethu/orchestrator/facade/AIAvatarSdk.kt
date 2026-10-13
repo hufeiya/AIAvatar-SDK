@@ -9,8 +9,9 @@ import com.neethu.aiadapter.openai.OpenAiCompatibleTtsAdapter
 import com.neethu.aiadapter.volcengine.VolcanoEngineTtsAdapter
 import com.neethu.aiadapter.api.EmbeddingAdapter
 import com.neethu.aiadapter.api.EmbeddingConfig
-import com.neethu.corelib.AvatarController
+import com.neethu.corelib.AvatarActor
 import com.neethu.corelib.Lang
+import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.history.ConversationDatabase
 import com.neethu.orchestrator.history.ConversationStore
@@ -28,6 +29,11 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.asStateFlow
+
+/** 轻量人设 → 每轮恒带的身份前言（null = 无 persona，用默认前言）。纯 JVM 可测。 */
+internal fun personaPreamble(lang: Lang, persona: String): String? =
+    if (persona.isBlank()) null
+    else listOf(promptTextsOf(lang).identityPreamble, persona).joinToString("\n\n")
 
 /**
  * 高阶门面：把「adapter 工厂 + 会话装配」收拢成一个入口——集成方不再自己
@@ -60,8 +66,8 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class AIAvatarSdk(
     private val scope: CoroutineScope,
-    /** 渲染控制器：门面只转发，生命周期归集成方（AvatarView/AvatarSurfaceView）。 */
-    val controller: AvatarController,
+    /** 渲染控制器（[com.neethu.corelib.AvatarController] 或舞台 [com.neethu.corelib.stage.AvatarHandle]）：门面只转发，生命周期归集成方。 */
+    val controller: AvatarActor,
     /**
      * application context：默认 Room 对话库的持有者。注入 [storeFactory] 时
      * 可空（JVM 单测/纯内存场景）。
@@ -140,6 +146,20 @@ class AIAvatarSdk(
         val characterId: String? = null,
         val temperature: Float = 0.6f,
         val recentTurnLimit: Int = 40,
+        /**
+         * 本会话 TTS 并发上限（§4.2 的全局预算缝）：多虚拟人舞台按
+         * RoundtableSession.perSlotTtsBudget 均分注入（2 slot × 2 = 全局 4），
+         * 单虚拟人保持默认 4 不变。
+         */
+        val ttsMaxConcurrent: Int = 4,
+        /**
+         * 轻量人设文本（一屏多虚拟人 P1）：非空时并入每轮恒带的身份前言
+         * （[com.neethu.orchestrator.session.AvatarSession.Options.identityPreamble]
+         * 同缝——逐轮都在、逐字节稳定，前缀缓存不破坏）。区别于人物卡全文
+         * （只随上下文首轮发送）：槽位级的一句话人设要求「永远不漂移」，
+         * doubao-mini 实测 brief 轮会把首轮人设忘成「我叫豆包」。
+         */
+        val persona: String = "",
     ) {
         /** 自定义端点模式：模型/音色透传，不走目录校验。 */
         val isCustomEndpoint: Boolean
@@ -297,6 +317,9 @@ class AIAvatarSdk(
             scope, llm, tts, controller,
             AvatarSession.Options(
                 lang = config.lang,
+                ttsMaxConcurrent = config.ttsMaxConcurrent,
+                // 轻量人设并入每轮恒带的身份前言（brief 轮也在，防弱模型漂移）
+                identityPreamble = personaPreamble(config.lang, config.persona),
                 enableLlmCamera = config.enableLlmCamera,
                 enableLlmMove = config.enableLlmMove,
                 // Room 持久化后上下文可无限增长；请求只带最近 N 条 user/assistant。

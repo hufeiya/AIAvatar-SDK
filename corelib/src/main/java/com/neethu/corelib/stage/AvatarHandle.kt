@@ -1,5 +1,6 @@
 package com.neethu.corelib.stage
 
+import com.neethu.corelib.AvatarActor
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.BreathInfo
 import com.neethu.corelib.CameraShot
@@ -22,10 +23,11 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * 舞台上的一个虚拟人句柄（[AvatarStage.loadAvatar] 的产物）。
  *
- * API 面与单人 [com.neethu.corelib.AvatarController] 的 per-model 部分一致
- * （表情/VRMA/视线/呼吸/弹簧骨/走动/拖拽），差异只有两点：没有场景与运镜
- * （它们是舞台级共享资源，走 [AvatarStage]）；多出 [spawn]/[spec]/[focus]
- * 与「看对方」这类多演员便捷方法。
+ * 实现 [com.neethu.corelib.AvatarActor]：API 面与单人
+ * [com.neethu.corelib.AvatarController] 的 per-model 部分一致（表情/VRMA/
+ * 视线/呼吸/弹簧骨/走动/拖拽），差异只有两点：场景与运镜是舞台级共享资源
+ * （走 [AvatarStage]，机位写入经 [setCameraShot] 代理到舞台并把本演员锚定
+ * 为目标）；多出 [spawn]/[spec]/[focus] 与「看对方」这类多演员便捷方法。
  */
 class AvatarHandle internal constructor(
     /** 舞台内唯一 ID（"A"/"B"/…，诊断与 adb 调试通道的目标选择）。 */
@@ -33,7 +35,7 @@ class AvatarHandle internal constructor(
     val spec: AvatarSpec,
     internal val runtime: AvatarRuntime,
     private val stage: AvatarStage,
-) {
+) : AvatarActor {
     private val _state = MutableStateFlow<AvatarState>(AvatarState.Idle)
 
     /** 加载状态（Idle → Loading → Ready/Error），Compose 直接 collect。 */
@@ -54,7 +56,7 @@ class AvatarHandle internal constructor(
     )
 
     /** 每次走动结束一条（arrived / cancelled）。 */
-    val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
+    override val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
 
     init {
         runtime.onRenderModeDetected = { mode ->
@@ -83,42 +85,42 @@ class AvatarHandle internal constructor(
 
     // ── 表情（blend shape / morph）──────────────────────────────────────
 
-    fun setExpression(name: String, weight: Float = 1.0f) = runtime.setExpression(name, weight)
+    override fun setExpression(name: String, weight: Float) = runtime.setExpression(name, weight)
 
-    fun clearAllExpressions() = runtime.clearAllExpressions()
+    override fun clearAllExpressions() = runtime.clearAllExpressions()
 
-    fun getAvailableExpressions(): List<String> = runtime.getAvailableExpressions()
+    override fun getAvailableExpressions(): List<String> = runtime.getAvailableExpressions()
 
-    fun setExpressionTransitionDuration(durationMs: Long) =
+    override fun setExpressionTransitionDuration(durationMs: Long) =
         runtime.setExpressionTransitionDuration(durationMs)
 
     // ── VRMA ─────────────────────────────────────────────────────────────
 
-    fun loadVrmaAnimation(assetPath: String): Boolean = runtime.loadVrmaAnimation(assetPath)
+    override fun loadVrmaAnimation(assetPath: String): Boolean = runtime.loadVrmaAnimation(assetPath)
 
-    fun loadVrmaAnimationFromFile(path: String): Boolean = runtime.loadVrmaAnimationFromFile(path)
+    override fun loadVrmaAnimationFromFile(path: String): Boolean = runtime.loadVrmaAnimationFromFile(path)
 
-    fun playVrmaAnimation(loop: Boolean = true, speed: Float = 1f, fadeSeconds: Float = 0f) =
+    override fun playVrmaAnimation(loop: Boolean, speed: Float, fadeSeconds: Float) =
         runtime.playVrmaAnimation(loop, speed, fadeSeconds)
 
-    fun stopVrmaAnimation(fadeSeconds: Float = 0f) = runtime.stopVrmaAnimation(fadeSeconds)
+    override fun stopVrmaAnimation(fadeSeconds: Float) = runtime.stopVrmaAnimation(fadeSeconds)
 
     fun getVrmaAnimationDuration(): Float = runtime.getVrmaDuration()
 
-    fun setVrmaIdleAnimation(assetPath: String): Boolean = runtime.setVrmaIdleAnimation(assetPath)
+    override fun setVrmaIdleAnimation(assetPath: String): Boolean = runtime.setVrmaIdleAnimation(assetPath)
 
-    fun setVrmaIdleAnimationFromFile(path: String): Boolean =
+    override fun setVrmaIdleAnimationFromFile(path: String): Boolean =
         runtime.setVrmaIdleAnimationFromFile(path)
 
-    fun clearVrmaIdleAnimation() = runtime.clearVrmaIdleAnimation()
+    override fun clearVrmaIdleAnimation() = runtime.clearVrmaIdleAnimation()
 
     // ── 视线 ─────────────────────────────────────────────────────────────
 
     /** 看世界坐标点（听者看说话者的头部、看镜头等都走这里）。 */
-    fun setLookAtTarget(x: Float, y: Float, z: Float) = runtime.setLookAtTarget(x, y, z)
+    override fun setLookAtTarget(x: Float, y: Float, z: Float) = runtime.setLookAtTarget(x, y, z)
 
     /** 停止注视，头/眼回到动画姿势。 */
-    fun clearLookAtTarget() = runtime.clearLookAtTarget()
+    override fun clearLookAtTarget() = runtime.clearLookAtTarget()
 
     /** 看舞台相机（= 看用户），多演员「发言完毕回看镜头」的便捷入口。 */
     fun lookAtCamera() {
@@ -134,6 +136,9 @@ class AvatarHandle internal constructor(
 
     fun getLookAtInfo(): LookAtInfo? = runtime.lookAtInfo()
 
+    override fun getCameraLookAt(): Triple<FloatArray, FloatArray, FloatArray>? =
+        stage.impl?.cameraLookAt()
+
     /** 头部世界坐标（运镜/注视目标）；模型未就绪 = null。 */
     fun headWorldPosition(): FloatArray? =
         if (runtime.asset != null) runtime.headWorldPosition() else null
@@ -148,13 +153,13 @@ class AvatarHandle internal constructor(
 
     // ── 呼吸 / 弹簧骨 / 剔除 ─────────────────────────────────────────────
 
-    fun setBreathEnabled(enabled: Boolean) = runtime.setBreathEnabled(enabled)
+    override fun setBreathEnabled(enabled: Boolean) = runtime.setBreathEnabled(enabled)
 
-    fun setBreathAmplitudeScale(scale: Float) = runtime.setBreathAmplitudeScale(scale)
+    override fun setBreathAmplitudeScale(scale: Float) = runtime.setBreathAmplitudeScale(scale)
 
-    fun setBreathRateBpm(bpm: Float) = runtime.setBreathRateBpm(bpm)
+    override fun setBreathRateBpm(bpm: Float) = runtime.setBreathRateBpm(bpm)
 
-    fun setBreathSpeaking(speaking: Boolean) = runtime.setBreathSpeaking(speaking)
+    override fun setBreathSpeaking(speaking: Boolean) = runtime.setBreathSpeaking(speaking)
 
     fun getBreathInfo(): BreathInfo? = runtime.breathInfo()
 
@@ -196,18 +201,31 @@ class AvatarHandle internal constructor(
 
     fun walkGaitsSummary(): String = runtime.walkGaitsSummary()
 
-    fun startWalk(targetX: Float, targetZ: Float, speed: Float = 1.0f): WalkStartResult =
+    override fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult =
         runtime.startWalk(targetX, targetZ, speed)
 
     fun startStrafe(left: Boolean, meters: Float, speed: Float = 1.0f): WalkStartResult =
         runtime.startStrafe(left, meters, speed)
 
-    fun stopWalk() = runtime.stopWalk()
+    override fun stopWalk() = runtime.stopWalk()
 
-    fun getWalkState(): WalkSnapshot? =
+    override fun getWalkState(): WalkSnapshot? =
         if (runtime.asset != null) runtime.walkSnapshot() else null
 
     // ── 程序化移动 ───────────────────────────────────────────────────────
 
     fun moveAvatar(dx: Float, dy: Float, dz: Float = 0f) = runtime.moveAvatar(dx, dy, dz)
+
+    // ── 机位（舞台级共享相机的演员侧代理）────────────────────────────────
+
+    override fun getActiveCameraShot(): CameraShot? = stage.impl?.getActiveCameraShot()
+
+    /**
+     * 演员侧机位写入：切**舞台**相机并把本演员锚定为目标（LLM `<cam:>` 标签
+     * 通道的落点——多个演员各自发标签时，每次都只是「给自己点机位」，共享
+     * 一台相机的仲裁天然收敛到「最后说话的人」，不会互相拉扯）。
+     */
+    override fun setCameraShot(shot: CameraShot) {
+        stage.impl?.setCameraShot(shot, runtime)
+    }
 }

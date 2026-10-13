@@ -42,7 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * Obtain an instance via [rememberAvatarController] inside a Composable scope.
  */
-class AvatarController {
+class AvatarController : AvatarActor {
 
     // ── Observable State ─────────────────────────────────────────────────
 
@@ -261,21 +261,21 @@ class AvatarController {
      * @param name Expression name (e.g. "happy", "sad", "blink").
      * @param weight Weight value 0.0–1.0. Defaults to 1.0 (full expression).
      */
-    fun setExpression(name: String, weight: Float = 1.0f) {
+    override fun setExpression(name: String, weight: Float) {
         renderer?.setExpression(name, weight)
     }
 
     /**
      * Clear all active expressions, returning the model to a neutral face.
      */
-    fun clearAllExpressions() {
+    override fun clearAllExpressions() {
         renderer?.clearAllExpressions()
     }
 
     /**
      * Get the list of available expression names from the currently loaded model.
      */
-    fun getAvailableExpressions(): List<String> {
+    override fun getAvailableExpressions(): List<String> {
         return renderer?.getAvailableExpressions() ?: emptyList()
     }
 
@@ -287,7 +287,7 @@ class AvatarController {
      *
      * @param durationMs Duration in milliseconds. Default is 300ms. Use 0 for instant.
      */
-    fun setExpressionTransitionDuration(durationMs: Long) {
+    override fun setExpressionTransitionDuration(durationMs: Long) {
         renderer?.setExpressionTransitionDuration(durationMs)
     }
 
@@ -299,7 +299,7 @@ class AvatarController {
      * @param assetPath Relative path inside `assets/`, e.g. `"animations/Angry.vrma"`.
      * @return `true` if the animation was loaded successfully.
      */
-    fun loadVrmaAnimation(assetPath: String): Boolean {
+    override fun loadVrmaAnimation(assetPath: String): Boolean {
         return renderer?.loadVrmaAnimation(assetPath) ?: false
     }
 
@@ -311,7 +311,7 @@ class AvatarController {
      * @param path Absolute path to the `.vrma` file on the filesystem.
      * @return `true` if the animation was loaded successfully.
      */
-    fun loadVrmaAnimationFromFile(path: String): Boolean {
+    override fun loadVrmaAnimationFromFile(path: String): Boolean {
         return renderer?.loadVrmaAnimationFromFile(path) ?: false
     }
 
@@ -326,7 +326,7 @@ class AvatarController {
      *   While walking, a one-shot gesture automatically becomes an
      *   upper-body-masked overlay (walk + gesture at the same time).
      */
-    fun playVrmaAnimation(loop: Boolean = true, speed: Float = 1f, fadeSeconds: Float = 0f) {
+    override fun playVrmaAnimation(loop: Boolean, speed: Float, fadeSeconds: Float) {
         renderer?.playVrmaAnimation(loop, speed, fadeSeconds)
     }
 
@@ -334,7 +334,7 @@ class AvatarController {
      * Stop the VRMA animation and restore the model's rest pose (or the idle
      * loop when configured). [fadeSeconds] > 0 fades out instead of cutting.
      */
-    fun stopVrmaAnimation(fadeSeconds: Float = 0f) {
+    override fun stopVrmaAnimation(fadeSeconds: Float) {
         renderer?.stopVrmaAnimation(fadeSeconds)
     }
 
@@ -355,17 +355,17 @@ class AvatarController {
      *
      * @return `true` if the animation was loaded successfully.
      */
-    fun setVrmaIdleAnimation(assetPath: String): Boolean {
+    override fun setVrmaIdleAnimation(assetPath: String): Boolean {
         return renderer?.setVrmaIdleAnimation(assetPath) ?: false
     }
 
     /** Same as [setVrmaIdleAnimation] but from an absolute file path. */
-    fun setVrmaIdleAnimationFromFile(path: String): Boolean {
+    override fun setVrmaIdleAnimationFromFile(path: String): Boolean {
         return renderer?.setVrmaIdleAnimationFromFile(path) ?: false
     }
 
     /** Drop the idle; one-shots and stops return to the rest pose again. */
-    fun clearVrmaIdleAnimation() {
+    override fun clearVrmaIdleAnimation() {
         renderer?.clearVrmaIdleAnimation()
     }
 
@@ -382,12 +382,12 @@ class AvatarController {
      * controller.setLookAtTarget(eye[0], eye[1], eye[2])
      * ```
      */
-    fun setLookAtTarget(x: Float, y: Float, z: Float) {
+    override fun setLookAtTarget(x: Float, y: Float, z: Float) {
         renderer?.setLookAtTarget(x, y, z)
     }
 
     /** Stop gaze tracking; the head returns to its animated pose. */
-    fun clearLookAtTarget() {
+    override fun clearLookAtTarget() {
         renderer?.clearLookAtTarget()
     }
 
@@ -438,17 +438,17 @@ class AvatarController {
      * this is what keeps the avatar from looking frozen). On by default; the
      * setting survives model switches.
      */
-    fun setBreathEnabled(enabled: Boolean) {
+    override fun setBreathEnabled(enabled: Boolean) {
         renderer?.setBreathEnabled(enabled)
     }
 
     /** 呼吸幅度倍率（0~3，1 = 设计幅度），实时生效、跨模型重载保留。 */
-    fun setBreathAmplitudeScale(scale: Float) {
+    override fun setBreathAmplitudeScale(scale: Float) {
         renderer?.setBreathAmplitudeScale(scale)
     }
 
     /** 呼吸频率（次/分），实时生效、跨模型重载保留；≤0 恢复引擎默认。 */
-    fun setBreathRateBpm(bpm: Float) {
+    override fun setBreathRateBpm(bpm: Float) {
         renderer?.setBreathRateBpm(bpm)
     }
 
@@ -460,7 +460,7 @@ class AvatarController {
      * automatically; SDK integrators only need this when driving playback
      * themselves.
      */
-    fun setBreathSpeaking(speaking: Boolean) {
+    override fun setBreathSpeaking(speaking: Boolean) {
         renderer?.setBreathSpeaking(speaking)
     }
 
@@ -654,7 +654,7 @@ class AvatarController {
      * to surface arrival in UI or feed dialogue logic (AvatarSession emits
      * [com.neethu.orchestrator.session.AvatarEvent.WalkArrived] from this).
      */
-    val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
+    override val walkFinished: SharedFlow<WalkFinished> = _walkFinished.asSharedFlow()
 
     /**
      * Walk toward a world-space XZ point (meters): plays the configured gait
@@ -670,12 +670,12 @@ class AvatarController {
      * controller.startWalk(targetX = 1.5f, targetZ = -3f, speed = 1.0f)
      * ```
      */
-    fun startWalk(targetX: Float, targetZ: Float, speed: Float = 1.0f): WalkStartResult {
+    override fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult {
         return renderer?.startWalk(targetX, targetZ, speed) ?: WalkStartResult.NO_RENDERER
     }
 
     /** Stop walking immediately and return to the idle loop. */
-    fun stopWalk() {
+    override fun stopWalk() {
         renderer?.stopWalk()
     }
 
@@ -683,7 +683,7 @@ class AvatarController {
      * Locomotion state snapshot (phase / position / heading / target / speed),
      * for diagnostics and UI.
      */
-    fun getWalkState(): WalkSnapshot? = renderer?.walkSnapshot()
+    override fun getWalkState(): WalkSnapshot? = renderer?.walkSnapshot()
 
     // ── Public API: Render Settings ──────────────────────────────────────
 
@@ -779,7 +779,7 @@ class AvatarController {
      * Current camera pose: `Triple(eye, target, up)`, each a 3-element
      * array, or `null` while no view is attached.
      */
-    fun getCameraLookAt(): Triple<FloatArray, FloatArray, FloatArray>? {
+    override fun getCameraLookAt(): Triple<FloatArray, FloatArray, FloatArray>? {
         return renderer?.cameraLookAt()
     }
 
@@ -807,7 +807,7 @@ class AvatarController {
      * controller.setCameraShot(CameraShot.MEDIUM_SHOT)
      * ```
      */
-    fun setCameraShot(shot: CameraShot) {
+    override fun setCameraShot(shot: CameraShot) {
         renderer?.setCameraShot(shot)
     }
 
@@ -824,7 +824,7 @@ class AvatarController {
      * or no view is attached. Note: manual camera control cancels the glide
      * but keeps the mode.
      */
-    fun getActiveCameraShot(): CameraShot? {
+    override fun getActiveCameraShot(): CameraShot? {
         return renderer?.getActiveCameraShot()
     }
 

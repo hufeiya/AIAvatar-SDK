@@ -5,7 +5,7 @@ import android.view.Choreographer
 import com.neethu.aiadapter.api.EmotionCue
 import com.neethu.aiadapter.api.VisemeTimeline
 import com.neethu.aiadapter.lipsync.VowelDriver
-import com.neethu.corelib.AvatarController
+import com.neethu.corelib.AvatarActor
 import com.neethu.orchestrator.audio.ActivePlayback
 import com.neethu.orchestrator.audio.PlaybackItem
 import kotlinx.coroutines.CoroutineScope
@@ -42,7 +42,7 @@ import kotlin.math.abs
  * in one frame.
  */
 class FaceDriver(
-    private val controller: AvatarController,
+    private val controller: AvatarActor,
     parentScope: CoroutineScope,
     /**
      * 表情名单来源（可注入，JVM 单测用）：默认读控制器（模型重载后集合随

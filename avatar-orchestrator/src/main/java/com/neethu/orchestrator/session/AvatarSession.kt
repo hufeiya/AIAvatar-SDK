@@ -19,7 +19,7 @@ import com.neethu.aiadapter.model.TtsConfig
 import com.neethu.aiadapter.model.ToolCallRequest
 import com.neethu.aiadapter.model.ToolSpec
 import com.neethu.aiadapter.openai.isToolRelatedError
-import com.neethu.corelib.AvatarController
+import com.neethu.corelib.AvatarActor
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.agent.AgentToolCatalog
@@ -103,7 +103,7 @@ class AvatarSession(
      */
     private val llm: LlmAdapter? = null,
     private val tts: TtsAdapter,
-    private val controller: AvatarController? = null,
+    private val controller: AvatarActor? = null,
     private val options: Options = Options(),
     playbackQueue: PlaybackQueue? = null,
     lipSyncProcessor: LipSyncProcessor? = WlipsyncLipSyncProcessor(),

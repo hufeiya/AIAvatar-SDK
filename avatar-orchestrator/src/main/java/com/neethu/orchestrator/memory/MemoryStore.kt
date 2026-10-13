@@ -4,6 +4,11 @@ package com.neethu.orchestrator.memory
  * 长期记忆的存储缝（docs/memory-feasibility.md §4.1）：orchestrator 纯 JVM
  * 可测，Room 实现（[RoomMemoryStore]）由集成方注入。记忆跨上下文全局共享
  * ——不挂 contextId，用户是同一个人，换上下文/换人设卡共享记忆。
+ *
+ * avatarId 维度（一屏多虚拟人 P1，docs/multi-avatar-feasibility.md §3.2）：
+ * 同一个用户与多个虚拟人的记忆天然要分人记（对 A 说的私事不能被 B 想起）。
+ * 经 [scoped] 取按虚拟人切片的视图注入各会话；无切片需求的集成方拿到的
+ * store 恒为全局语义，零感知。
  */
 interface MemoryStore {
     /**
@@ -27,6 +32,13 @@ interface MemoryStore {
 
     /** 检索命中回写：accessCount+1 / lastAccessedAt=now（未来衰减/整理的数据底座）。 */
     suspend fun touch(ids: List<String>)
+
+    /**
+     * 取按 [avatarId] 切片的视图：add（自动盖章 avatarId，分片内去重）、
+     * all/count/clear 与待提炼窗口都只作用于该虚拟人的分片，其余分片不可见。
+     * 默认返回自身（无维度实现的 store 恒单切片语义）。
+     */
+    fun scoped(avatarId: String): MemoryStore = this
 }
 
 /**
@@ -79,25 +91,55 @@ object MemoryDedup {
 /**
  * 纯内存实现：单测 fake + 不需要持久化的最小接入。去重语义与 Room 实现共用
  * [MemoryDedup]，两实现的 add 行为由同一组单测锁定。
+ *
+ * [scoped] 返回共享同一底座的分片视图（全局视图照常看全库）——多虚拟人
+ * 隔离语义与 Room 实现同构，会话级单测不需要 Room。
  */
 class InMemoryMemoryStore(
     private val nowMs: () -> Long = { System.currentTimeMillis() },
 ) : MemoryStore, PendingWindowStore {
 
-    private val rows = LinkedHashMap<String, AgentMemory>()
-    private var window: List<MemoryTurn> = emptyList()
+    /** 同底座所有视图共享的行集与分窗口；全局视图 slice=null 看全库。 */
+    private class Backing {
+        val rows = LinkedHashMap<String, AgentMemory>()
+        val windows = HashMap<String, List<MemoryTurn>>()
+    }
+
+    private var backing = Backing()
+    private var slice: String? = null
+
+    private constructor(backing: Backing, slice: String?, nowMs: () -> Long) : this(nowMs) {
+        this.backing = backing
+        this.slice = slice
+    }
+
+    override fun scoped(avatarId: String): MemoryStore =
+        InMemoryMemoryStore(backing, avatarId, nowMs)
+
+    private fun visible(): List<AgentMemory> {
+        val s = slice ?: return backing.rows.values.toList()
+        return backing.rows.values.filter { it.avatarId == s }
+    }
 
     override suspend fun add(memory: AgentMemory): AgentMemory {
-        val duplicate = MemoryDedup.findDuplicate(memory, rows.values.toList())
+        val s = slice
+        val stamped = if (s != null && memory.avatarId != s) {
+            memory.copy(avatarId = s)
+        } else {
+            memory
+        }
+        // 分片内去重（对 A 的重复事实不该被 B 的相似记忆挡掉）
+        val duplicate = MemoryDedup.findDuplicate(stamped, visible())
+        val rows = backing.rows
         if (duplicate == null) {
-            rows[memory.id] = memory
-            return memory
+            rows[stamped.id] = stamped
+            return stamped
         }
         val merged = duplicate.copy(
-            content = memory.content,
-            category = memory.category,
-            importance = memory.importance,
-            embedding = memory.embedding ?: duplicate.embedding,
+            content = stamped.content,
+            category = stamped.category,
+            importance = stamped.importance,
+            embedding = stamped.embedding ?: duplicate.embedding,
             updatedAt = nowMs(),
         )
         rows[duplicate.id] = merged
@@ -105,27 +147,41 @@ class InMemoryMemoryStore(
     }
 
     override suspend fun updateContent(id: String, content: String) {
-        val row = rows[id] ?: return
-        rows[id] = row.copy(content = content, embedding = null, updatedAt = nowMs())
+        val row = backing.rows[id] ?: return
+        backing.rows[id] = row.copy(content = content, embedding = null, updatedAt = nowMs())
     }
 
-    override suspend fun delete(id: String): Boolean = rows.remove(id) != null
+    override suspend fun delete(id: String): Boolean = backing.rows.remove(id) != null
 
-    override suspend fun all(): List<AgentMemory> = rows.values.toList()
+    override suspend fun all(): List<AgentMemory> = visible()
 
-    override suspend fun count(): Int = rows.size
+    override suspend fun count(): Int = visible().size
 
-    override suspend fun clear() = rows.clear()
+    override suspend fun clear() {
+        val s = slice
+        if (s == null) {
+            backing.rows.clear()
+            backing.windows.clear()
+        } else {
+            backing.rows.values.removeAll { it.avatarId == s }
+            backing.windows.remove(s)
+        }
+    }
 
     override suspend fun touch(ids: List<String>) {
+        val rows = backing.rows
         ids.forEach { id ->
             rows[id]?.let { rows[id] = it.copy(accessCount = it.accessCount + 1, lastAccessedAt = nowMs()) }
         }
     }
 
-    override suspend fun loadWindow(): List<MemoryTurn> = window
+    override suspend fun loadWindow(): List<MemoryTurn> =
+        backing.windows[windowKey()].orEmpty()
 
     override suspend fun saveWindow(turns: List<MemoryTurn>) {
-        window = turns.toList()
+        backing.windows[windowKey()] = turns.toList()
     }
+
+    /** 分窗口的键：分片视图按 avatarId 各存各的；全局视图存 ""。 */
+    private fun windowKey(): String = slice ?: ""
 }

@@ -368,3 +368,21 @@ stageSession.sendFromUser(text = "你们怎么看…")     // 内部走 InputRou
 **验收（Redmi K20 Pro / SD855 真机）**：同屏 10.vrm(MToon+VRM1.0) + 47058…vrm(MToon v0+VRM0.x，Y-180 翻转) + home.glb 场景 50-60fps；独立表情/视线/VRMA one-shot/走动互不干扰；`cam closeup A/B` 运镜锚定目标参数化；captureFrame 落盘 PNG；×5 force-stop 重启零 SIGABRT；VRMA 缓存生效（同源 idle+步态只解析一次）；MainActivity 单路径 60fps 无回归。737 个 JVM 单测全绿（新增 SpawnMath 8 例 + VrmaClipCache 4 例）。
 
 **已知限制（记入后续期）**：重模型双人要靠 stride=2 才达 60fps（P3 的非焦点降频/LOD 仍值得做）；MToon LINEAR 色调映射是舞台级「任一演员 MToon 即 LINEAR」（per-演员分级留后续）；拖拽命中无拾取（P0 用 focused 演员，UI/命令切换）；多演员共享一台相机的仲裁归 P1 路由层。
+
+---
+
+## 十二、P1 实现记录（2026-10-13，已真机验收）
+
+**落地形态：接口抽取 + 舞台编排门面，单人路径零行为变化。**
+
+- **corelib 新接口 `AvatarActor`**（P1 的地基手术）：per-actor 操控的最小公共面（表情/VRMA/视线/呼吸/走动/walkFinished/机位读写），`AvatarController` 与 `AvatarHandle` 共同实现——orchestrator 的 FaceDriver/GestureDriver/LocomotionDriver/AvatarSession/AIAvatarSdk 只吃接口，同一套会话装配对单人/舞台两形态都成立。单人路径只是把既有方法标注 override + 默认参数值上移到接口声明（Kotlin 覆写不得重声明默认值，调用点经继承解析，源码零变化）；`AvatarHandle` 补齐 `getCameraLookAt/getActiveCameraShot`，`setCameraShot` 代理到舞台并锚定自己（LLM `<cam:>` 标签的语义=「给自己点机位」，多演员各发标签天然收敛到最后说话者，§4.8 的仲裁第一版）。
+- **orchestrator 新 `roundtable/` 包**：`InputRouter`（§4.6 的 P1 两档——@token 点名大小写不敏感可剥前缀、自然语言称呼 contains 匹配先出现者赢、默认路由 lastAddressed；纯 JVM）；`RoundtableSession`（N session 编排：路由 send、发言令牌=最近 SentenceStarted、打断命中**全部非 IDLE** 会话〔正在说的+正在想的〕、倾听注视接力〔发言中其余人看发言者头部，回合完全员回看镜头，SentenceEnded 不回看防多句甩头〕、`updateSession` 重挂事件收集〔坑 41 的换绑纪律：先 cancel 旧收集者〕）；`StageEvent(slotId, event)` 包一层带 slotId 的合流事件（**不改 AvatarEvent**，§4.9 字幕分道的数据源）；`perSlotTtsBudget` 预算均分。
+- **记忆 avatarId 维度（§3.2 必改项）**：`MemoryStore.scoped(avatarId)` 缝（接口默认返回自身=无维度 store 零感知）；InMemory 实现共享底座分片视图（分片内去重、分窗口按人）；Room 库 v1→v2 迁移——`agent_memories` 加 `avatarId` 列（存量归全局分片 `''`）、待提炼窗口从单行表改按 avatarId 一行（DROP 重建：攒批缓存最坏损失=一批重新提炼）；每 slot 的 session 注入 `RoomMemoryStore.from(ctx).scoped("stage_a")`，管理面板/ai_cmd 的全局库照旧看全部分片。
+- **facade 两针**：`ChatConfig.ttsMaxConcurrent`（预算注入缝，舞台传均分值 2+2=全局 4）+ `ChatConfig.persona`（轻量人设并入**每轮恒带**的 identityPreamble——真机发现见下）。
+- **app**：新 `StageChatRig`（每 slot 独立 SupervisorJob 子 scope〔§4.2 硬要求〕+ AIAvatarSdk facade + 记忆分片 + 锚点表注入 + StageGazeRelay 的舞台实现）；`StageSlotPrefs`（per-slot 只有名字/服务商/模型/音色/人设，Key 类共享一份钱，`stage_<slot>_` 前缀键）；MultiAvatarActivity 加聊天面板（字幕分道着色/输入路由回显 lastAddressed/打断/槽位配置行）；STAGE_CMD 扩聊天命令族 `chat|say|interrupt|chat_state|cfg|memory`。
+
+**真机发现并修复的一个真问题**：doubao-mini 在 brief 轮（人设只随上下文首轮发送的既有钉住机制下）把首轮人设忘光、自称「我叫豆包」——轻量槽位人设要求「永不漂移」，修法是 `ChatConfig.persona` 走 identityPreamble 缝（每轮都在、逐字节稳定、前缀缓存不破坏），修后 B 稳定自称小刚。另一坑复现：`adb shell am broadcast --es cmd "chat auto hi"` 的引号被远程 shell 剥掉、空格拆参数导致命令静默失效——必须整条 `adb shell "am broadcast ... --es cmd 'chat auto hi'"`（记忆「ai_cmd 空格参数转义」的 STAGE_CMD 版）。
+
+**验收（Redmi K20 Pro / SD855 真机，A=硅基 DeepSeek-V4-Flash/小柔，B=火山 doubao-seed-2-0-mini/小刚）**：双人 50-60fps + home.glb；`chat auto @A 你好` 只点亮 A（B 零请求），无点名自动落 lastAddressed（UI 回显「→ B(小刚)」）；分别问名字 A 答「小柔」B 答「小刚」（人设不串）；A 用 remember 工具落库（preference/imp=8）后 `memory A count`=1、`memory B count`=0，问 B「我喜欢喝什么」如实答不知道（检索隔离闭环）；打断命中非空闲会话、令牌释放全员回 IDLE；A 的 `<cam:close_up>` 经演员代理把舞台相机切到自己特写（shot=CLOSE_UP）；×3 force-stop 重启零崩溃、会话自动重配；单测 +38 全量 875 全绿（InputRouter 14 / RoundtableSession 9 / MemoryStoreScope 6 / facade persona 2 / 既有全量回归）。
+
+**已知限制（记入后续期）**：虚拟人互聊与圆桌=P2 导演制（本期的 RoundtableSession 刻意无 Director）；语音三链路（按住/自由/ASR）未接舞台——路由器语音无关，接上即通（打字已闭环）；`AvatarHandle.id`（舞台顺延分配）与 slot 键（"A"/"B"）在 remove 后重载会错位——路由/配置/记忆全按 slot 键，仅诊断显示可能混名；表情标签驱动需要模型加载后 `startFaceDriving`（facade configure 的 modelReady 路径，rig 已接线）。

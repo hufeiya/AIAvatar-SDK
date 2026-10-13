@@ -1,7 +1,7 @@
 package com.neethu.orchestrator.locomotion
 
 import android.util.Log
-import com.neethu.corelib.AvatarController
+import com.neethu.corelib.AvatarActor
 import com.neethu.corelib.WalkPhase
 import com.neethu.corelib.WalkStartResult
 
@@ -22,7 +22,7 @@ import com.neethu.corelib.WalkStartResult
  * [Outcome] 让标签通道与工具通道各自决定「要不要说出去」（工具要回灌文案，
  * 标签通道只发事件+日志）。[open] 供测试 fakes。
  */
-open class LocomotionDriver(private val controller: AvatarController) {
+open class LocomotionDriver(private val controller: AvatarActor) {
 
     enum class Outcome {
         /** 已起步（步态播放中，状态机接管）。 */

@@ -1,7 +1,7 @@
 package com.neethu.orchestrator.gesture
 
 import android.util.Log
-import com.neethu.corelib.AvatarController
+import com.neethu.corelib.AvatarActor
 
 /**
  * Plays LLM-requested gestures (`<act:tag>`) from a configurable
@@ -13,7 +13,7 @@ import com.neethu.corelib.AvatarController
  * other — "last cue wins", the same semantics as camera shots. [open] for
  * test fakes.
  */
-open class GestureDriver(private val controller: AvatarController) {
+open class GestureDriver(private val controller: AvatarActor) {
 
     private var catalog: Map<String, ActionEntry> = emptyMap()
     private var idleEntry: ActionEntry? = null

@@ -233,4 +233,20 @@ class AIAvatarSdkTest {
         // 异商但 TTS 切 Edge（免费）：不需要任何 TTS Key
         assertTrue(sf.copy(ttsEngine = TtsEngine.EDGE, ttsProvider = ChatProvider.VOLCANO).isConfigured)
     }
+
+    @Test
+    fun `persona joins the preamble and participates in identity`() {
+        // 纯函数：空 = null（默认前言）；非空 = 默认前言 + persona 同条
+        assertNull(personaPreamble(com.neethu.corelib.Lang.ZH, " "))
+        val joined = personaPreamble(com.neethu.corelib.Lang.ZH, "你叫小柔")!!
+        assertTrue(joined.contains("你叫小柔"))
+        assertTrue(joined.length > "你叫小柔".length)
+
+        // persona 参与会话身份判据：改动即重建（上下文轮换仍由 contextId 决定）
+        val sdk = newSdk()
+        val a = sdk.configure(sfConfig.copy(persona = "你叫小柔"))!!
+        val b = sdk.configure(sfConfig.copy(persona = "你叫小刚"))!!
+        assertNotSame(a, b)
+        assertSame(b, sdk.configure(sfConfig.copy(persona = "你叫小刚")))
+    }
 }

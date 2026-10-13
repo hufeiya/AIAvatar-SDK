@@ -21,6 +21,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 毫秒级丢失窗口），首次访问 runBlocking(IO) 懒加载一次。待提炼窗口同库
  * 持久化（[PendingWindowStore]），语义同上。
  *
+ * avatarId 维度（一屏多虚拟人 P1，docs/multi-avatar-feasibility.md §3.2）：
+ * [avatarId]=null 是全局库（demo 管理面板/ai_cmd 用，看全部分片）；
+ * [scoped] 产出按虚拟人切片的视图（独立镜像、共享 DAO 与 IO 线程）——写入
+ * 自动盖章 avatarId、去重/列举/清空/待提炼窗口都收敛在分片内，注入各 slot
+ * 的 AvatarSession 即得「记忆分人记」。
+ *
  * 懒加载在构造时即向 IO scope 排一个任务（不 runBlocking 阻塞构造线程）——
  * 首个使用点前若尚未加载完成，[ensureLoaded] 再同步兜一次。
  */
@@ -32,6 +38,8 @@ class RoomMemoryStore(
             .asCoroutineDispatcher(),
     ),
     private val nowMs: () -> Long = { System.currentTimeMillis() },
+    /** null = 全局库（全部分片可见）；非空 = 只见该虚拟人的分片。 */
+    private val avatarId: String? = null,
 ) : MemoryStore, PendingWindowStore {
 
     companion object {
@@ -43,6 +51,10 @@ class RoomMemoryStore(
             return RoomMemoryStore(db.memoryDao(), db.pendingWindowDao())
         }
     }
+
+    /** 分片视图（P1）：共享 DAO 与 IO scope，独立镜像只装本虚拟人的行。 */
+    override fun scoped(avatarId: String): MemoryStore =
+        RoomMemoryStore(memoryDao, windowDao, ioScope, nowMs, avatarId)
 
     private val json = Json { ignoreUnknownKeys = true }
     private val windowSerializer = ListSerializer(MemoryTurnDto.serializer())
@@ -65,8 +77,9 @@ class RoomMemoryStore(
             if (loaded.get()) return
             try {
                 runBlocking {
-                    memoryDao.all().forEach { e -> rows[e.id] = e.toDomain() }
-                    window = parseWindow(windowDao.get()?.turnsJson)
+                    val entities = if (avatarId != null) memoryDao.allFor(avatarId) else memoryDao.all()
+                    entities.forEach { e -> rows[e.id] = e.toDomain() }
+                    window = parseWindow(windowDao.getFor(avatarId ?: "")?.turnsJson)
                 }
                 loaded.set(true)
             } catch (t: Throwable) {
@@ -84,18 +97,24 @@ class RoomMemoryStore(
 
     override suspend fun add(memory: AgentMemory): AgentMemory {
         ensureLoaded()
+        // 分片视图写入自动盖章（MemoryTools/提炼不感知维度）
+        val incoming = if (avatarId != null && memory.avatarId != avatarId) {
+            memory.copy(avatarId = avatarId)
+        } else {
+            memory
+        }
         val stored: AgentMemory = synchronized(lock) {
-            val duplicate = MemoryDedup.findDuplicate(memory, rows.values.toList())
+            val duplicate = MemoryDedup.findDuplicate(incoming, rows.values.toList())
             if (duplicate == null) {
-                rows[memory.id] = memory
-                memory
+                rows[incoming.id] = incoming
+                incoming
             } else {
                 // 覆盖 content 保 accessCount/createdAt 不新增（§2.2）
                 val merged = duplicate.copy(
-                    content = memory.content,
-                    category = memory.category,
-                    importance = memory.importance,
-                    embedding = memory.embedding ?: duplicate.embedding,
+                    content = incoming.content,
+                    category = incoming.category,
+                    importance = incoming.importance,
+                    embedding = incoming.embedding ?: duplicate.embedding,
                     updatedAt = nowMs(),
                 )
                 rows[duplicate.id] = merged
@@ -138,8 +157,13 @@ class RoomMemoryStore(
             window = emptyList()
         }
         writeAsync {
-            memoryDao.clear()
-            windowDao.clear()
+            if (avatarId != null) {
+                memoryDao.clearFor(avatarId)
+                windowDao.clearFor(avatarId)
+            } else {
+                memoryDao.clear()
+                windowDao.clear()
+            }
         }
     }
 
@@ -168,7 +192,7 @@ class RoomMemoryStore(
         writeAsync {
             windowDao.upsert(
                 PendingWindowEntity(
-                    id = 1,
+                    avatarId = avatarId ?: "",
                     turnsJson = json.encodeToString(
                         windowSerializer,
                         turns.map { MemoryTurnDto(u = it.user, a = it.assistant) },
@@ -229,6 +253,7 @@ internal fun AgentMemory.toEntity(): AgentMemoryEntity = AgentMemoryEntity(
     updatedAt = updatedAt,
     lastAccessedAt = lastAccessedAt,
     accessCount = accessCount,
+    avatarId = avatarId,
     embedding = embedding?.let { vec ->
         ByteBuffer.allocate(vec.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply {
             vec.forEach { putFloat(it) }
