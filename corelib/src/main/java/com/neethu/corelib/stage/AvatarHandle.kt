@@ -12,6 +12,8 @@ import com.neethu.corelib.VrmaFinished
 import com.neethu.corelib.WalkFinished
 import com.neethu.corelib.WalkSnapshot
 import com.neethu.corelib.WalkStartResult
+import com.neethu.corelib.accessory.AccessorySpec
+import com.neethu.corelib.accessory.AccessoryState
 import com.neethu.corelib.internal.WalkGaitKind
 import com.neethu.corelib.stage.internal.AvatarRuntime
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -229,6 +231,25 @@ class AvatarHandle internal constructor(
 
     override fun getWalkState(): WalkSnapshot? =
         if (runtime.asset != null) runtime.walkSnapshot() else null
+
+    // ── 配饰（docs/accessory-feasibility.md P0 最小闭环）─────────────────
+
+    /**
+     * 挂载配饰到语义骨骼（主线程同步，内置小资产毫秒级；挂载后自动跟随
+     * 骨骼动画，零每帧代码）。失败原因：重复 ID / 骨骼未解析 / 加载失败。
+     */
+    fun attachAccessory(spec: AccessorySpec): Result<Unit> = runtime.accessories.attach(spec)
+
+    /** 卸载并销毁配饰。 */
+    fun detachAccessory(id: String): Boolean = runtime.accessories.detach(id)
+
+    /** 配饰显隐（不卸载）。 */
+    fun setAccessoryVisible(id: String, visible: Boolean): Boolean =
+        runtime.accessories.setVisible(id, visible)
+
+    /** 当前已挂载配饰快照。 */
+    val accessories: StateFlow<List<AccessoryState>>
+        get() = runtime.accessories.accessories
 
     // ── 程序化移动 ───────────────────────────────────────────────────────
 

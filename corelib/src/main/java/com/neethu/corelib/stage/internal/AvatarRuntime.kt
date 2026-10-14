@@ -13,6 +13,7 @@ import com.neethu.corelib.RenderMode
 import com.neethu.corelib.WalkFinished
 import com.neethu.corelib.WalkStartResult
 import com.neethu.corelib.WalkSnapshot
+import com.neethu.corelib.accessory.AccessoryManager
 import com.neethu.corelib.internal.HipsDragOffsetSolver
 import com.neethu.corelib.internal.LocomotionEngine
 import com.neethu.corelib.internal.LocomotionExtractor
@@ -77,6 +78,17 @@ internal class AvatarRuntime(
 
     internal var springBoneManager: VrmSpringBoneManager? = null
     private var pendingSpringReset: Boolean = false
+
+    // ── 配饰（docs/accessory-feasibility.md P0;每演员一份独立实例）───────
+
+    /** 配饰控制器（懒建；挂点查询走 bind 时解析好的 [boneSemantics]）。 */
+    val accessories: AccessoryManager by lazy {
+        AccessoryManager(
+            stage = stage,
+            ownerTag = "avatar $id",
+            resolveBone = { semantic -> boneSemantics[semantic.lowercase()] ?: 0 },
+        )
+    }
 
     // ── hips 拖拽（three-vrm mouse.html 语义）────────────────────────────
 
@@ -226,24 +238,30 @@ internal class AvatarRuntime(
                 }
             }
 
+            // 全语义骨骼表（一次解析；既有绑定 + 配饰挂点共用，见
+            // HumanoidBoneResolver——此前每个语义各解析一遍 JSON）
+            boneSemantics = HumanoidBoneResolver.resolveAll(asset, prepared.rawBytes)
+            fun bone(vararg semantics: String): Int =
+                semantics.firstOrNull { boneSemantics.containsKey(it) }?.let { boneSemantics[it]!! } ?: 0
+
             // hips 拖拽 + 运镜骨锚（换角色丢弃旧拖拽位移，基线重捕）
-            hipsEntity = resolveHumanoidEntity(asset, prepared.rawBytes, "hips")
+            hipsEntity = bone("hips")
             hipsFallbackEntity = hipsEntity
             hipsDragOffset.fill(0f)
             hipsDragState = HipsDragOffsetSolver.initial()
 
-            headEntity = resolveHumanoidEntity(asset, prepared.rawBytes, "head")
-            chestEntity = resolveHumanoidEntity(asset, prepared.rawBytes, "upperChest", "chest", "spine")
-            val spineEntity = resolveHumanoidEntity(asset, prepared.rawBytes, "spine")
-            val neckEntity = resolveHumanoidEntity(asset, prepared.rawBytes, "neck")
+            headEntity = bone("head")
+            chestEntity = bone("upperChest", "chest", "spine")
+            val spineEntity = bone("spine")
+            val neckEntity = bone("neck")
 
             // 视线引擎（VRM0 翻转之后绑定——rest 朝向已面向 +Z）
             lookAtEngine = VrmLookAtEngine(engine).also { gaze ->
                 gaze.bind(
                     headEntity,
                     neckEntity,
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftEye"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightEye"),
+                    bone("leftEye"),
+                    bone("rightEye"),
                 )
             }
 
@@ -251,10 +269,10 @@ internal class AvatarRuntime(
             breathEngine = VrmBreathEngine(engine).also { breath ->
                 breath.bind(
                     spineEntity,
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "chest"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "upperChest"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftShoulder"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightShoulder"),
+                    bone("chest"),
+                    bone("upperChest"),
+                    bone("leftShoulder"),
+                    bone("rightShoulder"),
                 )
                 breath.setEnabled(breathEnabled)
                 breath.setSpeaking(breathSpeaking)
@@ -267,17 +285,17 @@ internal class AvatarRuntime(
                 mimic.bind(
                     neckEntity,
                     headEntity,
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftUpperArm"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftLowerArm"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftHand"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightUpperArm"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightLowerArm"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightHand"),
+                    bone("leftUpperArm"),
+                    bone("leftLowerArm"),
+                    bone("leftHand"),
+                    bone("rightUpperArm"),
+                    bone("rightLowerArm"),
+                    bone("rightHand"),
                     spineEntity,
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "chest"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "upperChest"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "leftShoulder"),
-                    resolveHumanoidEntity(asset, prepared.rawBytes, "rightShoulder"),
+                    bone("chest"),
+                    bone("upperChest"),
+                    bone("leftShoulder"),
+                    bone("rightShoulder"),
                 )
             }
 
@@ -326,44 +344,10 @@ internal class AvatarRuntime(
     /** VRM 1.0 = true（呼吸/翻转等分支用）。 */
     fun isVrm0Model(): Boolean = isVrm0
 
-    // ── 骨骼解析（VRM1/VRM0 双语义，单虚拟人同款）────────────────────────
+    // ── 骨骼解析（VRM1/VRM0 双语义，bind 时一次解析全语义表）─────────────
 
-    private fun resolveHumanoidEntity(
-        asset: FilamentAsset,
-        glbBytes: ByteArray,
-        vararg semantics: String,
-    ): Int {
-        return try {
-            val json = com.neethu.corelib.internal.GlbMToon.readJson(
-                java.nio.ByteBuffer.wrap(glbBytes)
-            ) ?: return 0
-            val ext = json.getAsJsonObject("extensions") ?: return 0
-            val nodes = json.getAsJsonArray("nodes")
-
-            for (semantic in semantics) {
-                var nodeIndex = -1
-                ext.getAsJsonObject("VRMC_vrm")?.getAsJsonObject("humanoid")
-                    ?.getAsJsonObject("humanBones")?.getAsJsonObject(semantic)
-                    ?.get("node")?.asInt?.let { nodeIndex = it }
-                if (nodeIndex < 0) {
-                    ext.getAsJsonObject("VRM")?.getAsJsonObject("humanoid")
-                        ?.getAsJsonArray("humanBones")?.forEach { el ->
-                            val obj = el.asJsonObject
-                            if (obj.get("bone")?.asString == semantic) {
-                                nodeIndex = obj.get("node")?.asInt ?: -1
-                            }
-                        }
-                }
-                if (nodeIndex < 0 || nodes == null) continue
-                val nodeName = nodes[nodeIndex].asJsonObject.get("name")?.asString ?: continue
-                asset.getFirstEntityByName(nodeName)?.let { return it }
-            }
-            0
-        } catch (e: Exception) {
-            Log.w(TAG, "avatar $id: failed to resolve humanoid entity", e)
-            0
-        }
-    }
+    /** 语义名（小写）→ 实体；bind 前为空表（配饰挂点/诊断查询用）。 */
+    private var boneSemantics: Map<String, Int> = emptyMap()
 
     // ── 帧钩子（Stage 泵驱动；顺序=单虚拟人帧回调的逐行移植）─────────────
 
@@ -1150,6 +1134,8 @@ internal class AvatarRuntime(
 
     /** 从舞台移除本演员：Scene 摘 renderable → 毁 asset → 毁 MToon 实例。 */
     fun destroyAsset() {
+        // 配饰先走：其 transform 父链引用本演员骨骼实体，先摘先毁
+        accessories.destroyAll()
         val asset = asset ?: return
         val loader = stage.avatarAssetLoader
         stage.scene.removeEntities(asset.entities)

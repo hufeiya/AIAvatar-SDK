@@ -96,6 +96,13 @@ internal class Stage(
         private set
     private var avatarMaterialProvider: UbershaderProvider? = null
 
+    /**
+     * 配饰资源加载器（同步 loadResources 专用；与演员异步管线隔离——
+     * 配饰首次挂载用，docs/accessory-feasibility.md §5.2）。
+     */
+    var accessoryResourceLoader: ResourceLoader? = null
+        private set
+
     /** popRenderables 复用缓冲（Runtime 渐进进场共用）。 */
     val readyRenderables = IntArray(128)
 
@@ -268,6 +275,9 @@ internal class Stage(
         }
         if (avatarResourceLoader == null) {
             avatarResourceLoader = ResourceLoader(engine, true)
+        }
+        if (accessoryResourceLoader == null) {
+            accessoryResourceLoader = ResourceLoader(engine, true)
         }
     }
 
@@ -1153,6 +1163,9 @@ internal class Stage(
         avatarAssetLoader?.destroy()
         avatarAssetLoader = null
         avatarMaterialProvider = null
+        // 配饰实体已随演员 destroyAsset 全部清理，这里只收加载器
+        accessoryResourceLoader?.destroy()
+        accessoryResourceLoader = null
         mtoonFactory?.destroy()
         mtoonFactory = null
 

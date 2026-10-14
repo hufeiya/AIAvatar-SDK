@@ -58,6 +58,8 @@ import com.neethu.aiavatar_sdk.sceneMetaAssetName
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.accessory.AccessorySource
+import com.neethu.corelib.accessory.AccessorySpec
 import com.neethu.corelib.stage.AvatarHandle
 import com.neethu.corelib.stage.AvatarSpec
 import com.neethu.corelib.stage.AvatarSpawn
@@ -741,6 +743,14 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "dance polish [on|off]"    # 串场词润色（默认关，失败降级原文）
  * ... --es cmd "dance log"                # 导播决策日志（点播/润色/插幕全程可复盘）
  * ```
+ * 配饰（P0，docs/accessory-feasibility.md §7）：
+ * ```
+ * ... --es cmd "acc list"                 # 内置配饰清单 + 各槽已挂快照
+ * ... --es cmd "acc attach A phone"       # 挂手机到默认骨（rightHand）
+ * ... --es cmd "acc attach A phone head 0 0.1 0 0 0 0 1"   # 换挂点+偏移（米/度/校准系数）
+ * ... --es cmd "acc detach A phone"       # 卸载
+ * ... --es cmd "acc show|hide A phone"    # 显隐（不卸载）
+ * ```
  * 演出中聊天框文本自动走点播路由（演出归导演）；演出收场后可 topic 开题
  * 圆桌点评（两套节目形态合流，§7-P2 彩蛋）。
  * topic 开题时若台上 ≥2 人就位，自动先走对谈位（stage_a/stage_b 锚点优先、
@@ -908,6 +918,58 @@ private class StageCommandRouter(
             // ── P0 渲染类 ────────────────────────────────────────────────
             "shot" -> captureShot()
 
+            // ── 配饰（P0,docs/accessory-feasibility.md §7）───────────────
+            "acc" -> {
+                when (t.getOrNull(1)?.lowercase()) {
+                    "list" -> {
+                        log("built-in: " + AccessoryCatalog.all.joinToString(", ") {
+                            "${it.id}(${it.license}, bone=${it.defaultBone})"
+                        })
+                        for ((slotId, h) in slots.entries()) {
+                            val list = h?.accessories?.value.orEmpty()
+                            if (list.isNotEmpty()) {
+                                log("  $slotId: " + list.joinToString(", ") {
+                                    "${it.id}@${it.bone}" + if (it.visible) "" else "(hidden)"
+                                })
+                            }
+                        }
+                    }
+                    "attach" -> {
+                        // acc attach <slot> <id> [bone] [dx dy dz rx ry rz scale]
+                        val h = slots[t.getOrNull(2) ?: ""]
+                            ?: return log("usage: acc attach <slot> <id> [bone] [dx dy dz rx ry rz scale]")
+                        val entry = AccessoryCatalog.find(t.getOrNull(3) ?: "")
+                            ?: return log("unknown accessory '${t.getOrNull(3)}' (try acc list)")
+                        val bone = t.getOrNull(4) ?: entry.defaultBone
+                        val nums = t.drop(5).mapNotNull { it.toFloatOrNull() }
+                        if (t.drop(5).size != nums.size) return log("offset args must be numbers")
+                        val spec = AccessorySpec(
+                            id = entry.id,
+                            source = AccessorySource.Asset(entry.assetPath),
+                            bone = bone,
+                            position = nums.take(3).ifEmpty { entry.position.toList() }.toFloatArray(),
+                            rotationEulerYXZ = nums.drop(3).take(3).ifEmpty { entry.rotationEulerYXZ.toList() }.toFloatArray(),
+                            scale = nums.getOrNull(6) ?: entry.scale,
+                        )
+                        h.attachAccessory(spec)
+                            .onSuccess { log("acc ${t[2]} attach ${entry.id}@$bone ok (pos=${spec.position.contentToString()} rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale})") }
+                            .onFailure { log("acc attach failed: ${it.message}") }
+                    }
+                    "detach" -> {
+                        val h = slots[t.getOrNull(2) ?: ""] ?: return log("usage: acc detach <slot> <id>")
+                        val id = t.getOrNull(3) ?: return log("usage: acc detach <slot> <id>")
+                        log(if (h.detachAccessory(id)) "acc ${t[2]} detach $id ok" else "no accessory $id on ${t[2]}")
+                    }
+                    "show", "hide" -> {
+                        val h = slots[t.getOrNull(2) ?: ""] ?: return log("usage: acc show|hide <slot> <id>")
+                        val id = t.getOrNull(3) ?: return log("usage: acc show|hide <slot> <id>")
+                        val visible = t[1].equals("show", true)
+                        log(if (h.setAccessoryVisible(id, visible)) "acc $id ${if (visible) "shown" else "hidden"}" else "no accessory $id")
+                    }
+                    else -> log("usage: acc [list|attach <slot> <id> [bone] [dx dy dz rx ry rz scale]|detach <slot> <id>|show|hide <slot> <id>]")
+                }
+            }
+
             "load" -> {
                 // load <slot> <assets路径|file:/abs> [x z yaw]
                 val id = t[1]
@@ -1056,7 +1118,7 @@ private class StageCommandRouter(
                 log("${t[1]} springs=${t[2]}")
             }
 
-            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|dance|shot|load|remove|expr|idle|play|gaze|walk|turn|cam|scene|drag|focus|move|fade|springs)")
+            else -> log("unknown cmd: ${t[0]} (try: state|chat_state|chat|say|interrupt|topic|stop|director|director_log|cfg|memory|dance|shot|load|remove|expr|idle|play|gaze|walk|turn|cam|scene|drag|focus|move|fade|springs|acc)")
         }
     }
 

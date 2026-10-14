@@ -1,0 +1,10 @@
+# 高模样例只留本地（来源 URL 见各 *.README.md），避免 ~90MB 二进制进库。
+# 校验数据已沉淀在本目录 README.md 的表格里。
+Avocado.glb
+WaterBottle.glb
+BoomBox.glb
+Lantern.glb
+AntiqueCamera.glb
+DamagedHelmet.glb
+kenney_furniture-kit.zip
+SciFiHelmet/
