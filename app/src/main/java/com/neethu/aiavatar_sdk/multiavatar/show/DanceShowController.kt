@@ -60,6 +60,12 @@ internal class DanceShowController(
     /** 锚点表（move 幕词表 = `<move:>` 同一张 home.anchors.json，P1 扩前排表演位）。 */
     private val anchors: List<MoveAnchor> = loadWalkAnchors(context)
 
+    /** 点播路由器（P2）：档位随 prefs 装配（`dance auto` 切换重建）。 */
+    private var router: DanceRequestRouter = buildRouter()
+
+    /** 导播决策日志（director_log 风格，ring 缓冲，`dance log` 回显）。 */
+    private val directorLog = ArrayDeque<String>()
+
     private var cast: List<String> = emptyList()
 
     /** 本场发起的原地转向（turnTo 完成也发 walkFinished，这里吞掉防误推进）。 */
@@ -76,6 +82,14 @@ internal class DanceShowController(
         listOf(ShowDirector.BOW_CLIP, FANS_CLAP_CLIP)
             .filter { it !in whitelist }
             .forEach { log("warn: 内置曲目不在库内 $it") }
+        // 演出收场提示（P2 彩蛋入口：DONE 后可 topic 开题圆桌点评）
+        scope.launch {
+            director.state.collect { s ->
+                if (s == ShowState.DONE) {
+                    log("演出收场（dance start 重演 / topic 点评刚才的演出 / 演出中聊天框=dance dm 点播）")
+                }
+            }
+        }
     }
 
     val state get() = director.state
@@ -175,6 +189,95 @@ internal class DanceShowController(
         }
     }
 
+    // ── 点播路由（P2）────────────────────────────────────────────────────
+
+    /**
+     * 点播受理：`dance dm <文本>` 与演出中聊天框共用入口。路由含一次 LLM
+     * 调用（异步跑在控制器 scope），命中插幕进导演队列（当前幕收尾后执行），
+     * 拒绝只留日志——任何路由结果都不打断当前幕。
+     */
+    fun handleDm(text: String) {
+        if (text.isBlank()) return
+        if (!director.isRunning) {
+            log("dm 忽略: 非演出中（dance start 后再点播）")
+            return
+        }
+        val members = castMembers()
+        scope.launch {
+            val decision = router.route(text, members, whitelist)
+            recordDecision("dm「${text.take(20)}」→ ${decisionSummary(decision)}")
+            when (decision) {
+                is RequestDecision.Insert -> {
+                    val clipName = decision.act.clip?.substringAfterLast('/') ?: "-"
+                    if (director.enqueueAct(decision.act)) {
+                        log("点播插幕（${decision.track}）: ${decision.act.performer} $clipName — ${decision.reason}")
+                    } else {
+                        log("点播未受理: 演出已收场")
+                    }
+                }
+                is RequestDecision.Reject -> log("点播拒绝: ${decision.reason}")
+            }
+        }
+    }
+
+    /** `dance auto on|off`：LLM 导播总开关（缺 Key 静默落规则档——圆桌既有模式）。 */
+    fun setAutoMode(arg: String?): String {
+        when (arg?.lowercase()) {
+            "on", "off" -> rig.prefs.edit().putString(KEY_AUTO_MODE, arg.lowercase()).apply()
+        }
+        router = buildRouter()
+        val on = autoModePref()
+        return if (on && router.policyLabel == "llm") {
+            "auto=on → 生效档=llm（${router.costLine()}）"
+        } else if (on) {
+            "auto=on → 生效档=rule（缺硅基流动 Key，自然语言点播降级）"
+        } else {
+            "auto=off → 生效档=rule（仅精确「演员+曲目名」可插幕）"
+        }
+    }
+
+    /** `dance polish on|off`：串场词润色开关（默认关——固定串场已够演出）。 */
+    fun setPolish(arg: String?): String {
+        when (arg?.lowercase()) {
+            "on", "off" -> rig.prefs.edit().putString(KEY_POLISH, arg.lowercase()).apply()
+        }
+        return "polish=${polishPref()}（${router.policyLabel} 档才生效）"
+    }
+
+    /** `dance log`：导播决策日志全量（最近 [DIRECTOR_LOG_MAX] 条）。 */
+    fun directorLogLine(): String =
+        if (directorLog.isEmpty()) "log=(空)" else "log=\n${directorLog.joinToString("\n")}"
+
+    /** 点播路由器装配：LLM 档要求 auto 开 + 有硅基流动 Key，否则静默规则档。 */
+    private fun buildRouter(): DanceRequestRouter {
+        val llm = if (autoModePref()) rig.danceDirectorLlm() else null
+        return DanceRequestRouter(
+            if (llm != null) RequestPolicy.Llm(llm.llm, llm.config) else RequestPolicy.Rule,
+        )
+    }
+
+    private fun autoModePref(): Boolean = rig.prefs.getString(KEY_AUTO_MODE, "on") != "off"
+
+    private fun polishPref(): Boolean = rig.prefs.getString(KEY_POLISH, "off") == "on"
+
+    /** 在场演员名册（id + 显示名，规则档匹配与 LLM 名册的输入）。 */
+    private fun castMembers(): List<RequestCastMember> {
+        val specs = rig.roundtable?.slotSpecs().orEmpty().associate { it.id to it.displayName }
+        return cast.map { RequestCastMember(it, specs[it]?.takeIf { n -> n.isNotBlank() } ?: it) }
+    }
+
+    private fun decisionSummary(d: RequestDecision): String = when (d) {
+        is RequestDecision.Insert ->
+            "插幕 ${d.track} ${d.act.performer} ${d.act.clip?.substringAfterLast('/')}"
+        is RequestDecision.Reject -> "拒绝 ${d.reason.take(40)}"
+    }
+
+    private fun recordDecision(line: String) {
+        if (directorLog.size >= DIRECTOR_LOG_MAX) directorLog.removeFirst()
+        directorLog.addLast(line)
+        Log.i(TAG, "director_log: $line")
+    }
+
     fun close() {
         director.stop()
         cancelCollectors()
@@ -192,7 +295,8 @@ internal class DanceShowController(
     fun statusLine(): String {
         val p = director.progress.value
         return "show=${director.state.value} act=${p.summary} cast=[${cast.joinToString(",")}] " +
-            "music=${if (music.isPlaying) "on" else "off"} fps=${stage.fps.value}"
+            "music=${if (music.isPlaying) "on" else "off"} auto=${router.policyLabel} " +
+            "dm(${router.costLine()}) fps=${stage.fps.value}"
     }
 
     fun listLine(): String {
@@ -304,6 +408,8 @@ internal class DanceShowController(
     /**
      * 串场词落地（P1）：接圆桌 say 全链（TTS→口型→字幕）。该槽无会话 =
      * 秒回完成事件（团播可纯渲染不带 AI 跑，§7-P1），只留警告行。
+     * P2 润色（默认关）：开关开着且文本非空，先 LLM 一句话变体（失败降级
+     * 原文）；润色期间串场词未开播，TurnCompleted 不会提前到达。
      */
     private fun sayLine(id: String, text: String) {
         val rt = rig.roundtable
@@ -312,8 +418,22 @@ internal class DanceShowController(
             director.onSayCompleted(id)
             return
         }
-        log("show say: $id: $text")
-        scope.launch { rt.say(id.uppercase(), text) }
+        if (!polishPref() || text.isBlank()) {
+            log("show say: $id: $text")
+            scope.launch { rt.say(id.uppercase(), text) }
+            return
+        }
+        val name = rt.slotSpecs().firstOrNull { it.id.equals(id, true) }?.displayName ?: id
+        scope.launch {
+            val polished = runCatching { router.polishLine(name, text) }.getOrNull()
+            // 润色的 LLM 等待落在导演协程之外：停演发生在等待中时，迟到的
+            // 串场词不再播出（演出已收，say 也无人等了）
+            if (!director.isRunning) return@launch
+            val finalText = polished ?: text
+            if (polished != null) recordDecision("polish「${text.take(16)}」→「$finalText」")
+            log("show say: $id: $finalText${if (polished != null) "（润色）" else ""}")
+            rt.say(id.uppercase(), finalText)
+        }
     }
 
     // ── 事件收集（vrmaFinished/walkFinished/stageEvents → 导演）──────────
@@ -372,6 +492,15 @@ internal class DanceShowController(
 
         /** 团播走位速度（m/s；步态时间标度由引擎换算）。 */
         const val WALK_SPEED_MPS = 1.0f
+
+        /** 点播 LLM 导播总开关 prefs（默认 on：缺 Key 静默落规则档）。 */
+        private const val KEY_AUTO_MODE = "show_auto_mode"
+
+        /** 串场词润色 prefs（默认 off——固定串场已够演出，§7-P2）。 */
+        private const val KEY_POLISH = "show_polish"
+
+        /** 导播决策日志条数上限（ring 缓冲）。 */
+        private const val DIRECTOR_LOG_MAX = 20
 
         /** 全库扫描 animations/ 下所有 .vrma（归一完整路径），生成曲目白名单。 */
         fun scanAnimationWhitelist(context: Context): Set<String> {

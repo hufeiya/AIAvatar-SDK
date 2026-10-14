@@ -437,4 +437,85 @@ class ShowDirectorTest {
         advanceUntilIdle()
         assertEquals(ShowState.DONE, dir.state.value)
     }
+
+    // ── P2：点播插幕 ─────────────────────────────────────────────────────
+
+    @Test
+    fun `点播插幕在当前幕收尾后执行不打断进行中的幕`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "wait", seconds = 5f), soloAct(performer = "B", clip = "animations/b.vrma")),
+            listOf("A", "B"), out = autoOut(dir, cmds), durationOf = { _, _ -> 5f },
+        )
+        runCurrent()
+        // wait 幕进行中点播 A——插幕应成为 wait 之后的下一幕（原定幕顺延）
+        assertTrue(dir.enqueueAct(soloAct()))
+        advanceUntilIdle()
+        val iInsert = cmds.indexOf("play A animations/x.vrma")
+        val iNext = cmds.indexOf("play B animations/b.vrma")
+        assertTrue("insert=$iInsert next=$iNext", iInsert in 0 until iNext)
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `插幕更新进度总幕数`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(script(ShowAct(type = "wait", seconds = 5f)), listOf("A", "B"), out = { cmds += it.label })
+        runCurrent()
+        assertEquals(1, dir.progress.value.total)
+        assertTrue(dir.enqueueAct(soloAct()))
+        runCurrent() // 插幕受理后、wait 收尾前：总数已含插幕
+        advanceTimeBy(5_100); runCurrent() // wait 收尾 → 插幕成为当前幕
+        assertEquals(2, dir.progress.value.total)
+        assertEquals("dance", dir.progress.value.act?.type)
+        advanceUntilIdle()
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `非演出中插幕被拒`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        assertFalse(dir.enqueueAct(soloAct())) // 开演前
+        dir.start(script(soloAct()), listOf("A"), out = autoOut(dir, cmds), durationOf = { _, _ -> 1f })
+        advanceUntilIdle()
+        assertEquals(ShowState.DONE, dir.state.value)
+        val sizeAfterShow = cmds.size
+        assertFalse(dir.enqueueAct(soloAct())) // 演毕
+        runCurrent()
+        assertEquals("拒收不得产生新指令", sizeAfterShow, cmds.size)
+    }
+
+    @Test
+    fun `停演清空待插幕不泄漏到下一场`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(script(ShowAct(type = "wait", seconds = 30f)), listOf("A", "B"), out = { cmds += it.label })
+        runCurrent()
+        assertTrue(dir.enqueueAct(soloAct()))
+        dir.stop()
+        assertEquals(ShowState.STOPPED, dir.state.value)
+        // 新一场：旧插幕已随 stop 清空
+        dir.start(script(ShowAct(type = "wait", seconds = 1f)), listOf("A", "B"), out = { cmds += it.label })
+        advanceUntilIdle()
+        assertFalse(cmds.any { it.startsWith("play A animations/x.vrma") })
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `连续插幕按受理顺序FIFO执行`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(script(ShowAct(type = "wait", seconds = 5f)), listOf("A", "B"), out = autoOut(dir, cmds), durationOf = { _, _ -> 3f })
+        runCurrent()
+        assertTrue(dir.enqueueAct(soloAct(performer = "A", clip = "animations/x.vrma")))
+        assertTrue(dir.enqueueAct(soloAct(performer = "B", clip = "animations/y.vrma")))
+        advanceUntilIdle()
+        val iX = cmds.indexOf("play A animations/x.vrma")
+        val iY = cmds.indexOf("play B animations/y.vrma")
+        assertTrue("x=$iX y=$iY", iX in 0 until iY)
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
 }

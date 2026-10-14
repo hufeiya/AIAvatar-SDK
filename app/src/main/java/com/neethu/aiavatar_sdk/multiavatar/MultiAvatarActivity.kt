@@ -51,6 +51,7 @@ import com.neethu.aiavatar_sdk.DEFAULT_WALK_CLIP
 import com.neethu.aiavatar_sdk.loadAiPrefs
 import com.neethu.aiavatar_sdk.loadWalkAnchors
 import com.neethu.aiavatar_sdk.multiavatar.show.DanceShowController
+import com.neethu.aiavatar_sdk.multiavatar.show.ShowState
 import com.neethu.aiavatar_sdk.multiavatar.show.parseCameraShot
 import com.neethu.aiavatar_sdk.parseSceneMeta
 import com.neethu.aiavatar_sdk.sceneMetaAssetName
@@ -167,6 +168,8 @@ private fun MultiAvatarScreen() {
         DanceShowController(context, stage, slots, rig) { msg -> lastLog = msg.take(120) }
             .also { (context as? MultiAvatarActivity)?.showRef = it }
     }
+    // 演出状态（P2：聊天框输入在演出中切换为点播路由）
+    val showState by show.state.collectAsState()
     // 关闭顺序：先停演出（导演协程/事件收集还引用 rig）再关聊天装配
     DisposableEffect(Unit) {
         onDispose {
@@ -223,6 +226,8 @@ private fun MultiAvatarScreen() {
                 speaker = currentSpeaker,
                 onLog = { lastLog = it.take(120) },
                 canStartTopic = { !show.isRunning },
+                showRunning = showState == ShowState.RUNNING,
+                onDm = { show.handleDm(it) },
             )
 
             // 舞台事件 → 字幕分道（发言句 + 失败行）；同时跟踪当前发言者（高亮）
@@ -434,6 +439,8 @@ private fun ChatPanel(
     speaker: String?,
     onLog: (String) -> Unit,
     canStartTopic: () -> Boolean,
+    showRunning: Boolean,
+    onDm: (String) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     var configVisible by remember { mutableStateOf(false) }
@@ -507,8 +514,14 @@ private fun ChatPanel(
                 val text = input.trim()
                 if (text.isNotEmpty()) {
                     transcript.add(StageChatLine(null, "我", text))
-                    val hit = rig.roundtable?.sendFromUser(text)
-                    onLog(if (hit != null) "chat → $hit" else "chat → 无人接话（会话未配置？）")
+                    if (showRunning) {
+                        // 演出中聊天框=点播（P2 §4.8：演出归导演，输入走 dm 通道）
+                        onDm(text)
+                        onLog("dm → 点播路由（演出中）")
+                    } else {
+                        val hit = rig.roundtable?.sendFromUser(text)
+                        onLog(if (hit != null) "chat → $hit" else "chat → 无人接话（会话未配置？）")
+                    }
                     input = ""
                 }
             }
@@ -714,13 +727,22 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ```
  * 团播（P0/P1，docs/multi-dance-feasibility.md §4.5）：
  * ```
- * ... --es cmd "dance"                    # 快照：state/幕次/cast/音乐/fps
+ * ... --es cmd "dance"                    # 快照：state/幕次/cast/音乐/auto/点播成本/fps
  * ... --es cmd "dance start [名]"         # 开演（缺省=内置默认单；圆桌 ACTIVE 时拒绝）
  * ... --es cmd "dance load <名>"          # filesDir/shows/（回落 assets/shows/）装载并校验
  * ... --es cmd "dance stop"               # 停演四清（音乐停/说话打断/停舞走动停/注视复位）
  * ... --es cmd "dance next"               # 跳过当前幕
  * ... --es cmd "dance list"               # 曲目白名单数 + 已装载节目单幕次表
  * ```
+ * 团播点播（P2，LLM 导播）：
+ * ```
+ * ... --es cmd "dance dm <文本>"          # 点播（如：让A跳一段街舞）→ 规则档→LLM 档→白名单校验→插幕
+ * ... --es cmd "dance auto [on|off]"      # LLM 导播总开关（缺 Key 静默规则档）
+ * ... --es cmd "dance polish [on|off]"    # 串场词润色（默认关，失败降级原文）
+ * ... --es cmd "dance log"                # 导播决策日志（点播/润色/插幕全程可复盘）
+ * ```
+ * 演出中聊天框文本自动走点播路由（演出归导演）；演出收场后可 topic 开题
+ * 圆桌点评（两套节目形态合流，§7-P2 彩蛋）。
  * topic 开题时若台上 ≥2 人就位，自动先走对谈位（stage_a/stage_b 锚点优先、
  * 推导落点兜底）再开轮——站位编排，导演日志可见；团播演出中开题被拒（两导演互斥）。
  *
@@ -769,7 +791,20 @@ private class StageCommandRouter(
                     "stop" -> show.stopShow()
                     "next" -> show.skip()
                     "list" -> log(show.listLine())
-                    else -> log("usage: dance [status|start [名]|load <名>|stop|next|list]")
+
+                    // ── P2 点播（LLM 导播）───────────────────────────────
+                    "dm" -> {
+                        val text = t.drop(2).joinToString(" ").trim()
+                        if (text.isEmpty()) log("usage: dance dm <点播文本，如：让A跳一段街舞>")
+                        else show.handleDm(text)
+                    }
+                    "auto" -> log(show.setAutoMode(arg))
+                    "polish" -> log(show.setPolish(arg))
+                    "log" -> log(show.directorLogLine())
+                    else -> log(
+                        "usage: dance [status|start [名]|load <名>|stop|next|list|" +
+                            "dm <文本>|auto on|off|polish on|off|log]",
+                    )
                 }
             }
 

@@ -334,6 +334,30 @@ class StageChatRig(
         roundtable?.setDirector(loadDirectorPolicy())
     }
 
+    /**
+     * 团播导播的 LLM 缝（P2 点播路由/串场词润色共用）：与圆桌导演同一把
+     * 硅基流动 Key、同一个便宜模型（关思考），但档位独立——圆桌 director=rule
+     * 不影响团播 auto 档。返回 null = 缺 Key（调用方静默落规则档，圆桌既有模式）。
+     */
+    fun danceDirectorLlm(): DirectorPolicy.Llm? {
+        val key = globalPrefs().apiKeySiliconflow
+        if (key.isBlank()) return null
+        val model = directorModelPref()
+        val llm = OpenAiCompatibleLlmAdapter(ChatProvider.SILICONFLOW.baseUrl, key)
+        return DirectorPolicy.Llm(
+            llm = llm,
+            config = {
+                LlmConfig(
+                    baseUrl = ChatProvider.SILICONFLOW.baseUrl,
+                    apiKey = key,
+                    model = model,
+                    // 关思考（首答延迟）：点播是幕间动作，多等数秒观众无感
+                    extraBody = llmExtraBody(AiProvider.SILICONFLOW, model),
+                )
+            },
+        )
+    }
+
     // ── StageGazeRelay（倾听注视的舞台实现）──────────────────────────────
 
     override fun headPosition(slotId: String): FloatArray? =

@@ -136,6 +136,12 @@ class ShowDirector(
     }
 
     private val events = Channel<Event>(Channel.UNLIMITED)
+
+    /** 点播插幕队列（P2）：当前幕收尾后消费，FIFO；换代/停演即清。 */
+    private val insertions = Channel<ShowAct>(Channel.UNLIMITED)
+
+    /** 本场已受理的插幕数（进度总幕数随之增长）。 */
+    private var insertedCount = 0
     private var job: Job? = null
 
     /** 演出换代号：防旧协程被取消后其收尾代码覆盖新一场的状态。 */
@@ -166,6 +172,8 @@ class ShowDirector(
         generation++
         val gen = generation
         drainEvents()
+        drainInsertions()
+        insertedCount = 0
         _state.value = ShowState.RUNNING
         this.positionOf = positionOf
         marks = cast.associateWith { id -> positionOf(id) ?: (0f to -4f) }
@@ -204,11 +212,25 @@ class ShowDirector(
         if (isRunning) events.trySend(Event.Skip)
     }
 
+    /**
+     * 点播插幕（P2）：返回 false=非演出中（调用方回提示）。插幕在**当前幕
+     * 收尾后**作为下一幕执行（不打断进行中的独舞，§7-P2）；多次插播按受理
+     * 顺序 FIFO。路由/白名单校验在 DanceRequestRouter，这里只收队列。
+     */
+    fun enqueueAct(act: ShowAct): Boolean {
+        if (!isRunning) return false
+        insertedCount++
+        insertions.trySend(act)
+        return true
+    }
+
     /** 停演：同步置 STOPPED 并取消推进协程（三清由控制器做，这里只管状态机）。 */
     fun stop() {
         job?.cancel()
         job = null
         generation++
+        drainInsertions()
+        insertedCount = 0
         if (_state.value == ShowState.RUNNING) _state.value = ShowState.STOPPED
         _progress.value = ActProgress.NONE
     }
@@ -222,8 +244,13 @@ class ShowDirector(
         durationOf: (performer: String, clip: String) -> Float?,
         anchorOf: (name: String) -> Pair<Float, Float>?,
     ) {
-        for ((index, act) in script.acts.withIndex()) {
-            _progress.value = ActProgress(index, script.acts.size, act, ActPhase.PERFORM)
+        // 幕次工作队列（P2）：节目单打底，点播插幕在幕间插队（当前幕收尾后
+        // 即是下一幕）。index/total 只是进度显示，插幕让总数增长。
+        val queue = ArrayDeque(script.acts)
+        var index = 0
+        while (queue.isNotEmpty()) {
+            val act = queue.removeFirst()
+            _progress.value = ActProgress(index, script.acts.size + insertedCount, act, ActPhase.PERFORM)
             drainEvents() // 上一幕的迟到事件不污染本幕的等待
             when (act.type) {
                 ActTypes.CAMERA -> out(DirectorCmd.Camera(act.shot ?: "group", act.target))
@@ -235,7 +262,22 @@ class ShowDirector(
                 ActTypes.MOVE -> performMove(act, out, anchorOf)
                 ActTypes.MUSIC -> performMusic(act, script, out)
             }
+            index++
+            consumeInsertions(queue)
         }
+    }
+
+    /** 当前幕收尾后消费插幕：本批插幕作为接下来的幕（保持受理顺序 FIFO）。 */
+    private fun consumeInsertions(queue: ArrayDeque<ShowAct>) {
+        val batch = mutableListOf<ShowAct>()
+        while (true) {
+            batch += insertions.tryReceive().getOrNull() ?: break
+        }
+        batch.asReversed().forEach { queue.addFirst(it) }
+    }
+
+    private fun drainInsertions() {
+        while (insertions.tryReceive().isSuccess) { /* 换代/停演丢弃 */ }
     }
 
     /** 串场词：发 Say → 等该槽收尾（8s 兜底）；观众无感降级（无会话时控制器秒回）。 */

@@ -397,3 +397,84 @@ class ShowDirector {                       // 状态机本体：事件进、指�
 - app：MultiAvatarActivity.kt:94-100（默认常量）/ :103-143（Slots 双槽）/ :254（共享 idle 挂接）/ :608/:649（STAGE_CMD 通道+路由器）/ :827-836（play 命令含空格路径拼回）/ :839-853（gaze）/ :871-889（cam）；StageChat.kt:119/:453-458（rig+sayAsync）；app/build.gradle.kts:104（kotlinx.serialization 已依赖）。
 - 资产：animations/08_舞蹈与表演=82 曲目（含 `- Loop` 变体）；04_交流手势=5 鼓掌；03_打招呼与礼仪=8（鞠躬/挥手）；vrms=3 模型（Asuna_1024 未验证）。
 - 既有验收基线：multi-avatar §十一~十四（双人 50~60fps/双人 60fps 圆桌 12 轮/对谈位 heading 精确/46-58fps）；ai-debug-intents.md（adb 协议与转义纪律）。
+
+---
+
+## 十一、实施与验收实录（P0/P1/P2 全部完成）
+
+> 三期全部真机（Redmi K20 Pro / SD855，2c3769db）验收通过；本节是实施后的回填记录，
+> 进度状态以此节为准（上文 §1~§十 是实施前的规划稿，保留原貌）。
+
+### P0 确定性团播最小闭环（2026-10-14 提交 3ba5fc5）
+
+- 落点与规划一致：corelib 只加 `onVrmaFinished`（AvatarRuntime 翻沿 → AvatarHandle
+  SharedFlow，镜像 walkFinished）；`ShowScript`/`ShowDirector`（纯 JVM 状态机）/
+  `DanceShowController`/STAGE_CMD `dance` 命令族落 app `multiavatar/show/`；
+  `Slots` 改 Map 支持 `load C` 第三人；幕间回位 P0 用 snap。
+- 真机：`dance start` 一条命令全场（独舞+齐舞+谢幕+运镜+应援），`dance status`
+  全程可查、`dance stop` 三清、`dance next` 跳幕；位移漂移实测筛出默认白名单。
+
+### P1 音乐+走位+串场词（2026-10-14 提交 b60222d）
+
+- `MusicPlayer`（MediaPlayer 封装，基线 0.65/duck 0.35、onError 兜底行、页面
+  onStop 暂停 onStart 恢复）；`music` 幕四动作（start/stop/duck/full）。
+- 锚点表加前排表演位 `stage_front_a/b/c`；`move` 幕走位到位才开舞（15s 兜底
+  就地开演）；独舞收尾从 snap 升级为 walk 回**开演位**（退场走回队列）。
+- `say` 幕与 `dance.line` 接圆桌 say 全链（TTS→口型→字幕），完成信号
+  TurnCompleted + 8s 兜底，无会话秒跳过（纯渲染可跑）；应援鼓掌与串场并行。
+- 真机：带乐完整场 54~76s、fps 50~58、演出中聊天不炸场、切后台音乐自动暂停；
+  单测 39 个全过。
+- 实施坑（规划外）：①mark 曾被 move 幕更新成表演位导致退场留在台前——改为
+  **mark 固定为开演位**（演出中不变）；②切后台走位停摆靠 15s 兜底推进（引擎
+  后台停帧，符合「宁可瑕疵不可卡死」）；③TTS 时长波动 5~18s，8s 兜底偶尔提前
+  推进（下一幕起舞与串场词尾音重叠，可接受）；④自定义节目单要 `adb push` 进
+  **内部** filesDir（`run-as` 法），外部存储不可读。
+
+### P2 LLM 导播+点播互动（2026-10-14 实现，真机验收通过）
+
+**动刀落点**（与 §7-P2 规划一致，全部 app 层，corelib/orchestrator 零改动）：
+
+1. `DanceRequestRouter`（新，纯 JVM）：点播路由两档。规则档=演员名+曲目名都
+   精确命中才直接插幕（单字母槽位 id 用**词边界**匹配防「bad」误中「a」；曲目名
+   归一化小写去空白后子串匹配、取最长命中、<6 字符短名不参与）；未中走 LLM 档
+   （圆桌导演同款：硅基流动便宜模型+温度 0.2+关思考，非流式收集 TextDelta，
+   `MemoryParser.firstJsonObject` 同款截首平衡 JSON）；LLM 输出**双向白名单校验**
+   （performer 解析回在场 id、clip 归一后必须在白名单内），超时 8s/垃圾输出/
+   校验失败→Reject（附原始输出截断），演出照常。串场词长度硬上限 30 字。
+   成本记录：调用数/失败数/最近时延/累计 token（`dance` 状态行与 `dance log`）。
+2. `ShowDirector.enqueueAct`：插幕队列（当前幕收尾后作为**下一幕**执行，不打断
+   进行中的独舞；多次插播 FIFO；进度总幕数随之增长；stop/换代即清）。
+3. `DanceShowController`：`handleDm`（`dance dm` 与演出中聊天框共用入口，LLM
+   调用异步跑不阻塞幕次）；`dance auto on|off`（LLM 导播总开关，prefs 持久化，
+   缺硅基流动 Key 静默落规则档）；`dance polish on|off`（串场词润色，默认关，
+   失败降级原文，润色期间停演则迟到的串场词不播）；`dance log`（导播决策日志
+   ring 20 条，dm/polish/插幕全程可复盘）；`StageChatRig.danceDirectorLlm()` 缝
+   （与圆桌导演同 Key 同模型、档位独立）。
+4. 演出中聊天框输入自动切点播路由（§4.8 的 P2 语义）；DONE 后提示可 `topic`
+   圆桌点评（彩蛋零代码，互斥守卫天然放行）。
+
+**单测**：show 包 61 个全绿（路由 17：两档全分支/词边界/白名单双向拒绝/垃圾/
+超时/网络失败/缺 Key/line 截断/润色降级/名册与清单 prompt 形态；导演 23：插幕
+在当前幕后/不打断/进度总数/非演出拒收/停演清空不泄漏/FIFO），app+orchestrator
+全量套件零回归。LLM fake 记调用数锁死「规则档命中零调用」。
+
+**真机验收**（SD855，硅基流动 Key 在位 → auto 默认 llm 档）：
+
+- 「让A跳一段街舞」→ 4.2s 路由，LLM 选真实曲目 `Female Hip Hop 'Arm Wave'
+  Dancing`（过白名单）+自拟串场词「小柔来段街舞，手臂波浪秀起来」，插幕在当前
+  走位幕收尾后执行，独舞完走回队列——插幕时序与规划一致；
+- 「让C来一段芭蕾」→ C 不在场，LLM 如实输出“无合适曲目”→拒绝提示、固定台本
+  无缝续演到 DONE（3 处插幕/拒绝全程演出不中断）；
+- 「小刚 Doing The Shuffling Dance」→ 规则档精确命中，**零 LLM 调用**，插幕在
+  谢幕后作为收场幕执行；
+- `dance auto off` → 点播未命中即拒绝（附“LLM 导播未开启”提示）；`auto on` 恢复
+  llm 档（决策计数随换代清零）；演出中 `dance start` 被互斥守卫正确拒绝；
+- 润色：固定串场词被改写为「嗨大家好，我是小柔，今晚的团播开始啦～」（约 0.9s，
+  日志带（润色）标记，`dance log` 记录变体对照）；
+- 成本：单次点播 prompt≈4.6k tok（全曲目白名单入 prompt）/completion≈35 tok，
+  状态行 `dm(llm调用2次(败1) 最近2376ms tok=9304+70)` 全程可见；
+- fps 52~60（≥45 达标）、零 FATAL；超时/垃圾输出降级分支由单测锁死（真机不便
+  确定性构造）。
+
+**实施坑（规划外）**：白名单全量入 prompt 约 4.6k tok/次——点播是低频动作可接
+受，若要降本可按类别裁剪（08 类优先已在 system prompt 引导）。
