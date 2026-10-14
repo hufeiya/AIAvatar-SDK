@@ -324,7 +324,7 @@ per-model 校准覆盖：`filesDir/accessories/calibration/<modelId>/<accessoryI
 | P2-2 导演 props 指令 | ✅ | 三幕型全验：说唱幕 `prop on: A +microphone@rightHand`→`prop off` 在 play 两侧；bow/group 幕全员挂摘、group 摘在 StopDances 前（日志时序）；default.json 15 幕装载（+说唱幕）与自定义节目单（filesDir/shows adb stdin 法推送）跑通 |
 | P2-2 麦克风跟手 | ✅ | 单人路径挂麦克风播 MC Rapping：手持麦指向脸侧、金环清晰（4705 默认朝向即正确）；`accessory cal microphone` 落 preset 闭环 |
 | P2-3 外部碰撞体 | ✅ | trashcan@head 带 `colliderR=0.09`：头顶头发被推出桶外（对照不带 collider 的穿插帧）；卸载注销干净；机制=模型 collider 同一套球求值 |
-| P2-4 model-viewer GLB | ✅ | server 白名单+道具预览分支（node --check 语法过；真机日不涉浏览器验收，待下次开 viewer 目验——代码路径与 VRM 分支共享 loader，风险低） |
+| P2-4 model-viewer GLB | ✅（API 层） | server 白名单放开后 `GET /api/list?dir=accessories` 实测列出 11 件 GLB（type=model）；前端 GLB 预览分支语法过、模块资源全 200 加载；**渲染目验待真实浏览器**——ZCode 内嵌浏览器无 WebGL（`new WebGLRenderer` 初始化失败），属环境限制与改动无关（用户 Chrome 上 viewer 既有功能此前一直可用） |
 | 崩溃扫描 | ✅ | 全程 `logcat -b crash` 零 FATAL |
 
 **P2-5 内建配饰检测评估（结论：评估后不做码，维持开放项）**：VRM 模型作者本可在 Blender 把配饰 mesh 内嵌手骨下（§5.1 方案 B 的发行格式补充）。落地点评估=bind 时扫骨骼子树找「非蒙皮 mesh 节点」（VRM 规范里 springBone collider 常挂在手/头，与内建配饰难以区分，误报率高）；显隐 API 价值与外置挂载重叠（attach 同骨即可）。触发条件（满足其一再排）：①生态里出现成批「带内建配饰」的 VRM 资产；②用户实测把配饰烘进模型的需求出现。当前外置挂载+校准 preset 已覆盖同等效果，维护成本更低。
