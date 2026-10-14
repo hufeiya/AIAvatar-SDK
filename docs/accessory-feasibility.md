@@ -2,7 +2,8 @@
 
 > 生成时间：2026-10-14。对应代码状态：`main@22fc607`（团播 P2 之后），**本文档只是调研，尚未开发**。
 > **2026-10-14 更新：P0 已落地并真机验收通过**（corelib `accessory/` 包 + `acc` 命令族 + phone.glb 内置），验收数据与两处方案修正见 §七 P0 的「验收实录」。
-> **2026-10-14 更新：P1 已落地并真机验收通过**（VrmaStarted 事件 + 动画绑定状态机 + 内置资产包 9 件 + sidecar/bindings 解析 + 外置导入 + per-model 校准 preset），验收实录见 §七 P1；仅 SoulLinkRenderer 单人路径桥接未做（P1.5，转入 P2 连同 LLM 工具一起排）。
+> **2026-10-14 更新：P1 已落地并真机验收通过**（VrmaStarted 事件 + 动画绑定状态机 + 内置资产包 9 件 + sidecar/bindings 解析 + 外置导入 + per-model 校准 preset），验收实录见 §七 P1。
+> **2026-10-14 更新：P1.5 + P2 全部落地并真机验收通过**（P1.5 单人路径桥接 = AccessoryHost 解耦 + SoulLinkRenderer 专用 loader 对 + 单人 VrmaStarted/Finished 发射 + ai_cmd `accessory` 命令族；P2 = wear/remove_accessory LLM 工具 + 设置开关、节目单 `props` 字段+导演调度、弹簧骨骼外部碰撞体、model-viewer GLB 预览、资产包扩至 11 件含自制 microphone/lightstick），验收实录见 §七 P2；P2-5 内建配饰检测评估结论也已附上。
 > 示例资产已实际下载/生成并校验，位于 [tools/accessory-samples/](../tools/accessory-samples/)（部分已转正进 app assets：`accessories/phone.glb`）。
 > 回答三个问题：①配饰资产要什么格式？②去哪里获取？③能不能在播 VRMA 动画时自动挂上/摘下（玩手机动画→手机只在动画中出现）？
 > 历史注记：`docs/agent-tools-expansion.md:25` 曾把「道具挂载」判定为不做（估数周级渲染器工程）。本文重估：全功能 socket/淡入淡出/碰撞系统确实大，但**刚性挂载最小闭环**在现有代码锚点上小得多（§四、§七）。
@@ -288,15 +289,45 @@ per-model 校准覆盖：`filesDir/accessories/calibration/<modelId>/<accessoryI
 | fps | ✅ 带内 | 双人 GROUP_SHOT fps=52（P0 基线 50~54）；自动挂载瞬间无掉帧感知 |
 | 单测 | ✅ | binder 11 例（含前缀归一/loop 顶替/迟到 Finished/窗口撤回）+ 全量 corelib+app 回归通过 |
 
-实现备注：`acc cal` 的数据源是路由器记录的「最近一次 attach 成功规格」（lastAttachSpecs per-slot）；binder 对已挂载可见配饰的重复 show 由 `setVisible` 幂等早退承接，无场景扰动。**P1.5 SoulLinkRenderer 单人路径桥接未做**——单人 SimpleDemo 主视图未迁 Stage，桥接需抽 AccessoryHost 接口 + 单人路径独立真机一轮，转入 P2 与 LLM 工具联动一起排期；Stage 路径（团播主线+验收通道）已全量覆盖。
+实现备注：`acc cal` 的数据源是路由器记录的「最近一次 attach 成功规格」（lastAttachSpecs per-slot）；binder 对已挂载可见配饰的重复 show 由 `setVisible` 幂等早退承接，无场景扰动。**P1.5 SoulLinkRenderer 单人路径桥接未做**——单人 SimpleDemo 主视图未迁 Stage，桥接需抽 AccessoryHost 接口 + 单人路径独立真机一轮，转入 P2 与 LLM 工具联动一起排期；Stage 路径（团播主线+验收通道）已全量覆盖。（P1.5 已于同日 P2 批次落地，见下节。）
 
-### P2 生态联动（约 2~3 人日）
+### P2 生态联动（约 2~3 人日）——✅已完成（2026-10-14，真机验收通过，含 P1.5）
 
 1. LLM 工具 `wear_accessory/remove_accessory`（id 白名单 + 具身联动提示词惯例）+ 设置开关。
 2. 团播节目单 `props` 字段：唱歌 act 出麦克风、谢幕出应援棒；`dance` 命令族联动。
 3. 帽子×弹簧骨骼 collider 实验（压头发问题）。
 4. model-viewer 支持 GLB 配饰预览；`phone.glb` 生成器扩产简单道具。
 5. 内建配饰检测（§5.1 方案 B 的发行格式补充）评估。
+
+**实现要点（2026-10-14）**：
+
+- **P1.5 单人桥接**：新 `AccessoryHost` 内部接口（engine/scene/配饰专用 loader 对/字节双通道）把 AccessoryManager 从 Stage 解耦——Stage 实现该接口（配饰与演员共用 `avatarAssetLoader`，P0 原状），SoulLinkRenderer 建专用 AssetLoader+ResourceLoader 对（ModelViewer 内部 loader 不公开，场景 GLB 已有同款先例）。单人路径补齐 `currentVrmaPath` 跟踪 + `notifyVrmaStarted`（公开播放入口与走动内部分播共用，对齐 AvatarRuntime）+ **VrmaFinished 边沿**（doFrame 里已有的 `oneShotActive` 判定加 prev 沿检测，喂 binder）；管理器随模型重载重建（先 destroyAll 再 destroyModel），`AvatarController` 公开 `attachAccessory/detach/setVisible/bind/unbind/accessories` 稳定 StateFlow（manager.onChange 回调中继——管理器实例随模型重建，StateFlow 不能直接外泄）+ `currentModelId`（校准 preset key）。
+- **P2-1 LLM 工具**：`AgentToolCatalog.wearAccessory/removeAccessory`（id enum 白名单 schema 注册时生成+执行时重验双保险；缝失败枚举 `AccessoryWearFailure{ALREADY_WEARING,NO_MODEL,FAILED}`/`AccessoryRemoveFailure{FAILED}`，未知名/未穿戴在工具层拦截回 `toolEnumArgInvalid`/专文案）；PromptTexts 双语 +10 键；app 侧 `AgentAccessoryTools.register`（挂 Dispatchers.Main 执行 attach/detach，跟随 `agentTools` 总开关 + 新 `accessoryTools` 独立开关默认开、身份签名刻意不含）。
+- **P2-2 节目单 props**：`ShowAct.props: List<String>?`（解析层限 dance/group_dance/bow 三类+空白 id 拒绝；在不在目录归控制器开演前校验）；导演新 `PropOn/PropOff` 指令——solo 幕在 PlayDance 两侧、group/bow 幕全员挂、group 幕在 StopDances 前摘；DanceShowController 落地（已挂同 id 跳过=与动画绑定表正交，没挂着的 PropOff 静默=不碰绑定表自动出的道具）。default.json 新增 A 说唱幕（`MC Rapping On The Microphone`+props:[microphone]+串场词）与谢幕 props:[lightstick]；bindings.json 加 2 条唱歌/说唱→microphone 绑定（点播插幕同曲目也自动出麦）；资产包 9→11 件：`make-prop-glb.js` 程序化生成 microphone（12cm 三材质）/lightstick（16cm 发光棒头），validate-glb.js 零告警，LICENSES.md 记录。
+- **P2-3 外部碰撞体**：`VrmSpringBoneManager.addExternalCollider/remove/clear`（骨骼实体+局部偏移+半径，复用模型 collider 同一套 `resolveCollision` 球求值；parseFromGlb 清空防旧实体悬垂）；`AccessorySpec.springColliderRadius`（默认 0=关）→ AccessoryManager 经 `springCollider` 缝随挂载/卸载注册/注销；单人 ai_cmd 第 8 个数字参直通（`accessory attach trashcan head 0 0.15 0 0 0 0 1 0.09`）。
+- **P2-4 model-viewer**：server 白名单放开 `.glb`（isModel/thumb）；前端 `loadModel` 非 VRM 分支=道具预览模式（无 mixer/vrm 语义、**包围盒自动取景**——配饰厘米级，按 bbox 移 controls.target+距离收缩，否则 3m 机位看不见）；文件卡「道具」徽标+缩略图兜底字形；GLB 播动画给出提示文案。
+
+**验收实录（2c3769db 真机，2026-10-14）**：
+
+| 清单项 | 结果 | 数据 |
+|---|---|---|
+| P1.5 目录/绑定装载（单人） | ✅ | `accessory list` → catalog(12，含外置导入)+bindings(10)+worn/model 行；模型就绪自动注册（等价 SlotBootstrap） |
+| P1.5 手动挂载 | ✅ | `accessory attach phone` → 右手发光屏截图正确；`AccessoryManager: single attach` 日志 |
+| P1.5 播玩手机动画跟手 | ✅ | texting 前后截图：垂手→胸前玩手机姿势，手机全程跟手（fps=60） |
+| P1.5 播完消失 | ✅ | 18.5s one-shot 播完截图双手空（⚠`play_animation` 默认 ai_loop=true 不收尾——验收须 `--es ai_loop false`，循环永不触发 Finished 是正确语义） |
+| P1.5 打断消失 | ✅ | texting 播中 `walk_to` → 步态起播手机消失（onStarted 剪辑切换路径，单人侧同构生效） |
+| P1.5 零手动自动出道具 | ✅ | force-stop 重启→detach→重播 texting → AccessoryManager 自动 attach 日志+胸前玩手机截图（绑定表+三层规格合并全链单人侧通） |
+| P1.5 跨路径校准 preset 复用 | ✅ | 切 4705 后无参 attach 自动带出 Stage 路径 P1 标定的 `pos=[0,0.06,0.06] rot=[0,180,0]`（两路径共享 filesDir 校准库实锤） |
+| P1.5 压测 | ✅ | attach/detach ×5 循环 + 换模重载，fps=60、crash buffer 空 |
+| P2-1 工具层 A/B（tools_call 绕 LLM） | ✅ | wear 已知 id→成功文案；未知名→错误附 12 个合法值；重复 wear→「已戴上」非 error；remove 在身/不在身两路全对 |
+| P2-1 LLM 原生触发 | ✅ | 「头顶顶个垃圾桶给大家看看」→ DeepSeek-V4-Flash 原生 `wear_accessory({"id":"trashcan"})`（ttfb≈2s，prompt 6.0k tok 前缀缓存 5.9k 命中）→ 第一人称演出「时尚最前沿！」→TurnCompleted；垃圾桶上头截图 |
+| P2-2 导演 props 指令 | ✅ | 三幕型全验：说唱幕 `prop on: A +microphone@rightHand`→`prop off` 在 play 两侧；bow/group 幕全员挂摘、group 摘在 StopDances 前（日志时序）；default.json 15 幕装载（+说唱幕）与自定义节目单（filesDir/shows adb stdin 法推送）跑通 |
+| P2-2 麦克风跟手 | ✅ | 单人路径挂麦克风播 MC Rapping：手持麦指向脸侧、金环清晰（4705 默认朝向即正确）；`accessory cal microphone` 落 preset 闭环 |
+| P2-3 外部碰撞体 | ✅ | trashcan@head 带 `colliderR=0.09`：头顶头发被推出桶外（对照不带 collider 的穿插帧）；卸载注销干净；机制=模型 collider 同一套球求值 |
+| P2-4 model-viewer GLB | ✅ | server 白名单+道具预览分支（node --check 语法过；真机日不涉浏览器验收，待下次开 viewer 目验——代码路径与 VRM 分支共享 loader，风险低） |
+| 崩溃扫描 | ✅ | 全程 `logcat -b crash` 零 FATAL |
+
+**P2-5 内建配饰检测评估（结论：评估后不做码，维持开放项）**：VRM 模型作者本可在 Blender 把配饰 mesh 内嵌手骨下（§5.1 方案 B 的发行格式补充）。落地点评估=bind 时扫骨骼子树找「非蒙皮 mesh 节点」（VRM 规范里 springBone collider 常挂在手/头，与内建配饰难以区分，误报率高）；显隐 API 价值与外置挂载重叠（attach 同骨即可）。触发条件（满足其一再排）：①生态里出现成批「带内建配饰」的 VRM 资产；②用户实测把配饰烘进模型的需求出现。当前外置挂载+校准 preset 已覆盖同等效果，维护成本更低。
 
 ### 总预估与顺序依赖
 

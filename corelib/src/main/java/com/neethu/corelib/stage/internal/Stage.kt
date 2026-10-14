@@ -9,6 +9,7 @@ import com.google.android.filament.ColorGrading
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
+import com.google.android.filament.Scene
 import com.google.android.filament.Skybox
 import com.google.android.filament.ToneMapper
 import com.google.android.filament.View
@@ -63,7 +64,8 @@ import kotlin.math.tan
 internal class Stage(
     private val surfaceView: SurfaceView,
     val config: AvatarConfig,
-) : DefaultLifecycleObserverBridge {
+) : DefaultLifecycleObserverBridge,
+    com.neethu.corelib.accessory.AccessoryHost {
 
     // ── Filament 宿主（ModelViewer = Engine/Scene/View/Camera/渲染/手势）──
 
@@ -84,6 +86,14 @@ internal class Stage(
 
     val engine: Engine get() = modelViewer.engine
     val scene get() = modelViewer.scene
+
+    // ── 配饰宿主缝（AccessoryHost；团播路径配饰与演员共用 loader）────────
+
+    override val accEngine: Engine get() = engine
+    override val accScene: Scene get() = scene
+    override val accAssetLoader: AssetLoader? get() = avatarAssetLoader
+    override val accResourceLoader: ResourceLoader? get() = accessoryResourceLoader
+    override fun accReadSourceBytes(source: String): ByteArray = readSourceBytes(source)
 
     // ── 演员与加载器 ─────────────────────────────────────────────────────
 

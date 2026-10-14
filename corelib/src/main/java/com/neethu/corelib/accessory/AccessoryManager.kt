@@ -6,40 +6,45 @@ import android.util.Log
 import com.google.android.filament.gltfio.FilamentAsset
 import com.neethu.corelib.RenderMode
 import com.neethu.corelib.stage.internal.ModelPreprocessor
-import com.neethu.corelib.stage.internal.Stage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * [AccessoryController] 的 Stage 路径实现（每个 [com.neethu.corelib.stage.
- * AvatarRuntime] 一份）。挂载原理（docs/accessory-feasibility.md §5.2）：
- * 配饰 GLB 作为独立 FilamentAsset 加载后 `TransformManager.setParent` 到
- * 骨骼实体——VRMA 每帧只写骨骼局部变换，配饰经场景图父链自动跟随，
- * **零每帧代码**。
+ * [AccessoryController] 的公共实现（每条渲染路径的每个虚拟人一份：团播 =
+ * Stage/AvatarRuntime，单人 = SoulLinkRenderer，经 [AccessoryHost] 解耦）。
+ * 挂载原理（docs/accessory-feasibility.md §5.2）：配饰 GLB 作为独立
+ * FilamentAsset 加载后 `TransformManager.setParent` 到骨骼实体——VRMA 每帧
+ * 只写骨骼局部变换，配饰经场景图父链自动跟随动画，**零每帧代码**。
  *
  * `setParent` 为全仓库首用（P0 退出条件预案：若层级异常，fallback =
  * 每帧世界矩阵对齐，预算 +0.5 人日——真机验证见 P0 清单）。
  *
  * 线程约定：全部方法主线程调用（broadcast/命令路由都在主线程）。
  *
- * @param resolveBone 语义骨骼名 → 实体（AvatarRuntime 注入 bind 时解析好
- *   的全语义表；0 = 未解析）。
- * @param resolveSpec 配饰 ID → 挂载规格（动画联动自动挂载用；app 层经
- *   Stage.accessorySpecResolver 注入 sidecar 默认+per-model 校准的合并结果；
- *   null/查不到 = 该配饰的绑定静默无效）。
+ * @param resolveBone 语义骨骼名 → 实体（调用方注入 bind 时解析好的全语义
+ *   表；0 = 未解析）。
+ * @param resolveSpec 配饰 ID → 挂载规格（动画联动自动挂载用；app 层注入
+ *   sidecar 默认+per-model 校准的合并结果；null/查不到 = 该配饰的绑定
+ *   静默无效）。
+ * @param springCollider 外部碰撞体缝（P2-3 帽子压头发实验）：规格带
+ *   [AccessorySpec.springColliderRadius] > 0 时随挂载/卸载调用，register
+ *   =true 注册、=false 注销；boneEntity 为挂点骨骼实体。null = 该路径不
+ *   支持碰撞体（实验只在接了弹簧骨骼的路径生效）。
  * @param ownerTag 日志前缀（演员 ID）。
  */
 internal class AccessoryManager(
-    private val stage: Stage,
+    private val host: AccessoryHost,
     private val resolveBone: (String) -> Int,
     private val ownerTag: String,
     private val resolveSpec: ((String) -> AccessorySpec?)? = null,
+    private val springCollider: ((spec: AccessorySpec, boneEntity: Int, register: Boolean) -> Unit)? = null,
 ) : AccessoryController {
 
     private class Instance(
         val spec: AccessorySpec,
         val asset: FilamentAsset,
+        val boneEntity: Int,
         var visible: Boolean = true,
     )
 
@@ -61,14 +66,20 @@ internal class AccessoryManager(
     private val _accessories = MutableStateFlow<List<AccessoryState>>(emptyList())
     override val accessories: StateFlow<List<AccessoryState>> = _accessories.asStateFlow()
 
+    /**
+     * 状态发布回调（publish 时同步触发）。管理器随模型重建、StateFlow 实例
+     * 不稳定，跨重建持有稳定流的调用方（AvatarController）经此转发。
+     */
+    var onChange: (() -> Unit)? = null
+
     override fun attach(spec: AccessorySpec): Result<Unit> {
         if (instances.containsKey(spec.id)) {
             return Result.failure(IllegalStateException("$ownerTag accessory '${spec.id}' already attached"))
         }
-        val loader = stage.avatarAssetLoader
-            ?: return Result.failure(IllegalStateException("stage not attached"))
-        val resources = stage.accessoryResourceLoader
-            ?: return Result.failure(IllegalStateException("stage not attached"))
+        val loader = host.accAssetLoader
+            ?: return Result.failure(IllegalStateException("render host not attached"))
+        val resources = host.accResourceLoader
+            ?: return Result.failure(IllegalStateException("render host not attached"))
 
         // ①② 字节读取 + 预处理（白嫖 unlit 剥除 / morph 注入；非 VRM → PBR 兜底）
         val sourcePath = when (val s = spec.source) {
@@ -77,7 +88,7 @@ internal class AccessoryManager(
         }
         val prepared = try {
             ModelPreprocessor.process(
-                stage.readSourceBytes(sourcePath),
+                host.accReadSourceBytes(sourcePath),
                 requestedMode = RenderMode.PBR,
                 autoRenderMode = false,
             )
@@ -85,7 +96,7 @@ internal class AccessoryManager(
             return Result.failure(IllegalArgumentException("accessory bytes failed: $sourcePath", e))
         }
 
-        // ③ createAsset + 同步资源（小文件毫秒级；异步化排 P1）
+        // ③ createAsset + 同步资源（小文件毫秒级）
         val asset = loader.createAsset(prepared.finalBuffer)
             ?: return Result.failure(IllegalStateException("createAsset failed: $sourcePath"))
         resources.loadResources(asset)
@@ -97,7 +108,7 @@ internal class AccessoryManager(
             loader.destroyAsset(asset)
             return Result.failure(IllegalArgumentException("$ownerTag bone '${spec.bone}' not resolved"))
         }
-        val tm = stage.engine.transformManager
+        val tm = host.accEngine.transformManager
         val propInstance = tm.getInstance(asset.root)
         val boneInstance = tm.getInstance(boneEntity)
         if (propInstance == 0 || boneInstance == 0) {
@@ -113,7 +124,7 @@ internal class AccessoryManager(
         )
 
         // 阴影开关沿 spec（PCSS Adreno 悬崖默认关）；剔除沿 avatar 惯例关
-        val rm = stage.engine.renderableManager
+        val rm = host.accEngine.renderableManager
         for (entity in asset.renderableEntities) {
             val inst = rm.getInstance(entity)
             if (inst == 0) continue
@@ -122,23 +133,27 @@ internal class AccessoryManager(
         }
 
         // ⑦ 入场景 + 登记（先落位再进场，避免首帧闪现在原点）
-        stage.scene.addEntities(asset.entities)
-        instances[spec.id] = Instance(spec, asset)
+        host.accScene.addEntities(asset.entities)
+        instances[spec.id] = Instance(spec, asset, boneEntity)
         publish()
         Log.i(TAG, "$ownerTag attach '${spec.id}' → ${spec.bone} ($sourcePath, pos=${spec.position.contentToString()}, rot=${spec.rotationEulerYXZ.contentToString()}, scale=${spec.scale})")
+
+        // P2-3 外部碰撞体（帽子压头发实验）：随挂载注册，随卸载注销
+        if (spec.springColliderRadius > 0f) {
+            springCollider?.invoke(spec, boneEntity, true)
+        }
         return Result.success(Unit)
     }
 
     override fun detach(id: String): Boolean {
         val instance = instances.remove(id) ?: return false
-        // SIGABRT 纪律（对齐 AvatarRuntime.destroyAsset）：先摘 scene 再毁 asset
-        stage.scene.removeEntities(instance.asset.entities)
-        val loader = stage.avatarAssetLoader
-        if (loader != null) {
-            loader.destroyAsset(instance.asset)
-        } else {
-            Log.w(TAG, "$ownerTag accessory '$id': asset loader gone; leaking entities")
+        if (instance.spec.springColliderRadius > 0f) {
+            springCollider?.invoke(instance.spec, instance.boneEntity, false)
         }
+        // SIGABRT 纪律（对齐 AvatarRuntime.destroyAsset）：先摘 scene 再毁 asset
+        host.accScene.removeEntities(instance.asset.entities)
+        host.accAssetLoader?.destroyAsset(instance.asset)
+            ?: Log.w(TAG, "$ownerTag accessory '$id': asset loader gone; leaking entities")
         publish()
         Log.i(TAG, "$ownerTag detach '$id'")
         return true
@@ -149,9 +164,9 @@ internal class AccessoryManager(
         if (instance.visible == visible) return true
         instance.visible = visible
         if (visible) {
-            stage.scene.addEntities(instance.asset.entities)
+            host.accScene.addEntities(instance.asset.entities)
         } else {
-            stage.scene.removeEntities(instance.asset.entities)
+            host.accScene.removeEntities(instance.asset.entities)
         }
         publish()
         return true
@@ -206,6 +221,7 @@ internal class AccessoryManager(
         _accessories.value = instances.map { (id, inst) ->
             AccessoryState(id = id, bone = inst.spec.bone, visible = inst.visible)
         }
+        onChange?.invoke()
     }
 
     companion object {

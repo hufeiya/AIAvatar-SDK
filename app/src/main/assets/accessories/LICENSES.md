@@ -13,6 +13,8 @@
 | `speakerSmall.glb` | Kenney Furniture Kit | CC0 1.0 |
 | `trashcan.glb` | Kenney Furniture Kit | CC0 1.0 |
 | `cardboardBoxClosed.glb` | Kenney Furniture Kit | CC0 1.0 |
+| `microphone.glb` | 自制（`tools/accessory-samples/make-prop-glb.js` 程序化生成） | CC0 |
+| `lightstick.glb` | 自制（`tools/accessory-samples/make-prop-glb.js` 程序化生成） | CC0 |
 
 Kenney 许可证全文：<https://kenney.nl/support>（CC0 1.0 Universal，资产页内标注
 "license: Creative Commons Zero (CC0)"）。样例库存档与逐资产校验数据见

@@ -35,6 +35,7 @@
 | `clear_expression` | — | 清空全部表情，恢复中性表情 |
 | `play_animation` | `ai_arg`=文件名，可选 `ai_loop` | 播放 assets/animations 下的 .vrma 动作 |
 | `stop_animation` | — | 停止动作（设了待机时回到待机循环，否则回 rest pose） |
+| `accessory` | `ai_arg`=子命令（见下） | **配饰族**（P1.5 单人路径，docs/accessory-feasibility.md §5.7）：`list`（目录+绑定表+在身清单）/ `attach <id> [bone] [dx dy dz rx ry rz scale colliderR]`（显式参数逐层覆盖：命令 > per-model 校准 preset > sidecar 默认；colliderR=弹簧骨骼外部碰撞体半径米，P2-3 帽子压头发实验）/ `detach\|show\|hide <id>` / `bind\|unbind <id> <动画路径...>`（追加/解除动画绑定白名单）/ `bindings` / `import <glb路径>` / `cal [show\|clear] <id>`（把最近一次挂载规格落成 per-model preset）。内置 8 条手机动画→phone、2 条唱歌/说唱→microphone 的绑定表在模型就绪时自动注册——播对应动画道具自动出场；LLM 侧另有 wear_accessory/remove_accessory 工具（`ai_accessory_tools` 开关） |
 | `set_idle` | `ai_arg`=文件名片段 | 把一个 .vrma 设为循环待机（LLM 手势播完/手动停止后回到它），持久化到 demo_settings；不设则用内置优先级自动选（Idle Stand Looking Around 优先） |
 | `idle_off` | — | 清除待机，一次性动作播完回落 rest pose |
 | `move` | `ai_x` `ai_y` `ai_z` | 平移人物（世界坐标米）：+x 右、+y 上、+z 朝相机 |
@@ -130,6 +131,12 @@ adb shell am start -n $PKG/.MainActivity \
 # 播放动作（文件名用 list animations 查询）
 adb shell am start -n $PKG/.MainActivity \
     --es ai_cmd play_animation --es ai_arg Angry.vrma --ez ai_loop true
+
+# 配饰:挂手机(4705 这类 VRM0 模型自动带 180°Y 校准 preset)、带碰撞体半径头顶垃圾桶
+adb shell am start -n $PKG/.MainActivity \
+    --es ai_cmd accessory --es ai_arg "attach phone"
+adb shell am start -n $PKG/.MainActivity \
+    --es ai_cmd accessory --es ai_arg "attach trashcan head 0 0.15 0 0 0 0 1 0.09"
 
 # 移动人物：向右 0.2m、向下 0.1m
 adb shell am start -n $PKG/.MainActivity --es ai_cmd move --ef ai_x 0.2 --ef ai_y -0.1

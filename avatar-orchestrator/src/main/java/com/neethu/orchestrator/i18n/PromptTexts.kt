@@ -193,6 +193,30 @@ interface PromptTexts {
     /** 停步成功的确认文案。 */
     val toolStopMovingDone: String
 
+    // ── 智能体工具（P2 配饰，docs/accessory-feasibility.md §5.6）────────
+    val toolWearAccessoryDescription: String
+    val toolWearAccessoryHint: String
+    val toolRemoveAccessoryDescription: String
+    val toolRemoveAccessoryHint: String
+
+    /** 穿戴成功的确认文案。 */
+    fun toolAccessoryWorn(id: String): String
+
+    /** 摘下成功的确认文案。 */
+    fun toolAccessoryRemoved(id: String): String
+
+    /** 该配饰已穿戴时的错误文案（重复 wear）。 */
+    val toolAccessoryAlreadyWearing: String
+
+    /** 身上没有该配饰时的错误文案（重复 remove）。 */
+    val toolAccessoryNotWorn: String
+
+    /** 没加载 3D 模型时的错误文案。 */
+    val toolAccessoryNoModel: String
+
+    /** 挂载/卸载执行缝失败（渲染层缺失等）的错误文案。 */
+    val toolAccessoryFailed: String
+
     /**
      * 智能体工具使用说明块（钉在协议块末尾，同一条 system——部分服务商拒绝
      * 多条 system）。[hints] 是 (工具名, 时机提示) 列表；轮数上限写进块里，
@@ -535,6 +559,39 @@ object PromptTextsZh : PromptTexts {
 
     override val toolStopMovingDone: String =
         "已经停下脚步。请自然地继续对话。"
+
+    // ── 配饰（P2，docs/accessory-feasibility.md §5.6）────────────────────
+
+    override val toolWearAccessoryDescription: String =
+        "把一件配饰穿戴到身上(帽子/玩偶/手机/收音机等,id 见参数列表)。"
+
+    override val toolWearAccessoryHint: String =
+        "用户让你戴上/拿起某件物品(「戴上帽子」「拿个手机玩玩」「抱个熊」)时调用;" +
+            "id 必须来自参数列表,不要发明;不调用就宣称「已戴上」是错的,不要演;已戴着再戴会报错。"
+
+    override val toolRemoveAccessoryDescription: String =
+        "摘下一件身上正戴着的配饰(id 见身上清单)。"
+
+    override val toolRemoveAccessoryHint: String =
+        "用户让你摘下/放下某件正戴着的物品时调用;只能摘身上有的,不调用就宣称「已摘下」是错的。"
+
+    override fun toolAccessoryWorn(id: String): String =
+        "已把「$id」穿戴到身上,观众现在能看到它了。请自然地继续对话。"
+
+    override fun toolAccessoryRemoved(id: String): String =
+        "已把「$id」摘下。请自然地继续对话。"
+
+    override val toolAccessoryAlreadyWearing: String =
+        "这件配饰已经戴在身上了,不用重复穿戴。"
+
+    override val toolAccessoryNotWorn: String =
+        "身上没有这件配饰,摘不了。"
+
+    override val toolAccessoryNoModel: String =
+        "当前没有加载虚拟形象,配饰挂不上。请口头向用户说明。"
+
+    override val toolAccessoryFailed: String =
+        "配饰穿戴/摘除失败了。请口头向用户说明这次没成功。"
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {
@@ -915,6 +972,41 @@ object PromptTextsEn : PromptTexts {
 
     override val toolStopMovingDone: String =
         "Stopped. Continue the conversation naturally."
+
+    // ── Accessories (P2, docs/accessory-feasibility.md §5.6) ────────────
+
+    override val toolWearAccessoryDescription: String =
+        "Wear an accessory (hat/plush/phone/radio etc.; ids are listed in the schema)."
+
+    override val toolWearAccessoryHint: String =
+        "Call when the user asks you to wear or hold an item (\"put on the hat\", \"grab the phone\", " +
+            "\"hug the bear\"); the id MUST come from the schema list — never invent one; claiming it's " +
+            "on without calling is wrong, never act it out; wearing an already-worn item returns an error."
+
+    override val toolRemoveAccessoryDescription: String =
+        "Take off an accessory you are currently wearing (see the worn list)."
+
+    override val toolRemoveAccessoryHint: String =
+        "Call when the user asks you to take off or put down something you're wearing; only items " +
+            "actually worn can be removed — claiming it's off without calling is wrong."
+
+    override fun toolAccessoryWorn(id: String): String =
+        "\"$id\" is now worn and visible to the audience. Continue naturally."
+
+    override fun toolAccessoryRemoved(id: String): String =
+        "\"$id\" has been taken off. Continue naturally."
+
+    override val toolAccessoryAlreadyWearing: String =
+        "That accessory is already being worn; no need to wear it again."
+
+    override val toolAccessoryNotWorn: String =
+        "That accessory is not being worn, so it can't be removed."
+
+    override val toolAccessoryNoModel: String =
+        "No 3D model is loaded, so accessories can't attach. Tell the user."
+
+    override val toolAccessoryFailed: String =
+        "Wearing/removing the accessory failed. Tell the user it didn't work this time."
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {

@@ -531,6 +531,11 @@ internal fun SettingsScreen(
                                 checked = aiPrefs.readClipboard
                             ) { onAiPrefsChange(aiPrefs.copy(readClipboard = it)) }
                             SettingsSwitchRow(
+                                title = s.accessoryToolsTitle,
+                                subtitle = s.accessoryToolsSubtitle,
+                                checked = aiPrefs.accessoryTools
+                            ) { onAiPrefsChange(aiPrefs.copy(accessoryTools = it)) }
+                            SettingsSwitchRow(
                                 title = s.llmMoveTitle,
                                 subtitle = s.llmMoveSubtitle,
                                 checked = aiPrefs.llmMove

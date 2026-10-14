@@ -87,10 +87,23 @@ internal class AvatarRuntime(
     /** 配饰控制器（懒建；挂点查询走 bind 时解析好的 [boneSemantics]）。 */
     val accessories: AccessoryManager by lazy {
         AccessoryManager(
-            stage = stage,
+            host = stage,
             ownerTag = "avatar $id",
             resolveBone = { semantic -> boneSemantics[semantic.lowercase()] ?: 0 },
             resolveSpec = { accId -> stage.accessorySpecResolver?.invoke(modelKey, accId) },
+            // P2-3 帽子压头发实验：规格带碰撞体半径时在挂点骨骼上注册外部
+            // 碰撞体（弹簧链被推出配饰外）；模型重载时配饰先 destroyAll，
+            // 弹簧骨管理器随骨架重建，两侧生命周期对齐。
+            springCollider = { spec, boneEntity, register ->
+                val mgr = springBoneManager
+                if (mgr != null && boneEntity != 0) {
+                    if (register) {
+                        mgr.addExternalCollider(boneEntity, spec.position, spec.springColliderRadius)
+                    } else {
+                        mgr.removeExternalCollider(boneEntity)
+                    }
+                }
+            },
         )
     }
 

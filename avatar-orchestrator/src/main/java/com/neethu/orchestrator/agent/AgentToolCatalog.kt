@@ -492,6 +492,104 @@ object AgentToolCatalog {
         return spec to executor
     }
 
+    /**
+     * `wear_accessory`（P2 配饰，docs/accessory-feasibility.md §5.6）：把一件
+     * 配饰挂到语义骨骼（「戴上帽子」「拿个手机玩玩」）。id 是 enum 白名单
+     * （目录定型，schema 注册时生成一次、执行时再验——注册晚于目录注入时
+     * schema 可能是空表，执行时校验兜底）。[wear] 缝返回 null = 成功。
+     */
+    fun wearAccessory(
+        texts: PromptTexts,
+        catalogIds: () -> List<String>,
+        wear: suspend (id: String) -> AccessoryWearFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val ids = catalogIds()
+        val spec = ToolSpec(
+            name = "wear_accessory",
+            description = texts.toolWearAccessoryDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "id",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "要穿戴的配饰 id（见列表，不要发明）")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("id")) })
+            },
+            systemHint = texts.toolWearAccessoryHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "id")?.lowercase().orEmpty()
+            val known = catalogIds().any { it.equals(raw, ignoreCase = true) }
+            when {
+                raw.isEmpty() || !known -> ToolResult(
+                    texts.toolEnumArgInvalid("wear_accessory", raw, catalogIds()),
+                    isError = true,
+                )
+                else -> when (wear(raw)) {
+                    null -> ToolResult(texts.toolAccessoryWorn(raw))
+                    AccessoryWearFailure.ALREADY_WEARING -> ToolResult(texts.toolAccessoryAlreadyWearing)
+                    AccessoryWearFailure.NO_MODEL -> ToolResult(texts.toolAccessoryNoModel, isError = true)
+                    AccessoryWearFailure.FAILED -> ToolResult(texts.toolAccessoryFailed, isError = true)
+                }
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `remove_accessory`（P2）：摘下一件正戴着的配饰。与 wear_accessory 配对
+     * 注册；wornIds 供模型观测（executor 只认身上有的）。[remove] 缝返回
+     * null = 成功。
+     */
+    fun removeAccessory(
+        texts: PromptTexts,
+        wornIds: () -> List<String>,
+        remove: suspend (id: String) -> AccessoryRemoveFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "remove_accessory",
+            description = texts.toolRemoveAccessoryDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "id",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("description", "要摘下的配饰 id（身上正戴着的）")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("id")) })
+            },
+            systemHint = texts.toolRemoveAccessoryHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "id")?.lowercase().orEmpty()
+            val worn = wornIds().any { it.equals(raw, ignoreCase = true) }
+            when {
+                raw.isEmpty() || !worn -> ToolResult(texts.toolAccessoryNotWorn, isError = true)
+                else -> when (remove(raw)) {
+                    null -> ToolResult(texts.toolAccessoryRemoved(raw))
+                    AccessoryRemoveFailure.FAILED -> ToolResult(texts.toolAccessoryFailed, isError = true)
+                }
+            }
+        }
+        return spec to executor
+    }
+
     /** "2026-10-11 21:34 周日 (UTC+8)" 形态；非整时区带分钟（UTC+5:30）。 */
     internal fun formatDeviceTime(epochMs: Long, zone: ZoneId, lang: Lang): String {
         val at = ZonedDateTime.ofInstant(Instant.ofEpochMilli(epochMs), zone)
@@ -566,5 +664,23 @@ enum class HapticFailure {
     NO_VIBRATOR,
 
     /** 其他失败（效果构造/驱动异常）。 */
+    FAILED,
+}
+
+/** [AgentToolCatalog.wearAccessory] 的缝失败归因；null = 成功（未知名在工具层被白名单拦截）。 */
+enum class AccessoryWearFailure {
+    /** 该配饰已挂载（重复 wear）。 */
+    ALREADY_WEARING,
+
+    /** 没加载 3D 模型。 */
+    NO_MODEL,
+
+    /** 其他失败（加载/骨骼解析/渲染层缺失）。 */
+    FAILED,
+}
+
+/** [AgentToolCatalog.removeAccessory] 的缝失败归因；null = 成功（未穿戴在工具层被拦截）。 */
+enum class AccessoryRemoveFailure {
+    /** 其他失败（渲染层缺失等）。 */
     FAILED,
 }

@@ -89,6 +89,26 @@
       "position": [0, 0.12, 0],
       "rotationEulerYXZ": [0, 0, 0],
       "scale": 1.0
+    },
+    {
+      "id": "microphone",
+      "name": "手持麦克风",
+      "file": "microphone.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.03],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "lightstick",
+      "name": "应援棒",
+      "file": "lightstick.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.03],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
     }
   ]
 }

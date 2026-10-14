@@ -115,7 +115,7 @@ renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   if (state.model) {
     state.model.mixer?.update(delta);
-    state.model.vrm.update(delta);
+    state.model.vrm?.update(delta);
   }
   controls.update();
   renderer.render(scene, camera);
@@ -134,18 +134,35 @@ async function loadModel(rel) {
   try {
     const gltf = await loader.loadAsync(fileUrl(rel));
     const vrm = gltf.userData.vrm;
-    if (!vrm) throw new Error('该文件不是有效的 VRM 模型');
-    try { VRMUtils.combineSkeletons(gltf.scene); } catch { /* 旧版本无此 API,忽略 */ }
-    VRMUtils.rotateVRM0(vrm); // 0.x 模型转向 +Z,统一面向镜头
 
     clearModel();
-    const mixer = new THREE.AnimationMixer(vrm.scene);
-    state.model = { vrm, rel, name: rel.split('/').pop(), mixer, action: null };
-    scene.add(vrm.scene);
+    let sceneObj;
+    if (vrm) {
+      try { VRMUtils.combineSkeletons(gltf.scene); } catch { /* 旧版本无此 API,忽略 */ }
+      VRMUtils.rotateVRM0(vrm); // 0.x 模型转向 +Z,统一面向镜头
+      state.model = { vrm, rel, name: rel.split('/').pop(), mixer: new THREE.AnimationMixer(vrm.scene), action: null };
+      sceneObj = vrm.scene;
+    } else {
+      // 普通 GLB = 配饰道具预览(P2):静态网格,无 VRM 语义;配饰是厘米级小物,
+      // 按包围盒自动取景(目标移到道具中心、距离随尺寸收缩),否则 3m 机位看不见
+      state.model = { vrm: null, glbScene: gltf.scene, rel, name: rel.split('/').pop(), mixer: null, action: null };
+      sceneObj = gltf.scene;
+      const bbox = new THREE.Box3().setFromObject(gltf.scene);
+      const size = bbox.getSize(new THREE.Vector3());
+      const center = bbox.getCenter(new THREE.Vector3());
+      if (isFinite(size.x) && size.length() > 0) {
+        controls.target.copy(center);
+        const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+        if (dir.lengthSq() < 1e-6) dir.set(0, 0.3, 1);
+        dir.normalize();
+        camera.position.copy(center).addScaledVector(dir, Math.max(size.length() * 1.6, 0.35));
+      }
+    }
+    scene.add(sceneObj);
 
     els.modelBadge.innerHTML = '';
     const label = document.createElement('span');
-    label.append('当前模型: ');
+    label.append(vrm ? '当前模型: ' : 'GLB 道具: ');
     const b = document.createElement('b');
     b.textContent = state.model.name;
     label.appendChild(b);
@@ -166,8 +183,9 @@ async function loadModel(rel) {
 function clearModel() {
   if (!state.model) return;
   stopAnimation(false);
-  scene.remove(state.model.vrm.scene);
-  VRMUtils.deepDispose(state.model.vrm.scene);
+  const obj = state.model.vrm ? state.model.vrm.scene : state.model.glbScene;
+  scene.remove(obj);
+  VRMUtils.deepDispose(obj);
   state.model = null;
   els.modelBadge.hidden = true;
   els.stageHint.hidden = false;
@@ -190,6 +208,7 @@ async function playAnimation(rel) {
     const gltf = await loader.loadAsync(fileUrl(rel));
     const animation = gltf.userData.vrmAnimations && gltf.userData.vrmAnimations[0];
     if (!animation) throw new Error('该文件不是有效的 VRMA 动画');
+    if (!state.model.vrm) { toast('GLB 道具没有骨骼动画,先加载一个 VRM 模型再播动作', true); return; }
 
     const { vrm, mixer } = state.model;
     stopAnimation(false);
@@ -337,6 +356,7 @@ function makeFolderCard(f, searchMode) {
 function makeFileCard(f, searchMode) {
   const rel = searchMode ? f.rel : (state.dir ? state.dir + '/' + f.name : f.name);
   const isModel = f.type === 'model';
+  const isGlb = /\.glb$/i.test(f.name);
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -350,7 +370,7 @@ function makeFileCard(f, searchMode) {
     img.loading = 'lazy';
     img.alt = f.name;
     img.src = thumbUrl(rel);
-    img.onerror = () => { thumb.textContent = '🧍'; };
+    img.onerror = () => { thumb.textContent = isGlb ? '🎒' : '🧍'; };
     thumb.appendChild(img);
   } else {
     thumb.textContent = '🏃';
@@ -359,7 +379,7 @@ function makeFileCard(f, searchMode) {
 
   const badge = document.createElement('span');
   badge.className = 'badge';
-  badge.textContent = isModel ? '模型' : '动作';
+  badge.textContent = isModel ? (isGlb ? '道具' : '模型') : '动作';
   card.appendChild(badge);
 
   const del = document.createElement('button');

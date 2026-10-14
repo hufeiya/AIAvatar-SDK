@@ -49,7 +49,7 @@ function resolveSafe(rel) {
   return abs;
 }
 
-function isModel(name) { return name.toLowerCase().endsWith('.vrm'); }
+function isModel(name) { const n = name.toLowerCase(); return n.endsWith('.vrm') || n.endsWith('.glb'); } // .glb = 配饰道具(P2)
 function isAnim(name) { return name.toLowerCase().endsWith('.vrma'); }
 
 function sendJson(res, status, obj) {
@@ -119,7 +119,7 @@ function extractThumbnail(buf) {
 
 async function handleThumb(req, res, rel) {
   const abs = resolveSafe(rel);
-  if (!isModel(path.basename(abs))) throw Object.assign(new Error('不是 .vrm 文件'), { status: 400 });
+  if (!isModel(path.basename(abs))) throw Object.assign(new Error('不是 .vrm/.glb 文件'), { status: 400 });
   const st = await fsp.stat(abs);
   const key = abs + ':' + st.mtimeMs;
   if (!thumbCache.has(key)) {

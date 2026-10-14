@@ -129,6 +129,22 @@ internal class VrmSpringBoneManager(
     private var isEnabled: Boolean = true
     private var isInitialized: Boolean = false
 
+    /**
+     * 外部碰撞体（P2-3 配饰实验，docs/accessory-feasibility.md §5.6）：
+     * 配饰（如帽子）注册到挂点骨骼上的球碰撞体，让头发弹簧链被推出配饰外。
+     * offset/radius = 骨骼局部单位（模型单位，随骨骼世界缩放自动换算——与
+     * 模型自带 collider 同一标定语义）；entity 由调用方解析语义骨得到，
+     * 模型重载即失效（[parseFromGlb] 清空；配饰侧随 AccessoryManager 的
+     * destroyAll 先行注销，两侧生命周期对齐）。
+     */
+    private data class ExternalCollider(
+        val entity: Int,
+        val offset: FloatArray,
+        val radius: Float,
+    )
+
+    private val externalColliders = mutableListOf<ExternalCollider>()
+
     // Diagnostics: when enabled, logs per-joint constraint length vs rest length and
     // a few strand directions once per second so on-device state is observable.
     private var debugLogEnabled: Boolean = false
@@ -138,6 +154,29 @@ internal class VrmSpringBoneManager(
 
     fun setEnabled(enabled: Boolean) { isEnabled = enabled }
 
+    /**
+     * Register an external (accessory-driven) sphere collider on a bone
+     * entity. Re-registering the same entity replaces the previous sphere.
+     * Returns false when the manager has no bound model or arguments are
+     * invalid (radius ≤ 0 / entity 0 / offset short).
+     */
+    fun addExternalCollider(entity: Int, offset: FloatArray, radius: Float): Boolean {
+        if (!isInitialized || entity == 0 || radius <= 0f || offset.size < 3) return false
+        removeExternalCollider(entity)
+        externalColliders.add(ExternalCollider(entity, offset.copyOf(3), radius))
+        return true
+    }
+
+    /** Remove the external collider registered on [entity] (true = one was removed). */
+    fun removeExternalCollider(entity: Int): Boolean =
+        externalColliders.removeAll { it.entity == entity }
+
+    fun clearExternalColliders() {
+        externalColliders.clear()
+    }
+
+    fun externalCollidersCount(): Int = externalColliders.size
+
     /** Enables once-per-second logcat diagnostics (tag "SpringBone") for on-device verification. */
     fun setDebugLogEnabled(enabled: Boolean) { debugLogEnabled = enabled }
 
@@ -145,6 +184,9 @@ internal class VrmSpringBoneManager(
      * Parse VRMC_springBone / VRM.secondaryAnimation extension from GLB bytes.
      */
     fun parseFromGlb(glbBytes: ByteArray) {
+        // 旧模型的骨骼实体即将全部失效，配饰注册的外部碰撞体一并清零
+        // （配饰自身由 AccessoryManager.destroyAll 在换装前先行 detach 注销）
+        externalColliders.clear()
         val json = parseGlbJson(glbBytes) ?: return
         parseNodeHierarchy(json)
 
@@ -550,6 +592,23 @@ internal class VrmSpringBoneManager(
                     val result = resolveCollision(
                         headPos, nextTail, state.boneLength, params.hitRadius * worldScale,
                         collider, colliderWorldMat
+                    )
+                    if (result != null) {
+                        nextTail = result
+                    }
+                }
+
+                // External colliders (accessory experiment): the sphere rides the
+                // registered bone entity's world transform; offset/radius are
+                // bone-local units resolved by the same math as model colliders.
+                for (ext in externalColliders) {
+                    val extInstance = tm.getInstance(ext.entity)
+                    if (extInstance == 0) continue
+                    val extWorldMat = FloatArray(16)
+                    tm.getWorldTransform(extInstance, extWorldMat)
+                    val result = resolveCollision(
+                        headPos, nextTail, state.boneLength, params.hitRadius * worldScale,
+                        SpringCollider(-1, ext.offset, ext.radius, null), extWorldMat
                     )
                     if (result != null) {
                         nextTail = result

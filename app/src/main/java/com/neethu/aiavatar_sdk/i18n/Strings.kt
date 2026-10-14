@@ -289,6 +289,10 @@ class Strings(val lang: Lang) {
     val readClipboardSubtitle: String get() =
         zh("工具 read_clipboard：仅当用户明确要求看刚复制的内容（长文/快递单号/验证码）时读取，模型绝不偷看；默认关",
             "Tool read_clipboard: reads copied text only when explicitly asked (long text, tracking number, code); never peeks uninvited; off by default")
+    val accessoryToolsTitle: String get() = zh("配饰穿戴工具", "Accessory wearing tools")
+    val accessoryToolsSubtitle: String get() =
+        zh("让模型用 wear_accessory/remove_accessory 给虚拟形象戴上/摘下配饰（帽子/手机/玩偶等，内置 CC0 目录）",
+            "Let the model wear/remove accessories (hat/phone/plush, built-in CC0 catalog) via wear_accessory/remove_accessory")
     val llmMoveTitle: String get() = zh("AI 自由走动", "AI free locomotion")
     val llmMoveSubtitle: String get() =
         zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",

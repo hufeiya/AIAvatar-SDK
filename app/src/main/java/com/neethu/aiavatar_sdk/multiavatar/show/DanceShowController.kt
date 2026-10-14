@@ -3,6 +3,7 @@ package com.neethu.aiavatar_sdk.multiavatar.show
 import android.content.Context
 import android.util.Log
 import com.neethu.aiavatar_sdk.loadWalkAnchors
+import com.neethu.aiavatar_sdk.multiavatar.AccessoryCatalog
 import com.neethu.aiavatar_sdk.multiavatar.Slots
 import com.neethu.aiavatar_sdk.multiavatar.StageChatRig
 import com.neethu.corelib.CameraShot
@@ -334,6 +335,10 @@ internal class DanceShowController(
             act.clip?.let {
                 if (it !in whitelist) return "$at: 曲目不在白名单 $it"
             }
+            // 幕次道具（P2）：id 必须在配饰目录（形状校验已在解析层）
+            for (p in act.props.orEmpty()) {
+                if (AccessoryCatalog.find(appContext, p) == null) return "$at: 道具 '$p' 不在配饰目录"
+            }
         }
         if (ShowDirector.BOW_CLIP !in whitelist) return "谢幕曲目不在白名单 ${ShowDirector.BOW_CLIP}"
         return null
@@ -385,6 +390,26 @@ internal class DanceShowController(
             is DirectorCmd.Clap -> slots[cmd.performer]?.let { h ->
                 if (h.loadVrmaAnimation(FANS_CLAP_CLIP)) {
                     h.playVrmaAnimation(loop = false, fadeSeconds = 0.2f)
+                }
+            }
+            is DirectorCmd.PropOn -> slots[cmd.performer]?.let { h ->
+                // 已在场（动画绑定表自动出的同款）则跳过——挂载幂等语义在调用侧
+                if (h.accessories.value.none { it.id.equals(cmd.accessoryId, true) }) {
+                    val entry = AccessoryCatalog.find(appContext, cmd.accessoryId)
+                    if (entry == null) {
+                        log("warn: 道具 '${cmd.accessoryId}' 不在目录（跳过）")
+                    } else {
+                        val spec = AccessoryCatalog.specFor(appContext, h.spec.displayName, entry)
+                        h.attachAccessory(spec)
+                            .onSuccess { log("prop on: ${cmd.performer} +${entry.id}@${spec.bone}") }
+                            .onFailure { log("warn: ${cmd.performer} 挂 ${entry.id} 失败 ${it.message}") }
+                    }
+                }
+            }
+            is DirectorCmd.PropOff -> slots[cmd.performer]?.let { h ->
+                // 没挂着 = 静默（绑定表自动出的道具不归 props 摘）
+                if (h.detachAccessory(cmd.accessoryId)) {
+                    log("prop off: ${cmd.performer} -${cmd.accessoryId}")
                 }
             }
             is DirectorCmd.Log -> log(cmd.text)

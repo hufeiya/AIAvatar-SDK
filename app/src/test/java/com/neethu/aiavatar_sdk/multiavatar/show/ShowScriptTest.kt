@@ -181,6 +181,50 @@ class ShowScriptTest {
         assertEquals("animations/X.vrma", resolveClipAsset("animations/X"))
     }
 
+    // ── props 道具（P2 配饰生态，docs/accessory-feasibility.md §5.6）──────
+
+    @Test
+    fun `dance幕props声明解析通过且映射正确`() {
+        val script = parse(
+            """{"version":1,"acts":[
+               {"type":"dance","performer":"A","clip":"x","props":["microphone","lightstick"]}
+            ]}""",
+        ).getOrThrow()
+        assertEquals(listOf("microphone", "lightstick"), script.acts[0].props)
+    }
+
+    @Test
+    fun `bow幕props允许_group_dance幕props允许`() {
+        parse("""{"version":1,"acts":[{"type":"bow","props":["lightstick"]}]}""").getOrThrow()
+        parse(
+            """{"version":1,"acts":[{"type":"group_dance","clip":"x","seconds":3,"props":["hat"]}]}""",
+        ).getOrThrow()
+    }
+
+    @Test
+    fun `非表演幕props拒绝`() {
+        val result = parse(
+            """{"version":1,"acts":[{"type":"camera","shot":"full","props":["hat"]}]}""",
+        )
+        assertTrue(result.isFailure)
+        assertTrue(requireNotNull(result.exceptionOrNull()).message!!.contains("props"))
+    }
+
+    @Test
+    fun `props空白id拒绝`() {
+        val result = parse(
+            """{"version":1,"acts":[{"type":"dance","performer":"A","clip":"x","props":[" "]}]}""",
+        )
+        assertTrue(result.isFailure)
+        assertTrue(requireNotNull(result.exceptionOrNull()).message!!.contains("空白"))
+    }
+
+    @Test
+    fun `props缺省为null不影响无道具幕`() {
+        val script = parse("""{"version":1,"acts":[{"type":"bow"}]}""").getOrThrow()
+        assertEquals(null, script.acts[0].props)
+    }
+
     @Test
     fun `resolveClips只动clip字段`() {
         val script = parse(fullShow).getOrThrow().resolveClips()

@@ -94,6 +94,13 @@ data class ShowAct(
     val line: String? = null,
     /** music 幕的动作（词表见 [MusicActions]）。 */
     val action: String? = null,
+    /**
+     * 幕次道具（P2 配饰生态，docs/accessory-feasibility.md §5.6）：accessory
+     * id 列表（目录见 assets/accessories/accessory.json）。dance/group_dance/
+     * bow 幕开演时给表演者挂上、收幕摘下——确定性导演语义，不走 LLM；
+     * 与动画绑定表（bindings.json 自动出道具）正交：同 id 已在场则跳过挂载。
+     */
+    val props: List<String>? = null,
 )
 
 /**
@@ -165,10 +172,20 @@ object ShowScriptParser {
             // 幕内机位与 camera 幕的 shot 共用词表
             val shot = act.shot ?: act.camera
             if (shot != null && shot !in CameraNames.KNOWN) errors += "$at: 未知机位 '$shot'"
+            // 道具 id 形状校验（在不在目录归控制器开演前校验——运行时环境）
+            if (act.type !in PROPS_ACT_TYPES && act.props != null) {
+                errors += "$at: props 仅支持 ${PROPS_ACT_TYPES.sorted().joinToString("/")}"
+            }
+            act.props.orEmpty().forEach { p ->
+                if (p.isBlank()) errors += "$at: props 含空白 id"
+            }
         }
         return if (errors.isEmpty()) Result.success(script)
         else Result.failure(IllegalArgumentException(errors.joinToString("; ")))
     }
+
+    /** 支持声明道具的幕型（表演类；camera/music/wait 等纯调度幕不收）。 */
+    val PROPS_ACT_TYPES = setOf(ActTypes.DANCE, ActTypes.GROUP_DANCE, ActTypes.BOW)
 }
 
 /** clip 路径归一：`08_x/Y` / `animations/08_x/Y.vrma` → `animations/08_x/Y.vrma`。 */

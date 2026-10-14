@@ -68,6 +68,10 @@ class AvatarController : AvatarActor {
 
     private val _detectedRenderMode = MutableStateFlow<RenderMode?>(null)
 
+    /** 已挂载配饰的稳定观测流（渲染器回调中继；模型重载清空）。 */
+    private val _accessories =
+        MutableStateFlow<List<com.neethu.corelib.accessory.AccessoryState>>(emptyList())
+
     /** Walk-finished events relayed from the renderer (see [walkFinished]). */
     private val _walkFinished = MutableSharedFlow<WalkFinished>(
         extraBufferCapacity = 8,
@@ -118,6 +122,7 @@ class AvatarController : AvatarActor {
         this.renderer = renderer
         renderer.onFpsUpdated = { value -> _fps.value = value }
         renderer.onWalkFinished = { finished -> _walkFinished.tryEmit(finished) }
+        renderer.onAccessoriesUpdated = { list -> _accessories.value = list }
         // A material-driven mode switch happens mid-load (the model is already
         // rendered in the detected mode), so bookkeeping only: keep the reload
         // trigger in sync and expose the value — no reload, no settings push.
@@ -133,6 +138,7 @@ class AvatarController : AvatarActor {
     internal fun detach() {
         renderer?.onFpsUpdated = null
         renderer?.onWalkFinished = null
+        renderer?.onAccessoriesUpdated = null
         this.renderer = null
         _fps.value = 0
         // Don't reset state — the controller can outlive the view
@@ -368,6 +374,64 @@ class AvatarController : AvatarActor {
     override fun clearVrmaIdleAnimation() {
         renderer?.clearVrmaIdleAnimation()
     }
+
+    // ── Public API: Accessories（P1.5 单人路径桥接）───────────────────────
+
+    /**
+     * 当前模型文件名（per-model 校准 preset 的 key；未加载 = null）。与团播
+     * AvatarRuntime.modelKey 同语义。
+     */
+    val currentModelId: String?
+        get() = currentModelPath?.substringAfterLast('/')
+
+    /**
+     * 配饰挂载规格解析器（动画联动自动挂载用）：配饰 ID → spec。app 层注入
+     * sidecar 默认 + per-model 校准的合并结果（demo 见 AiDebugExecutor 的
+     * accessory 命令族装配）；未注入时绑定命中只显隐已挂载件。
+     */
+    var accessorySpecResolver: ((accessoryId: String) -> com.neethu.corelib.accessory.AccessorySpec?)?
+        get() = renderer?.accessorySpecResolver
+        set(value) {
+            renderer?.accessorySpecResolver = value
+        }
+
+    /** 当前已挂载配饰（挂/卸/显隐都会发布；模型重载清空）。 */
+    val accessories: StateFlow<List<com.neethu.corelib.accessory.AccessoryState>> =
+        _accessories.asStateFlow()
+
+    /**
+     * 挂载配饰到语义骨骼（加载 GLB → setParent 骨骼实体 → 入场景；挂载后
+     * 自动跟随骨骼动画，零每帧代码）。同一 id 重复挂载返回失败。
+     */
+    fun attachAccessory(spec: com.neethu.corelib.accessory.AccessorySpec): Result<Unit> {
+        val r = renderer
+            ?: return Result.failure(IllegalStateException("no renderer attached"))
+        return r.attachAccessory(spec)
+    }
+
+    /** 卸载并销毁（true = 确有此配饰）。 */
+    fun detachAccessory(id: String): Boolean = renderer?.detachAccessory(id) ?: false
+
+    /** 不卸载只显隐（true = 确有此配饰）。 */
+    fun setAccessoryVisible(id: String, visible: Boolean): Boolean =
+        renderer?.setAccessoryVisible(id, visible) ?: false
+
+    /**
+     * 动画联动：播 [animationClipPath] 期间 [accessoryId] 自动在场（显式
+     * 白名单，路径剥 `animations/` 前缀归一）。命中 VrmaStarted 自动挂载
+     * （规格走 [accessorySpecResolver]）并显示；播完/被打断/被顶替经 0.25s
+     * crossfade 窗口隐藏。
+     */
+    fun bindAccessoryToAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        renderer?.bindAccessoryToAnimation(accessoryId, animationClipPath) ?: false
+
+    /** 解除动画绑定（剪辑与配饰都匹配才解除）。 */
+    fun unbindAccessoryFromAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        renderer?.unbindAccessoryFromAnimation(accessoryId, animationClipPath) ?: false
+
+    /** 当前动画绑定表快照（归一化 clipPath → accessoryId）。 */
+    val accessoryAnimationBindings: Map<String, String>
+        get() = renderer?.accessoryAnimationBindings ?: emptyMap()
 
     // ── Public API: Gaze / Look-At ───────────────────────────────────────
 

@@ -954,6 +954,16 @@ private fun DemoScreen(
         )
     }
 
+    // ── 配饰接线（P1.5 单人桥接）────────────────────────────────────────
+    // 规格解析器幂等注入；模型每次就绪后重挂内置动画绑定表（管理器随模型
+    // 重建，绑定表清空——与团播 SlotBootstrap 的就绪注册同语义）。
+    LaunchedEffect(state) {
+        AccessoryTools.wiring(context, controller)
+        if (state is AvatarState.Ready) {
+            AccessoryTools.registerBuiltinBindings(context, controller)
+        }
+    }
+
     // Load the selected scene whenever it changes (null = 无场景，移除当前场景)
     LaunchedEffect(uiState.selectedScene) {
         val scene = uiState.selectedScene
@@ -1415,7 +1425,8 @@ private fun DemoScreen(
     // set_ambience 的回写走 applyRenderSettings（设置页同款路径：状态+持久化+
     // controller 推送；氛围只动灯光三字段，不会触发材质回退重载）。
     LaunchedEffect(
-        session, uiState.aiPrefs.agentTools, uiState.aiPrefs.readClipboard, uiState.lang,
+        session, uiState.aiPrefs.agentTools, uiState.aiPrefs.readClipboard,
+        uiState.aiPrefs.accessoryTools, uiState.lang,
     ) {
         val s = session ?: return@LaunchedEffect
         AgentDeviceTools.registerAll(
@@ -1427,6 +1438,15 @@ private fun DemoScreen(
             lifecycle = lifecycleOwner.lifecycle,
             currentRenderSettings = { controller.currentRenderSettings ?: uiState.renderSettings },
             onRenderSettingsChange = { applyRenderSettings(it) },
+        )
+        // P2 配饰穿戴工具（wear/remove_accessory，跟随 agentTools 总开关 +
+        // accessoryTools 独立开关，关闭 = 两工具退场）
+        AgentAccessoryTools.register(
+            session = s,
+            controller = controller,
+            context = context,
+            texts = promptTextsOf(uiState.lang),
+            prefs = uiState.aiPrefs,
         )
     }
 

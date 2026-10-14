@@ -13,8 +13,9 @@
     { "type": "move", "performer": "B", "target": "stage_front_b" },
     { "type": "dance", "performer": "B", "clip": "08_舞蹈与表演/Female Hip Hop 'Running Man' Dancing", "camera": "full", "fans": ["clap"], "line": "下面看我啦～" },
     { "type": "wait", "seconds": 1.5 },
+    { "type": "dance", "performer": "A", "clip": "08_舞蹈与表演/MC Rapping On The Microphone", "camera": "medium", "fans": ["clap"], "props": ["microphone"], "line": "接下来是我的说唱时间！" },
     { "type": "group_dance", "clip": "08_舞蹈与表演/Doing The Shuffling Dance", "seconds": 12, "camera": "group" },
-    { "type": "bow", "camera": "group" },
+    { "type": "bow", "camera": "group", "props": ["lightstick"] },
     { "type": "music", "action": "stop" },
     { "type": "camera", "shot": "group" }
   ]

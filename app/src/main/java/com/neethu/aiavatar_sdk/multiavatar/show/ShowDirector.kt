@@ -94,6 +94,16 @@ sealed interface DirectorCmd {
         override val label: String get() = "gaze $watcher → camera"
     }
 
+    /** 幕次道具上（P2 配饰：act.props 声明，act 开始时给表演者挂上）。 */
+    data class PropOn(val performer: String, val accessoryId: String) : DirectorCmd {
+        override val label: String get() = "prop +$accessoryId @ $performer"
+    }
+
+    /** 幕次道具下（收幕摘下；没挂着 = 静默，动画绑定自动出的道具不归这里管）。 */
+    data class PropOff(val performer: String, val accessoryId: String) : DirectorCmd {
+        override val label: String get() = "prop -$accessoryId @ $performer"
+    }
+
     /** 应援一次性动作（并行发射，不等）。 */
     data class Clap(val performer: String) : DirectorCmd {
         override val label: String get() = "clap $performer"
@@ -342,6 +352,8 @@ class ShowDirector(
             }
         }
         act.camera?.let { out(DirectorCmd.Camera(it, performer)) }
+        // 幕次道具（P2）：开演挂、收幕摘（确定性导演语义，§5.6）
+        act.props.orEmpty().forEach { out(DirectorCmd.PropOn(performer, it)) }
         out(DirectorCmd.PlayDance(performer, clip, loop = false))
         val duration = durationOf(performer, clip) ?: DEFAULT_DANCE_SECONDS
         val timeoutS = 1.2f * duration + 1f
@@ -349,6 +361,7 @@ class ShowDirector(
         if (!arrived) {
             out(DirectorCmd.Log("vrma 超时兜底推进: $performer（兜底%.1fs）".format(timeoutS)))
         }
+        act.props.orEmpty().forEach { out(DirectorCmd.PropOff(performer, it)) }
         _progress.value = _progress.value.copy(phase = ActPhase.RETURN)
         walkBackToMark(performer, out)
         audience.forEach { out(DirectorCmd.GazeCamera(it)) }
@@ -371,8 +384,11 @@ class ShowDirector(
     private suspend fun performGroup(act: ShowAct, cast: List<String>, out: (DirectorCmd) -> Unit) {
         val clip = act.clip ?: return
         act.camera?.let { out(DirectorCmd.Camera(it, null)) }
+        // 幕次道具（P2）：全员挂上（齐舞无主次）
+        act.props.orEmpty().forEach { id -> cast.forEach { out(DirectorCmd.PropOn(it, id)) } }
         cast.forEach { out(DirectorCmd.PlayDance(it, clip, loop = true)) }
         hold(act.seconds ?: DEFAULT_GROUP_SECONDS)
+        act.props.orEmpty().forEach { id -> cast.forEach { out(DirectorCmd.PropOff(it, id)) } }
         out(DirectorCmd.StopDances())
     }
 
@@ -384,9 +400,12 @@ class ShowDirector(
         durationOf: (performer: String, clip: String) -> Float?,
     ) {
         act.camera?.let { out(DirectorCmd.Camera(it, null)) }
+        // 幕次道具（P2）：谢幕人手一支应援棒（default.json 的 bow act 声明）
+        act.props.orEmpty().forEach { id -> cast.forEach { out(DirectorCmd.PropOn(it, id)) } }
         cast.forEach { out(DirectorCmd.PlayDance(it, BOW_CLIP, loop = false)) }
         val duration = cast.firstOrNull()?.let { durationOf(it, BOW_CLIP) } ?: DEFAULT_DANCE_SECONDS
         hold(1.2f * duration + 0.5f)
+        act.props.orEmpty().forEach { id -> cast.forEach { out(DirectorCmd.PropOff(it, id)) } }
     }
 
     // ── 等待原语（事件或 skip 提前收，超时也是推进信号）──────────────────

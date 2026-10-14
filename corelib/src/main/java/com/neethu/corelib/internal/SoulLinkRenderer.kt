@@ -9,6 +9,7 @@ import com.google.android.filament.ColorGrading
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
+import com.google.android.filament.Scene
 import com.google.android.filament.Skybox
 import com.google.android.filament.ToneMapper
 import com.google.android.filament.View
@@ -52,6 +53,10 @@ import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.ToneMappingMode
 import com.neethu.corelib.WalkStartResult
 import com.neethu.corelib.WalkSnapshot
+import com.neethu.corelib.accessory.AccessoryManager
+import com.neethu.corelib.accessory.AccessoryHost
+import com.neethu.corelib.accessory.AccessorySpec
+import com.neethu.corelib.accessory.AccessoryState
 
 /**
  * Internal rendering engine backed by Filament [ModelViewer].
@@ -134,6 +139,47 @@ internal class SoulLinkRenderer(
     // Spring bone physics support
     internal var springBoneManager: VrmSpringBoneManager? = null
     private var lastFrameTimeNanos: Long = 0L
+
+    // ── 配饰（P1.5 单人路径桥接，docs/accessory-feasibility.md §5.7）──────
+    // 专用 loader 对（ModelViewer 内部 loader 不公开；场景 GLB 已有同款先例）。
+    // 管理器随模型重载重建（骨骼实体失效）；规格解析器/观测回调跨模型保留。
+
+    private var accessoryMaterialProvider: UbershaderProvider? = null
+    private var accessoryAssetLoader: AssetLoader? = null
+    private var accessoryResourceLoader: ResourceLoader? = null
+    private var accessoryManager: AccessoryManager? = null
+
+    /** 语义骨骼名（小写）→ 实体（bind 时一次解析；配饰挂点查询共用）。 */
+    private var boneSemantics: Map<String, Int> = emptyMap()
+
+    /** 当前已加载的 VRMA 剪辑路径（VrmaStarted/Finished 载荷；idle 不在此列）。 */
+    private var currentVrmaPath: String? = null
+
+    /** one-shot 激活沿（VrmaFinished 边沿检测；与团播 AvatarRuntime 同款）。 */
+    private var prevOneShotActive = false
+
+    /**
+     * 配饰挂载规格解析（动画联动自动挂载用）：配饰 ID → spec（app 层注入
+     * sidecar 默认+per-model 校准合并结果）；null = 未注入，绑定命中只显隐
+     * 已挂载件、无法自动挂载。
+     */
+    var accessorySpecResolver: ((accessoryId: String) -> AccessorySpec?)? = null
+
+    /** 配饰列表变化（挂/卸/显隐）→ AvatarController 的稳定 StateFlow 中继。 */
+    var onAccessoriesUpdated: ((List<AccessoryState>) -> Unit)? = null
+
+    /** 配饰宿主缝：引擎/场景取自 ModelViewer，loader 对专用，字节双通道。 */
+    private val accessoryHost = object : AccessoryHost {
+        override val accEngine: Engine get() = modelViewer.engine
+        override val accScene: Scene get() = modelViewer.scene
+        override val accAssetLoader: AssetLoader? get() = accessoryAssetLoader
+        override val accResourceLoader: ResourceLoader? get() = accessoryResourceLoader
+        override fun accReadSourceBytes(source: String): ByteArray {
+            val file = java.io.File(source)
+            if (file.isFile) return file.inputStream().use { it.readBytes() }
+            return surfaceView.context.assets.open(source).use { it.readBytes() }
+        }
+    }
 
     // Set when the model pose is about to snap (animation / VRMA start-stop); the
     // spring bone tails are re-anchored after the first frame of the new pose.
@@ -456,6 +502,12 @@ internal class SoulLinkRenderer(
                 animationWrote,
                 oneShotActive,
             )
+            // VrmaFinished 边沿（one-shot 激活沿下降 = 播完/被打断/被顶替淡出）：
+            // 喂配饰状态机延迟隐藏（对齐团播 AvatarRuntime.postAnimation）
+            if (prevOneShotActive && !oneShotActive) {
+                currentVrmaPath?.let { accessoryManager?.onVrmaFinished(it) }
+            }
+            prevOneShotActive = oneShotActive
             // 显式提交本帧全部局部变换写入（idle/呼吸/视线）：TransformManager
             // 惰性求值，commit 前所有 getWorldTransform/蒙皮都读旧世界变换。
             // gti 依赖 lookAt 内部的 commit——gaze off（target=null 提前 return）
@@ -1010,12 +1062,21 @@ internal class SoulLinkRenderer(
         stopVrmaAnimation()
         vrmaEngine = null
         idleSource = null
+        currentVrmaPath = null
+        prevOneShotActive = false
         expressionManager = null
         lookAtEngine = null
         breathEngine = null
         mimicEngine = null
         springBoneManager = null
         animator = null
+
+        // 配饰先于旧资产销毁：配饰 re-parent 在骨骼层级内，旧骨骼实体随
+        // destroyModel 失效（对齐 AvatarRuntime 的换装顺序）。
+        accessoryManager?.destroyAll()
+        accessoryManager = null
+        boneSemantics = emptyMap()
+        onAccessoriesUpdated?.invoke(emptyList())
 
         // Free the outgoing model BEFORE the MToon applier: filament refuses
         // Engine.destroyMaterialInstance while any live renderable still holds
@@ -1109,6 +1170,32 @@ internal class SoulLinkRenderer(
             chestEntity = resolveHumanoidEntity(asset, bytes, "upperChest", "chest", "spine")
             spineEntity = resolveHumanoidEntity(asset, bytes, "spine")
             neckEntity = resolveHumanoidEntity(asset, bytes, "neck")
+
+            // 配饰管理器（P1.5 单人桥接）：与团播同构——一次解析全语义表供挂点
+            // 查询（HumanoidBoneResolver 与 AvatarRuntime 共用），管理器随骨架
+            // 重建；spec 解析器/碰撞缝经回调注入，跨模型保留。
+            boneSemantics = com.neethu.corelib.stage.internal.HumanoidBoneResolver
+                .resolveAll(asset, bytes)
+            ensureAccessoryLoaders()
+            accessoryManager = AccessoryManager(
+                host = accessoryHost,
+                ownerTag = "single",
+                resolveBone = { semantic -> boneSemantics[semantic.lowercase()] ?: 0 },
+                resolveSpec = { accId -> accessorySpecResolver?.invoke(accId) },
+                springCollider = { spec, boneEntity, register ->
+                    val mgr = springBoneManager
+                    if (mgr != null && boneEntity != 0) {
+                        if (register) {
+                            mgr.addExternalCollider(boneEntity, spec.position, spec.springColliderRadius)
+                        } else {
+                            mgr.removeExternalCollider(boneEntity)
+                        }
+                    }
+                },
+            ).also { mgr ->
+                mgr.onChange = { onAccessoriesUpdated?.invoke(mgr.accessories.value) }
+            }
+            onAccessoriesUpdated?.invoke(emptyList())
 
             // Gaze overlay engine — bound after the VRM 0.x root flip so the
             // captured rest orientation already faces the camera (+Z).
@@ -1474,6 +1561,8 @@ internal class SoulLinkRenderer(
         val animation = vrmaParser.parse(ByteBuffer.wrap(bytes))
         return if (animation != null) {
             vrmaEngine?.setAnimation(animation)
+            // 记录当前剪辑路径（VrmaStarted/Finished 载荷；idle 走独立解析入口）
+            currentVrmaPath = source
             android.util.Log.i("SoulLinkRenderer",
                 "Loaded VRMA: ${animation.duration}s, ${animation.humanoidTracks.size} bone tracks")
             true
@@ -1572,6 +1661,18 @@ internal class SoulLinkRenderer(
         }
         vrmaEngine?.play(loop, speed, fade, mask, null)
         pendingSpringReset = true
+        notifyVrmaStarted()
+    }
+
+    /**
+     * VrmaStarted 统一发射点（公开播放入口与走动内部播放共用，对齐团播
+     * AvatarRuntime）：引擎确有剪辑在播才发；先同步喂配饰状态机（动画联动
+     * 同帧出道具）。
+     */
+    private fun notifyVrmaStarted() {
+        if (vrmaEngine?.isActive() != true) return
+        val path = currentVrmaPath ?: return
+        accessoryManager?.onVrmaStarted(path)
     }
 
     /**
@@ -1750,6 +1851,9 @@ internal class SoulLinkRenderer(
         stopRendering()
         shotSteering = false
         activeShot = null
+        // 配饰先走（renderable 持材质实例 + 挂在骨骼层级内，先于模型销毁）
+        accessoryManager?.destroyAll()
+        accessoryManager = null
         // Same in-use precondition as in loadModelBytes: the avatar's
         // renderables still hold the MToon material instances, so the model
         // must go first or destroyMaterialInstance aborts.
@@ -1764,6 +1868,11 @@ internal class SoulLinkRenderer(
         sceneResourceLoader = null
         sceneAssetLoader?.destroy()
         sceneAssetLoader = null
+        accessoryResourceLoader?.destroy()
+        accessoryResourceLoader = null
+        accessoryAssetLoader?.destroy()
+        accessoryAssetLoader = null
+        accessoryMaterialProvider = null
         springBoneManager = null
 
         val engine = modelViewer.engine
@@ -1787,6 +1896,42 @@ internal class SoulLinkRenderer(
     fun setSpringBoneEnabled(enabled: Boolean) {
         springBoneManager?.setEnabled(enabled)
     }
+
+    // ── Accessory API（P1.5 单人桥接；语义与团播 AvatarHandle 同面）──────
+
+    private fun ensureAccessoryLoaders() {
+        if (accessoryAssetLoader == null) {
+            val provider = UbershaderProvider(modelViewer.engine)
+            accessoryMaterialProvider = provider
+            accessoryAssetLoader = AssetLoader(modelViewer.engine, provider, EntityManager.get())
+        }
+        if (accessoryResourceLoader == null) {
+            accessoryResourceLoader = ResourceLoader(modelViewer.engine, true)
+        }
+    }
+
+    fun attachAccessory(spec: AccessorySpec): Result<Unit> {
+        val mgr = accessoryManager
+            ?: return Result.failure(IllegalStateException("no model loaded"))
+        return mgr.attach(spec)
+    }
+
+    fun detachAccessory(id: String): Boolean = accessoryManager?.detach(id) ?: false
+
+    fun setAccessoryVisible(id: String, visible: Boolean): Boolean =
+        accessoryManager?.setVisible(id, visible) ?: false
+
+    fun bindAccessoryToAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        accessoryManager?.bindToAnimation(accessoryId, animationClipPath) ?: false
+
+    fun unbindAccessoryFromAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        accessoryManager?.unbindFromAnimation(accessoryId, animationClipPath) ?: false
+
+    val accessoryAnimationBindings: Map<String, String>
+        get() = accessoryManager?.animationBindings ?: emptyMap()
+
+    fun accessoryStates(): List<AccessoryState> =
+        accessoryManager?.accessories?.value ?: emptyList()
 
     // ── Frustum Culling (avatar) ─────────────────────────────────────────
 
@@ -2147,6 +2292,7 @@ internal class SoulLinkRenderer(
         vrmaStartTime = System.nanoTime()
         vrmaEngine?.play(loop, speed, fadeSeconds, boneMask, extractor)
         pendingSpringReset = true
+        notifyVrmaStarted()
     }
 
     /** 速度 ≥ 此值（m/s）且配置了跑步步态时自动选用跑步（P2 跑步）。 */

@@ -518,4 +518,65 @@ class ShowDirectorTest {
         assertTrue("x=$iX y=$iY", iX in 0 until iY)
         assertEquals(ShowState.DONE, dir.state.value)
     }
+
+    // ── 幕次道具（P2 配饰生态，docs/accessory-feasibility.md §5.6）────────
+
+    @Test
+    fun `dance幕props开演挂收幕摘且在play两侧`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        val act = soloAct().copy(props = listOf("microphone", "lightstick"))
+        dir.start(script(act), listOf("A"), out = autoOut(dir, cmds), durationOf = { _, _ -> 3f })
+        advanceUntilIdle()
+        val iOn = cmds.mapIndexedNotNull { i, c -> if (c.startsWith("prop +")) i else null }
+        val iPlay = cmds.indexOf("play A animations/x.vrma")
+        val iOff = cmds.mapIndexedNotNull { i, c -> if (c.startsWith("prop -")) i else null }
+        assertEquals(listOf("prop +microphone @ A", "prop +lightstick @ A"), iOn.map { cmds[it] })
+        assertTrue("挂载须在起播前", iOn.all { it < iPlay })
+        assertEquals(listOf("prop -microphone @ A", "prop -lightstick @ A"), iOff.map { cmds[it] })
+        assertTrue("摘除须在收幕后", iOff.all { it > iPlay })
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `bow幕props全员挂全员摘`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "bow", props = listOf("lightstick"))),
+            listOf("A", "B"),
+            out = autoOut(dir, cmds),
+            durationOf = { _, _ -> 3f },
+        )
+        advanceUntilIdle()
+        assertTrue(cmds.containsAll(listOf("prop +lightstick @ A", "prop +lightstick @ B")))
+        assertTrue(cmds.containsAll(listOf("prop -lightstick @ A", "prop -lightstick @ B")))
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `group_dance幕props在StopDances前摘`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "group_dance", clip = "animations/g.vrma", seconds = 4f, props = listOf("hat"))),
+            listOf("A", "B"),
+            out = autoOut(dir, cmds),
+        )
+        advanceUntilIdle()
+        val iOff = cmds.indexOf("prop -hat @ A")
+        val iStop = cmds.indexOf("stop dances(fade=0.3)")
+        assertTrue("摘道具须在停舞指令前 iOff=$iOff iStop=$iStop", iOff in 0 until iStop)
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `无props幕零道具指令`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(script(soloAct()), listOf("A"), out = autoOut(dir, cmds), durationOf = { _, _ -> 3f })
+        advanceUntilIdle()
+        assertTrue(cmds.none { it.startsWith("prop ") })
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
 }

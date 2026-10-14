@@ -117,6 +117,12 @@ fun aiDebugHelp(): String = """
     |  clear_expression         Reset face to neutral
     |  play_animation <arg>     Play .vrma from assets/animations. ai_loop = true/false
     |  stop_animation           Stop animation (returns to idle if one is set)
+    |  accessory <sub>          Accessory family (P1.5): list / attach <id> [bone]
+    |                           [dx dy dz rx ry rz scale colliderR] / detach|show|hide
+    |                           <id> / bind|unbind <id> <animation path> / bindings /
+    |                           import <glb path> / cal [show|clear] <id>. Phone
+    |                           animations auto-show the phone via the built-in
+    |                           binding table (registered on model ready)
     |  set_idle <arg>           Set .vrma as looping idle (LLM gestures return to it).
     |                           arg = file name fragment; persist across restarts
     |  idle_off                 Clear idle; one-shots fall back to rest pose

@@ -36,15 +36,24 @@ data class AccessorySpec(
     val scale: Float = 1f,
     /** 阴影默认关（SPOT 阴影 + PCSS 在 Adreno 有真机悬崖）。 */
     val castShadows: Boolean = false,
+    /**
+     * 弹簧骨骼外部碰撞体半径（米，骨骼局部系；P2-3 帽子压头发实验，
+     * docs/accessory-feasibility.md §5.6）。>0 = 挂载时在 [bone] 上注册
+     * 一个球碰撞体（球心 = [position] 偏移），头发链被推出配饰外；卸载
+     * 时注销。0 = 关（默认，头手道具无头发穿插问题）。
+     */
+    val springColliderRadius: Float = 0f,
 ) {
     override fun equals(other: Any?): Boolean =
         other is AccessorySpec &&
             id == other.id && source == other.source && bone == other.bone &&
             position.contentEquals(other.position) &&
             rotationEulerYXZ.contentEquals(other.rotationEulerYXZ) &&
-            scale == other.scale && castShadows == other.castShadows
+            scale == other.scale && castShadows == other.castShadows &&
+            springColliderRadius == other.springColliderRadius
 
-    override fun hashCode(): Int = arrayOf(id, source, bone, scale, castShadows).contentHashCode()
+    override fun hashCode(): Int =
+        arrayOf(id, source, bone, scale, castShadows, springColliderRadius).contentHashCode()
 }
 
 /** 已挂载配饰的观测快照（调试命令 / LLM 观测用）。 */

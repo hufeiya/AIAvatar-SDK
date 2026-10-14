@@ -177,6 +177,7 @@ internal suspend fun executeAiCommand(
                 }
             }
             "play_animation" -> playAnimationCommand(context, controller, uiState, command)
+            "accessory" -> AccessoryTools.command(context, controller, command.arg)
             "stop_animation" -> {
                 controller.stopVrmaAnimation()
                 uiState.selectedAnimation = null
