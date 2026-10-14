@@ -120,6 +120,13 @@ class Strings(val lang: Lang) {
     val pipFront: String get() = zh("前", "Front")
     val pipBack: String get() = zh("后", "Back")
 
+    // 导航抽屉（跨 Activity 页面入口）
+    val drawerOpenA11y: String get() = zh("打开导航抽屉", "Open navigation drawer")
+    val drawerHeaderSubtitle: String get() = zh("虚拟人 Demo 合集", "Avatar demo collection")
+    val drawerHome: String get() = zh("主界面", "Home")
+    val drawerSimpleDemo: String get() = zh("最小接入演示", "Minimal demo")
+    val drawerMultiAvatar: String get() = zh("多虚拟人舞台", "Multi-Avatar Stage")
+
     // 输入框占位
     val placeholderNotConfigured: String get() = zh("先在 ⚙️ 设置里配置 AI 服务", "Configure the AI service in ⚙️ Settings first")
     val placeholderVideo: String get() = zh("说话（视频模式：每轮附相机画面）…", "Speak (video mode: each turn attaches a camera frame)…")

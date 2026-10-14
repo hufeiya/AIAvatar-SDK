@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -86,6 +88,7 @@ import com.neethu.aiadapter.openai.OpenAiCompatibleAsrAdapter
 import com.neethu.aiadapter.api.EmbeddingConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleEmbeddingAdapter
 import com.neethu.orchestrator.memory.memoryTextsOf
+import com.neethu.aiavatar_sdk.multiavatar.MultiAvatarActivity
 import com.neethu.aiavatar_sdk.ui.SECTION_AI
 import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
 import com.neethu.aiavatar_sdk.ui.SECTION_CARD
@@ -175,12 +178,36 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AIAvatarSDKTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    DemoScreen(
-                        modifier = Modifier.padding(innerPadding),
-                        uiState = remember { DemoUiState(applicationContext) },
-                        aiCommands = aiCommands,
-                    )
+                val uiState = remember { DemoUiState(applicationContext) }
+                val drawerState = rememberDrawerState(DrawerValue.Closed)
+                val scope = rememberCoroutineScope()
+                // 导航抽屉：跨 Activity 页面入口（最小接入演示/多虚拟人舞台）。
+                // 抽屉在 Scaffold 之外，铺满整窗（含状态栏后面）。
+                // gesturesEnabled 必须关：开启时全屏横滑都会被抽屉抢走，
+                // 相机旋转手势（AvatarView 视角拖拽）直接失效。
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    gesturesEnabled = false,
+                    drawerContent = {
+                        AppDrawerContent(
+                            strings = Strings(uiState.lang),
+                            onClose = { scope.launch { drawerState.close() } },
+                        )
+                    },
+                ) {
+                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                        DemoScreen(
+                            modifier = Modifier.padding(innerPadding),
+                            uiState = uiState,
+                            aiCommands = aiCommands,
+                            onOpenDrawer = { scope.launch { drawerState.open() } },
+                        )
+                    }
+                }
+                // gesturesEnabled=false 连带关掉了 material3 自带的「返回键收抽屉」，
+                // 不补这个会变成抽屉开着按返回直接退出应用
+                BackHandler(enabled = drawerState.isOpen) {
+                    scope.launch { drawerState.close() }
                 }
             }
         }
@@ -881,6 +908,7 @@ private fun DemoScreen(
     modifier: Modifier = Modifier,
     uiState: DemoUiState,
     aiCommands: Channel<AiDebugCommand>,
+    onOpenDrawer: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val controller = rememberAvatarController()
@@ -2521,7 +2549,7 @@ private fun DemoScreen(
             )
         }
 
-        // 左上角常驻控制：输入模式下拉框 + 按钮显隐开关（任务 4）
+        // 左上角常驻控制：抽屉开关 + 输入模式下拉框 + 按钮显隐开关（任务 4）
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -2529,6 +2557,7 @@ private fun DemoScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            DrawerToggle(onOpen = onOpenDrawer)
             InputModeSelector(
                 current = uiState.inputMode,
                 onSelect = { mode ->
@@ -3602,6 +3631,80 @@ private fun ButtonsToggle(
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+        )
+    }
+}
+
+/** 左上角抽屉开关（汉堡图标）：样式与旁边的模式下拉框/显隐开关一致。 */
+@Composable
+private fun DrawerToggle(
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Black.copy(alpha = 0.45f),
+        modifier = modifier,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Menu,
+            contentDescription = LocalStrings.current.drawerOpenA11y,
+            tint = Color.White,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)
+        )
+    }
+}
+
+/**
+ * 导航抽屉内容：本 App 全部 Activity 的页面入口。主界面=当前页（点击仅收起），
+ * 其余条目点击后 startActivity 跳转（主界面留在返回栈，返回即回主界面）。
+ * 组合位置在 DemoScreen 的 CompositionLocalProvider 之外，文案由调用方显式传入。
+ */
+@Composable
+private fun AppDrawerContent(
+    strings: Strings,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    ModalDrawerSheet {
+        // 抽屉头：应用名 + 一句话说明
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = "AIAvatar-SDK",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = strings.drawerHeaderSubtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        HorizontalDivider()
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Default.Home, contentDescription = null) },
+            label = { Text(text = strings.drawerHome + strings.currentSuffix) },
+            selected = true,
+            onClick = onClose,
+        )
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Default.Person, contentDescription = null) },
+            label = { Text(text = strings.drawerSimpleDemo) },
+            selected = false,
+            onClick = {
+                onClose()
+                context.startActivity(Intent(context, SimpleDemoActivity::class.java))
+            },
+        )
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Default.Face, contentDescription = null) },
+            label = { Text(text = strings.drawerMultiAvatar) },
+            selected = false,
+            onClick = {
+                onClose()
+                context.startActivity(Intent(context, MultiAvatarActivity::class.java))
+            },
         )
     }
 }
