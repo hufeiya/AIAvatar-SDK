@@ -1,7 +1,8 @@
 # 虚拟人配饰系统（Accessory）可行性调研与落地方案
 
 > 生成时间：2026-10-14。对应代码状态：`main@22fc607`（团播 P2 之后），**本文档只是调研，尚未开发**。
-> **2026-10-14 更新：P0 已落地并真机验收通过**（corelib `accessory/` 包 + `acc` 命令族 + phone.glb 内置），验收数据与两处方案修正见 §七 P0 的「验收实录」；P1（动画联动/资产包/外置导入）未开始。
+> **2026-10-14 更新：P0 已落地并真机验收通过**（corelib `accessory/` 包 + `acc` 命令族 + phone.glb 内置），验收数据与两处方案修正见 §七 P0 的「验收实录」。
+> **2026-10-14 更新：P1 已落地并真机验收通过**（VrmaStarted 事件 + 动画绑定状态机 + 内置资产包 9 件 + sidecar/bindings 解析 + 外置导入 + per-model 校准 preset），验收实录见 §七 P1；仅 SoulLinkRenderer 单人路径桥接未做（P1.5，转入 P2 连同 LLM 工具一起排）。
 > 示例资产已实际下载/生成并校验，位于 [tools/accessory-samples/](../tools/accessory-samples/)（部分已转正进 app assets：`accessories/phone.glb`）。
 > 回答三个问题：①配饰资产要什么格式？②去哪里获取？③能不能在播 VRMA 动画时自动挂上/摘下（玩手机动画→手机只在动画中出现）？
 > 历史注记：`docs/agent-tools-expansion.md:25` 曾把「道具挂载」判定为不做（估数周级渲染器工程）。本文重估：全功能 socket/淡入淡出/碰撞系统确实大，但**刚性挂载最小闭环**在现有代码锚点上小得多（§四、§七）。
@@ -252,7 +253,7 @@ per-model 校准覆盖：`filesDir/accessories/calibration/<modelId>/<accessoryI
 
 实现备注：骨骼挂点解析在 bind 时一次解析全语义表（`HumanoidBoneResolver.resolveAll`），替代既有「每个语义重复解析一遍 GLB JSON」的私有方法（AvatarRuntime 自身绑定与配饰挂点共用同一张表）；配饰用独立 `ResourceLoader`（同步 `loadResources`，与演员异步管线隔离）。
 
-### P1 动画联动 + 内置资产包 + 外置导入（约 2 人日）
+### P1 动画联动 + 内置资产包 + 外置导入（约 2 人日）——✅已完成（2026-10-14，真机验收通过）
 
 1. corelib：`VrmaStarted` 事件（对齐 onVrmaFinished 形态）；bindToAnimation 绑定表 + crossfade 窗口状态机；打断/loop 顶替边界单测。
 2. 内置资产包：从 Kenney 选 6~10 件（radio/话筒类/帽子类逐个真机校准）+ `LICENSES.md`；`accessory.json` sidecar 解析（kotlinx.serialization，org.json 禁用惯例）。
@@ -260,6 +261,34 @@ per-model 校准覆盖：`filesDir/accessories/calibration/<modelId>/<accessoryI
 4. `ai_cmd accessory attach/detach/list/cal` 命令族 + `accessory cal` 真机标定回写 preset。
 5. SoulLinkRenderer 单人路径桥接（或确认 demo 主视图迁 Stage 后免掉）。
 6. **验收**：「播玩手机动画手机自动出现、播完消失、打断消失、连播两个手机动画不闪烁」全链真机录屏。
+
+**实现要点（2026-10-14）**：
+
+- 状态机抽成纯逻辑类 `AccessoryAnimationBinder`（零 Android 依赖，调度器注入：生产=主线程 Handler、单测=手动泵），以「当前激活剪辑」为准：`onStarted` 命中绑定→自动挂载+显示+撤回同配饰待隐藏；`onFinished` 只认当前剪辑、延迟 250ms 隐藏。**loop 顶替不发 Finished 的边界（§八 风险 7）由 onStarted 的剪辑切换路径兜住**，打断（含 walk_to 步态起播顶替）同路径。
+- `VrmaStarted(avatarId, clipPath, loop)` 在 `notifyVrmaStarted` 统一发射（公开播放入口与走动内部播放共用，`vrmaEngine.isActive()` 门防空转）；先同步喂本演员配饰状态机（同帧出道具）再对外中继 flow。
+- **绑定键归一**：bindings.json 写类别相对路径、STAGE_CMD play 传全路径——binder 两侧统一剥 `animations/` 前缀（真机首轮踩坑：前缀不一致导致白名单查不到、手机不出）。
+- 挂载规格三层合并：sidecar 默认 → per-model 校准 preset（`filesDir/accessories/calibration/<模型文件名>/<accessoryId>.json`）→ 命令显式参数；自动挂载经 `Stage.accessorySpecResolver`（(modelId, accessoryId)→spec，AvatarStage 门面存值 attach 时补推）。modelId=模型文件名（`AvatarRuntime.modelKey`）。
+- 外置导入走 adb 通道（对齐 import_model 实际工作流）：`adb push` → `acc import <名>` → filesDir/accessories/，id=文件名 stem，`AccessorySource.File` 挂载；未做 SAF UI（单人 DemoScreen 专属，本特性不涉）。
+- 资产包 9 件全 CC0：phone（自制）+ Kenney 家具包 8 件（radio/bear/books/laptop/pillow/speaker/trashcan/box），单件 3~25KB 全 unlit 自动转 PBR，`LICENSES.md` 集中记录；bindings.json 收 8 条手机类动画→phone（`07_日常互动/` 现成素材零采购）。
+
+**验收实录（2c3769db 真机，2026-10-14，10.vrm=A / 4705=B 双模型）**：
+
+| 清单项 | 结果 | 数据 |
+|---|---|---|
+| 目录/绑定装载 | ✅ | `acc list` → catalog(9) + bindings(8)；SlotBootstrap 就绪自动注册 |
+| **核心场景：播玩手机自动出手机** | ✅ 零手动 attach | `play A …/Standing Texting On Phone.vrma` → AccessoryManager 自动 attach 日志 + 截图手机在胸跟手，发光屏朝向正确 |
+| 播完消失 | ✅ | 18.5s 播完回 idle 截图无残留 |
+| 打断消失（walk_to 顶替） | ✅ | texting 播中 walk → 步态起播手机消失（onStarted 剪辑切换路径） |
+| 连播不闪烁 | ✅ | texting 播中顶替 talking（贴耳）→ 手机持续在场无消失再现 |
+| 4705（VRM0.x）校准闭环 | ✅ | 默认屏幕朝后 → `acc attach B phone rightHand 0 0.06 0.06 0 180 0 1` 校正 → `acc cal B phone` 落盘（run-as 验 JSON）→ 无参 attach 自动带 preset |
+| B 动画联动带 preset | ✅ | 自动 attach 日志 pos=[0,0.06,0.06] rot=[0,180,0]（三层合并生效） |
+| 头戴件 | ✅ | trashcan@head 头顶正立（节目效果成立）；radio@rightHand 挂载正常 |
+| 外置导入 | ✅ | push→`acc import myradio.glb`→`acc attach B myradio`（File 通道绝对路径） |
+| attach/detach ×10 循环 | ✅ 零泄漏零崩溃 | logcat 零 FATAL；PSS 1.772GB 持平（P0 基线 1.78GB） |
+| fps | ✅ 带内 | 双人 GROUP_SHOT fps=52（P0 基线 50~54）；自动挂载瞬间无掉帧感知 |
+| 单测 | ✅ | binder 11 例（含前缀归一/loop 顶替/迟到 Finished/窗口撤回）+ 全量 corelib+app 回归通过 |
+
+实现备注：`acc cal` 的数据源是路由器记录的「最近一次 attach 成功规格」（lastAttachSpecs per-slot）；binder 对已挂载可见配饰的重复 show 由 `setVisible` 幂等早退承接，无场景扰动。**P1.5 SoulLinkRenderer 单人路径桥接未做**——单人 SimpleDemo 主视图未迁 Stage，桥接需抽 AccessoryHost 接口 + 单人路径独立真机一轮，转入 P2 与 LLM 工具联动一起排期；Stage 路径（团播主线+验收通道）已全量覆盖。
 
 ### P2 生态联动（约 2~3 人日）
 

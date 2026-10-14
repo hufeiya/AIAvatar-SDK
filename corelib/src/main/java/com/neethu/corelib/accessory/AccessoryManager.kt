@@ -1,5 +1,7 @@
 package com.neethu.corelib.accessory
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.google.android.filament.gltfio.FilamentAsset
 import com.neethu.corelib.RenderMode
@@ -23,12 +25,16 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * @param resolveBone 语义骨骼名 → 实体（AvatarRuntime 注入 bind 时解析好
  *   的全语义表；0 = 未解析）。
+ * @param resolveSpec 配饰 ID → 挂载规格（动画联动自动挂载用；app 层经
+ *   Stage.accessorySpecResolver 注入 sidecar 默认+per-model 校准的合并结果；
+ *   null/查不到 = 该配饰的绑定静默无效）。
  * @param ownerTag 日志前缀（演员 ID）。
  */
 internal class AccessoryManager(
     private val stage: Stage,
     private val resolveBone: (String) -> Int,
     private val ownerTag: String,
+    private val resolveSpec: ((String) -> AccessorySpec?)? = null,
 ) : AccessoryController {
 
     private class Instance(
@@ -38,6 +44,19 @@ internal class AccessoryManager(
     )
 
     private val instances = LinkedHashMap<String, Instance>()
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** 动画联动状态机（纯逻辑，调度走主线程 Handler；show/hide 回调本类）。 */
+    private val binder = AccessoryAnimationBinder(
+        scheduler = { delayMs, action ->
+            val token = Runnable { action() }
+            handler.postDelayed(token, delayMs)
+            AccessoryAnimationBinder.Cancelable { handler.removeCallbacks(token) }
+        },
+        show = ::ensurePresent,
+        hide = { id -> if (instances.containsKey(id)) setVisible(id, false) },
+    )
 
     private val _accessories = MutableStateFlow<List<AccessoryState>>(emptyList())
     override val accessories: StateFlow<List<AccessoryState>> = _accessories.asStateFlow()
@@ -142,6 +161,45 @@ internal class AccessoryManager(
     fun destroyAll() {
         val ids = instances.keys.toList()
         for (id in ids) detach(id)
+    }
+
+    // ── 动画联动（AvatarRuntime 在播放/收尾点同步通知；白名单见 Binder）──
+
+    /** VRMA 起播（含走动步态/overlay 内部播放）：状态机按绑定表显隐。 */
+    fun onVrmaStarted(clipPath: String) {
+        binder.onStarted(clipPath)
+    }
+
+    /** VRMA 收尾（播完/停播/被顶替翻沿）：状态机延迟隐藏命中的配饰。 */
+    fun onVrmaFinished(clipPath: String) {
+        binder.onFinished(clipPath)
+    }
+
+    override fun bindToAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        binder.bind(animationClipPath, accessoryId)
+
+    override fun unbindFromAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        binder.unbind(animationClipPath, accessoryId)
+
+    override val animationBindings: Map<String, String>
+        get() = binder.snapshot()
+
+    /**
+     * 绑定命中的在场保证：未挂载则经解析器自动挂载（sidecar+校准规格），
+     * 已挂载则只显。解析失败（未知配饰 ID）静默降级——绑定表是显式白名单，
+     * 缺资产不该在动画播放路径上抛错。
+     */
+    private fun ensurePresent(id: String) {
+        if (instances.containsKey(id)) {
+            setVisible(id, true)
+            return
+        }
+        val spec = resolveSpec?.invoke(id)
+        if (spec == null) {
+            Log.w(TAG, "$ownerTag bind hit '$id' but no spec resolver/entry; skipped")
+            return
+        }
+        attach(spec).onFailure { Log.w(TAG, "$ownerTag auto-attach '$id' failed: ${it.message}") }
     }
 
     private fun publish() {

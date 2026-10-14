@@ -1,0 +1,10 @@
+[
+  { "animation": "07_日常互动/Standing Texting On Phone.vrma", "accessory": "phone", "note": "胸前打字,手机在右手" },
+  { "animation": "07_日常互动/Texting On A Smart Phone While Standing.vrma", "accessory": "phone" },
+  { "animation": "07_日常互动/Male Talking On The Cell Phone.vrma", "accessory": "phone", "note": "贴耳打电话,手机仍由手举着" },
+  { "animation": "07_日常互动/Female Standing Talking On Phone.vrma", "accessory": "phone" },
+  { "animation": "07_日常互动/Female Walking And Texting On Phone.vrma", "accessory": "phone", "note": "边走边看手机(完整步行剪辑)" },
+  { "animation": "07_日常互动/Male Walking While Texting On A Smartphone.vrma", "accessory": "phone" },
+  { "animation": "07_日常互动/Female Answers A Phone While Walking.vrma", "accessory": "phone" },
+  { "animation": "07_日常互动/Female Using Touchscreen Tablet.vrma", "accessory": "phone", "note": "平板动画先复用手机(同手持语义)" }
+]

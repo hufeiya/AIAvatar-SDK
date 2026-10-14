@@ -39,7 +39,27 @@ class AvatarStage internal constructor(
 ) : DefaultLifecycleObserver {
 
     internal var impl: Stage? = null
-        private set
+
+    /**
+     * 配饰挂载规格解析注入（动画联动自动挂载，P1 docs/accessory-feasibility.md
+     * §5.4）：入参（modelId, accessoryId），modelId = 模型文件名（per-model
+     * 校准 key）。值存在门面字段上（attach 前注入也不丢），attachToView 时
+     * 补推给 [Stage]。
+     */
+    private var _accessorySpecResolver: ((
+        modelId: String,
+        accessoryId: String,
+    ) -> com.neethu.corelib.accessory.AccessorySpec?)? = null
+
+    var accessorySpecResolver: ((
+        modelId: String,
+        accessoryId: String,
+    ) -> com.neethu.corelib.accessory.AccessorySpec?)?
+        get() = _accessorySpecResolver
+        set(value) {
+            _accessorySpecResolver = value
+            impl?.accessorySpecResolver = value
+        }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -88,11 +108,12 @@ class AvatarStage internal constructor(
         val stage = impl ?: error("AvatarStage not attached to a view yet")
         val id = (++runtimeSeq).let { n -> ('A' + n - 1).toString() }
         val runtime = stage.createRuntime(id)
+        val pathKey = spec.modelAssetPath ?: spec.modelFilePath ?: "?"
+        runtime.modelKey = pathKey.substringAfterLast('/')
         val handle = AvatarHandle(id, spec, runtime, this)
         implHandles.add(handle)
         _avatarsVersion.value += 1
 
-        val pathKey = spec.modelAssetPath ?: spec.modelFilePath ?: "?"
         handle.setState(AvatarState.Loading(pathKey))
 
         scope.launch {
@@ -245,6 +266,8 @@ class AvatarStage internal constructor(
         stage.startup()
         // fps 回调在这里接（Stage 每帧回调 → 门面 StateFlow）
         stage.onFpsUpdated = { value -> _fps.value = value }
+        // attach 前注入的配饰解析器在此补推（门面存住值，impl 时序无关）
+        stage.accessorySpecResolver = _accessorySpecResolver
         _attached.value = true
     }
 

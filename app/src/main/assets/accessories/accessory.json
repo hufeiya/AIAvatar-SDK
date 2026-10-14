@@ -1,0 +1,94 @@
+{
+  "accessories": [
+    {
+      "id": "phone",
+      "name": "智能手机",
+      "file": "phone.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-phone-glb.js)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.03],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "radio",
+      "name": "手提收音机",
+      "file": "radio.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.05],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "bear",
+      "name": "泰迪熊",
+      "file": "bear.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "leftHand",
+      "position": [0, 0.08, 0.06],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "books",
+      "name": "一摞书",
+      "file": "books.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "leftHand",
+      "position": [0, 0.02, 0.04],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "laptop",
+      "name": "笔记本电脑",
+      "file": "laptop.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.06],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "pillow",
+      "name": "抱枕",
+      "file": "pillow.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "leftHand",
+      "position": [0, 0.05, 0.06],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "speaker",
+      "name": "手提音箱",
+      "file": "speakerSmall.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "rightHand",
+      "position": [0, 0.02, 0.05],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "trashcan",
+      "name": "头顶垃圾桶(节目效果)",
+      "file": "trashcan.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "head",
+      "position": [0, 0.15, 0],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    },
+    {
+      "id": "box",
+      "name": "头顶纸箱(节目效果)",
+      "file": "cardboardBoxClosed.glb",
+      "license": "CC0 (Kenney Furniture Kit)",
+      "defaultBone": "head",
+      "position": [0, 0.12, 0],
+      "rotationEulerYXZ": [0, 0, 0],
+      "scale": 1.0
+    }
+  ]
+}

@@ -170,6 +170,14 @@ private fun MultiAvatarScreen() {
         DanceShowController(context, stage, slots, rig) { msg -> lastLog = msg.take(120) }
             .also { (context as? MultiAvatarActivity)?.showRef = it }
     }
+    // P1 配饰：规格解析器注入（动画联动自动挂载；sidecar 默认+per-model 校准合并）
+    LaunchedEffect(stage) {
+        stage.accessorySpecResolver = { modelId, accId ->
+            AccessoryCatalog.find(context, accId)?.let {
+                AccessoryCatalog.specFor(context, modelId, it)
+            }
+        }
+    }
     // 演出状态（P2：聊天框输入在演出中切换为点播路由）
     val showState by show.state.collectAsState()
     // 关闭顺序：先停演出（导演协程/事件收集还引用 rig）再关聊天装配
@@ -276,9 +284,10 @@ private fun onStageEvent(slotId: String, event: AvatarEvent, transcript: Mutable
     while (transcript.size > 60) transcript.removeAt(0)
 }
 
-/** 槽位就绪后挂 idle + 默认走动步态 + 上线聊天（呼吸/眨眼引擎默认开，无需接线）。 */
+/** 槽位就绪后挂 idle + 默认走动步态 + 配饰动画绑定表 + 上线聊天（呼吸/眨眼引擎默认开，无需接线）。 */
 @Composable
 private fun SlotBootstrap(slotEntries: List<Pair<String, AvatarHandle?>>, rig: StageChatRig) {
+    val context = LocalContext.current
     slotEntries.forEach { (id, slot) ->
         if (slot == null) return@forEach
         val state by slot.state.collectAsState()
@@ -286,6 +295,10 @@ private fun SlotBootstrap(slotEntries: List<Pair<String, AvatarHandle?>>, rig: S
             if (state is AvatarState.Ready) {
                 slot.setVrmaIdleAnimation(DEFAULT_IDLE)
                 slot.setWalkGait(DEFAULT_WALK_CLIP, DEFAULT_WALK_BASE_SPEED)
+                // P1 配饰：bindings.json 白名单（玩手机动画自动出手机等），重复注册幂等
+                AccessoryCatalog.loadBindings(context).forEach { b ->
+                    slot.bindAccessoryToAnimation(b.accessory, b.animation)
+                }
                 rig.ensureSlot(id, slot)
             }
         }
@@ -743,13 +756,18 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "dance polish [on|off]"    # 串场词润色（默认关，失败降级原文）
  * ... --es cmd "dance log"                # 导播决策日志（点播/润色/插幕全程可复盘）
  * ```
- * 配饰（P0，docs/accessory-feasibility.md §7）：
+ * 配饰（P0 挂载 + P1 动画联动/导入/校准，docs/accessory-feasibility.md §7）：
  * ```
- * ... --es cmd "acc list"                 # 内置配饰清单 + 各槽已挂快照
- * ... --es cmd "acc attach A phone"       # 挂手机到默认骨（rightHand）
- * ... --es cmd "acc attach A phone head 0 0.1 0 0 0 0 1"   # 换挂点+偏移（米/度/校准系数）
+ * ... --es cmd "acc list"                 # 目录（内置+导入）+ 绑定表 + 各槽已挂快照
+ * ... --es cmd "acc attach A phone"       # 挂手机（sidecar 默认+该模型校准 preset 合并）
+ * ... --es cmd "acc attach A phone head 0 0.1 0 0 0 0 1"   # 显式参数覆盖（米/度/校准系数）
  * ... --es cmd "acc detach A phone"       # 卸载
  * ... --es cmd "acc show|hide A phone"    # 显隐（不卸载）
+ * ... --es cmd "acc import <glb路径>"     # 外置 GLB → filesDir/accessories/（adb push 先行）
+ * ... --es cmd "acc cal A phone"          # 把 A 当前挂载规格落成 per-model 校准 preset
+ * ... --es cmd "acc cal show|clear A phone"   # 查看/删除 preset
+ * ... --es cmd "acc bind A radio <动画路径>"   # 追加动画绑定（白名单；玩手机动画自动出手机即内置表）
+ * ... --es cmd "acc bindings [A]"         # 查看绑定表
  * ```
  * 演出中聊天框文本自动走点播路由（演出归导演）；演出收场后可 topic 开题
  * 圆桌点评（两套节目形态合流，§7-P2 彩蛋）。
@@ -770,6 +788,17 @@ private class StageCommandRouter(
     private fun log(msg: String) {
         Log.i(TAG, msg)
         onLog(msg.take(120))
+    }
+
+    /** 各槽位最近一次 attach 成功的规格（`acc cal` 落 preset 的数据源）。 */
+    private val lastAttachSpecs = mutableMapOf<String, MutableMap<String, AccessorySpec>>()
+
+    /** 外部文件解析：绝对路径优先，回落 app 外部目录相对名（import_model 同款）。 */
+    private fun resolveExternalFile(arg: String): File? {
+        val absolute = File(arg)
+        if (absolute.isFile) return absolute
+        val external = context.getExternalFilesDir(null) ?: return null
+        return File(external, arg.removePrefix("/")).takeIf { it.isFile }
     }
 
     override fun onReceive(ctx: Context, intent: Intent) {
@@ -918,13 +947,17 @@ private class StageCommandRouter(
             // ── P0 渲染类 ────────────────────────────────────────────────
             "shot" -> captureShot()
 
-            // ── 配饰（P0,docs/accessory-feasibility.md §7）───────────────
+            // ── 配饰（P0 挂载 + P1 动画联动/导入/校准，docs/accessory-feasibility.md §7）──
             "acc" -> {
                 when (t.getOrNull(1)?.lowercase()) {
                     "list" -> {
-                        log("built-in: " + AccessoryCatalog.all.joinToString(", ") {
-                            "${it.id}(${it.license}, bone=${it.defaultBone})"
+                        val all = AccessoryCatalog.all(context)
+                        log("catalog(${all.size}): " + all.joinToString(", ") { e ->
+                            "${e.id}(${e.license}, bone=${e.defaultBone}" +
+                                (if (e.source is AccessorySource.File) ", imported" else "") + ")"
                         })
+                        val bound = AccessoryCatalog.loadBindings(context)
+                        log("bindings(${bound.size}): " + bound.joinToString(", ") { "${it.accessory}←${it.animation.substringAfterLast('/')}" })
                         for ((slotId, h) in slots.entries()) {
                             val list = h?.accessories?.value.orEmpty()
                             if (list.isNotEmpty()) {
@@ -936,23 +969,27 @@ private class StageCommandRouter(
                     }
                     "attach" -> {
                         // acc attach <slot> <id> [bone] [dx dy dz rx ry rz scale]
+                        //（显式参数逐层覆盖：命令参数 > per-model 校准 preset > sidecar 默认）
                         val h = slots[t.getOrNull(2) ?: ""]
                             ?: return log("usage: acc attach <slot> <id> [bone] [dx dy dz rx ry rz scale]")
-                        val entry = AccessoryCatalog.find(t.getOrNull(3) ?: "")
+                        val entry = AccessoryCatalog.find(context, t.getOrNull(3) ?: "")
                             ?: return log("unknown accessory '${t.getOrNull(3)}' (try acc list)")
-                        val bone = t.getOrNull(4) ?: entry.defaultBone
                         val nums = t.drop(5).mapNotNull { it.toFloatOrNull() }
                         if (t.drop(5).size != nums.size) return log("offset args must be numbers")
-                        val spec = AccessorySpec(
-                            id = entry.id,
-                            source = AccessorySource.Asset(entry.assetPath),
-                            bone = bone,
-                            position = nums.take(3).ifEmpty { entry.position.toList() }.toFloatArray(),
-                            rotationEulerYXZ = nums.drop(3).take(3).ifEmpty { entry.rotationEulerYXZ.toList() }.toFloatArray(),
-                            scale = nums.getOrNull(6) ?: entry.scale,
+                        val spec = AccessoryCatalog.specFor(
+                            context,
+                            modelId = h.spec.displayName,
+                            entry = entry,
+                            boneOverride = t.getOrNull(4),
+                            positionOverride = nums.take(3).takeIf { it.size == 3 }?.toFloatArray(),
+                            rotationOverride = nums.drop(3).take(3).takeIf { it.size == 3 }?.toFloatArray(),
+                            scaleOverride = nums.getOrNull(6),
                         )
                         h.attachAccessory(spec)
-                            .onSuccess { log("acc ${t[2]} attach ${entry.id}@$bone ok (pos=${spec.position.contentToString()} rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale})") }
+                            .onSuccess {
+                                lastAttachSpecs.getOrPut(t[2].uppercase()) { mutableMapOf() }[entry.id] = spec
+                                log("acc ${t[2]} attach ${entry.id}@${spec.bone} ok (pos=${spec.position.contentToString()} rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale})")
+                            }
                             .onFailure { log("acc attach failed: ${it.message}") }
                     }
                     "detach" -> {
@@ -966,7 +1003,88 @@ private class StageCommandRouter(
                         val visible = t[1].equals("show", true)
                         log(if (h.setAccessoryVisible(id, visible)) "acc $id ${if (visible) "shown" else "hidden"}" else "no accessory $id")
                     }
-                    else -> log("usage: acc [list|attach <slot> <id> [bone] [dx dy dz rx ry rz scale]|detach <slot> <id>|show|hide <slot> <id>]")
+                    "import" -> {
+                        // acc import <文件路径...>（绝对路径或 app 外部目录相对；adb push 先行）
+                        val raw = t.drop(2).joinToString(" ").trim()
+                        if (raw.isEmpty()) return log("usage: acc import <glb路径>（adb push 到 app 外部目录后按名引用）")
+                        runCatching {
+                            val src = resolveExternalFile(raw)
+                                ?: return log("no file at '$raw' (push it to ${context.getExternalFilesDir(null)?.absolutePath})")
+                            val name = ImportedAccessoryLibrary.importFile(context, src)
+                                ?: return log("import failed: not a GLB or unwritable '$raw'")
+                            log("acc import ok: $name (id=${name.removeSuffix(".glb")})")
+                        }.onFailure { log("acc import failed: ${it.message}") }
+                    }
+                    "cal" -> {
+                        // acc cal <slot> <id>            把该演员当前挂载规格落成 per-model preset
+                        // acc cal clear <slot> <id>      删除 preset
+                        // acc cal show <slot> <id>       查看 preset
+                        when (t.getOrNull(2)?.lowercase()) {
+                            "clear" -> {
+                                val slotId = t.getOrNull(3) ?: return log("usage: acc cal clear <slot> <id>")
+                                val id = t.getOrNull(4) ?: return log("usage: acc cal clear <slot> <id>")
+                                val modelId = slots[slotId]?.spec?.displayName ?: return log("no avatar $slotId")
+                                val gone = AccessoryCalibrationStore.clear(context, modelId, id)
+                                log("acc cal clear $id@$modelId = $gone")
+                            }
+                            "show" -> {
+                                val slotId = t.getOrNull(3) ?: return log("usage: acc cal show <slot> <id>")
+                                val id = t.getOrNull(4) ?: return log("usage: acc cal show <slot> <id>")
+                                val modelId = slots[slotId]?.spec?.displayName ?: return log("no avatar $slotId")
+                                val p = AccessoryCalibrationStore.load(context, modelId, id)
+                                log("acc cal $id@$modelId = ${p ?: "none"}")
+                            }
+                            else -> {
+                                val slotId = t.getOrNull(2) ?: return log("usage: acc cal <slot> <id> [clear|show <slot> <id>]")
+                                val id = t.getOrNull(3) ?: return log("usage: acc cal <slot> <id> [clear|show <slot> <id>]")
+                                val h = slots[slotId] ?: return log("no avatar $slotId")
+                                val spec = lastAttachSpecs[slotId.uppercase()]?.get(id)
+                                    ?: return log("no attach record for $id on $slotId (acc attach first, then acc cal)")
+                                val modelId = h.spec.displayName
+                                AccessoryCalibrationStore.save(
+                                    context, modelId, id,
+                                    AccessoryCalibrationStore.Preset(
+                                        bone = spec.bone,
+                                        position = spec.position.toList(),
+                                        rotationEulerYXZ = spec.rotationEulerYXZ.toList(),
+                                        scale = spec.scale,
+                                    ),
+                                ).onSuccess {
+                                    log("acc cal $id@$modelId saved: bone=${spec.bone} pos=${spec.position.contentToString()} rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale}")
+                                }.onFailure { log("acc cal save failed: ${it.message}") }
+                            }
+                        }
+                    }
+                    "bind" -> {
+                        // acc bind <slot> <id> <动画路径...>（运行时追加白名单；SlotBootstrap 已载入内置表）
+                        val h = slots[t.getOrNull(2) ?: ""] ?: return log("usage: acc bind <slot> <id> <动画路径...>")
+                        val id = t.getOrNull(3) ?: return log("usage: acc bind <slot> <id> <动画路径...>")
+                        val clip = t.drop(4).joinToString(" ").trim()
+                        if (clip.isEmpty()) return log("usage: acc bind <slot> <id> <动画路径...>")
+                        log(if (h.bindAccessoryToAnimation(id, clip)) "acc bind $id ← $clip ok" else "bind rejected")
+                    }
+                    "unbind" -> {
+                        val h = slots[t.getOrNull(2) ?: ""] ?: return log("usage: acc unbind <slot> <id> <动画路径...>")
+                        val id = t.getOrNull(3) ?: return log("usage: acc unbind <slot> <id> <动画路径...>")
+                        val clip = t.drop(4).joinToString(" ").trim()
+                        log(if (h.unbindAccessoryFromAnimation(id, clip)) "acc unbind $id ← $clip ok" else "no such binding")
+                    }
+                    "bindings" -> {
+                        val slotId = t.getOrNull(2)
+                        if (slotId == null) {
+                            for ((sid, h) in slots.entries()) {
+                                h?.let { log("  $sid: " + it.accessoryAnimationBindings.entries.joinToString(", ") { (c, a) -> "$a←${c.substringAfterLast('/')}" }) }
+                            }
+                        } else {
+                            val h = slots[slotId] ?: return log("no avatar $slotId")
+                            log("bindings[$slotId]: " + h.accessoryAnimationBindings.entries.joinToString(", ") { (c, a) -> "$a←$c" })
+                        }
+                    }
+                    else -> log(
+                        "usage: acc [list|attach <slot> <id> [bone] [dx dy dz rx ry rz scale]|detach <slot> <id>|" +
+                            "show|hide <slot> <id>|import <glb路径>|cal <slot> <id> [clear|show]|" +
+                            "bind|unbind <slot> <id> <动画路径...>|bindings [slot]]",
+                    )
                 }
             }
 

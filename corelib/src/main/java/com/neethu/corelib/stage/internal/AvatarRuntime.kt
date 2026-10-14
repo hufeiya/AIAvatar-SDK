@@ -79,7 +79,10 @@ internal class AvatarRuntime(
     internal var springBoneManager: VrmSpringBoneManager? = null
     private var pendingSpringReset: Boolean = false
 
-    // ── 配饰（docs/accessory-feasibility.md P0;每演员一份独立实例）───────
+    // ── 配饰（docs/accessory-feasibility.md P0/P1;每演员一份独立实例）────
+
+    /** 模型文件名（per-model 校准 preset 的 key；loadAvatar 时由舞台写入）。 */
+    var modelKey: String = ""
 
     /** 配饰控制器（懒建；挂点查询走 bind 时解析好的 [boneSemantics]）。 */
     val accessories: AccessoryManager by lazy {
@@ -87,8 +90,19 @@ internal class AvatarRuntime(
             stage = stage,
             ownerTag = "avatar $id",
             resolveBone = { semantic -> boneSemantics[semantic.lowercase()] ?: 0 },
+            resolveSpec = { accId -> stage.accessorySpecResolver?.invoke(modelKey, accId) },
         )
     }
+
+    /** 最近一次成功加载的 VRMA 剪辑路径 + loop 标志（VrmaStarted 载荷）。 */
+    private var currentVrmaPath: String? = null
+    private var currentVrmaLoop = false
+
+    /**
+     * VRMA 起播事件（含走动步态等内部播放），[AvatarHandle] 中继为 flow；
+     * 配饰动画联动的「出道具」沿（同帧同步通知本演员的配饰状态机）。
+     */
+    var onVrmaStarted: ((String, String, Boolean) -> Unit)? = null
 
     // ── hips 拖拽（three-vrm mouse.html 语义）────────────────────────────
 
@@ -398,6 +412,7 @@ internal class AvatarRuntime(
             (animator != null && currentAnimationIndex >= 0 && !isAnimationLooping)
         mimicEngine?.update(dt, nowElapsedMs, animationWrote, oneShotActive)
         if (prevOneShotActive && !oneShotActive) {
+            currentVrmaPath?.let { accessories.onVrmaFinished(it) }
             onVrmaFinished?.invoke(id)
         }
         prevOneShotActive = oneShotActive
@@ -652,7 +667,20 @@ internal class AvatarRuntime(
         currentAnimationIndex = -1
         vrmaStartTime = System.nanoTime()
         vrmaEngine?.play(loop, speed, fadeSeconds, boneMask, extractor)
+        notifyVrmaStarted(loop)
         pendingSpringReset = true
+    }
+
+    /**
+     * VrmaStarted 统一发射点（公开播放入口与走动内部播放共用）：引擎确有
+     * 剪辑在播才发（load 失败后照调 play 的空转不发）；先同步喂本演员的
+     * 配饰状态机（动画联动零延迟、同帧出道具），再对外回调/中继 flow。
+     */
+    private fun notifyVrmaStarted(loop: Boolean) {
+        if (vrmaEngine?.isActive() != true) return
+        val path = currentVrmaPath ?: return
+        accessories.onVrmaStarted(path)
+        onVrmaStarted?.invoke(id, path, loop)
     }
 
     fun startWalk(targetX: Float, targetZ: Float, speed: Float): WalkStartResult {
@@ -898,6 +926,7 @@ internal class AvatarRuntime(
     fun loadVrmaAnimation(assetsPath: String): Boolean {
         val animation = stage.vrmaClipOrNull(assetsPath) ?: return false
         vrmaEngine?.setAnimation(animation)
+        currentVrmaPath = assetsPath
         return true
     }
 
@@ -933,6 +962,7 @@ internal class AvatarRuntime(
         val mask = if (overlayGesture) VrmaAnimationEngine.UPPER_BODY_BONES else boneMask
         val fade = if (overlayGesture && fadeSeconds <= 0f) 0.2f else fadeSeconds
         vrmaEngine?.play(loop, speed, fade, mask, null)
+        notifyVrmaStarted(loop)
         pendingSpringReset = true
     }
 

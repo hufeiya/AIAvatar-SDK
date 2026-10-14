@@ -9,6 +9,7 @@ import com.neethu.corelib.MimicInfo
 import com.neethu.corelib.MimicPose
 import com.neethu.corelib.RenderMode
 import com.neethu.corelib.VrmaFinished
+import com.neethu.corelib.VrmaStarted
 import com.neethu.corelib.WalkFinished
 import com.neethu.corelib.WalkSnapshot
 import com.neethu.corelib.WalkStartResult
@@ -69,6 +70,14 @@ class AvatarHandle internal constructor(
     /** 每次一次性动作播完（回 idle/停播）一条（团播编排等「播完做某事」消费）。 */
     val vrmaFinished: SharedFlow<VrmaFinished> = _vrmaFinished.asSharedFlow()
 
+    private val _vrmaStarted = MutableSharedFlow<VrmaStarted>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+
+    /** 每次动画起播一条（含走动步态内部播放；配饰动画联动等消费）。 */
+    val vrmaStarted: SharedFlow<VrmaStarted> = _vrmaStarted.asSharedFlow()
+
     init {
         runtime.onRenderModeDetected = { mode ->
             _detectedRenderMode.value = mode
@@ -78,6 +87,9 @@ class AvatarHandle internal constructor(
         }
         runtime.onVrmaFinished = { avatarId ->
             _vrmaFinished.tryEmit(VrmaFinished(avatarId))
+        }
+        runtime.onVrmaStarted = { avatarId, clipPath, loop ->
+            _vrmaStarted.tryEmit(VrmaStarted(avatarId, clipPath, loop))
         }
     }
 
@@ -246,6 +258,21 @@ class AvatarHandle internal constructor(
     /** 配饰显隐（不卸载）。 */
     fun setAccessoryVisible(id: String, visible: Boolean): Boolean =
         runtime.accessories.setVisible(id, visible)
+
+    /**
+     * 动画联动绑定：播 [animationClipPath] 期间 [accessoryId] 自动在场
+     * （白名单精确匹配；起播自动挂载+显示，收尾/打断/顶替经 0.25s 窗口隐藏）。
+     */
+    fun bindAccessoryToAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        runtime.accessories.bindToAnimation(accessoryId, animationClipPath)
+
+    /** 解除动画联动绑定。 */
+    fun unbindAccessoryFromAnimation(accessoryId: String, animationClipPath: String): Boolean =
+        runtime.accessories.unbindFromAnimation(accessoryId, animationClipPath)
+
+    /** 当前动画绑定表快照（clipPath → accessoryId）。 */
+    val accessoryAnimationBindings: Map<String, String>
+        get() = runtime.accessories.animationBindings
 
     /** 当前已挂载配饰快照。 */
     val accessories: StateFlow<List<AccessoryState>>

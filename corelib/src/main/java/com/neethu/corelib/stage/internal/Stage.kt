@@ -109,6 +109,17 @@ internal class Stage(
     /** 触摸拖拽命中的演员（P0：UI/命令显式指定；无点击拾取）。 */
     var focusedRuntime: AvatarRuntime? = null
 
+    /**
+     * 配饰挂载规格解析（动画联动自动挂载用，P1 docs/accessory-feasibility.md
+     * §5.4）：入参（modelId, accessoryId）——modelId 为模型文件名（per-model
+     * 校准 preset 的 key），app 层注入 sidecar 默认+校准合并的结果；null =
+     * 未注入或查不到，绑定命中时无法自动挂载（手动 attach 的显隐联动不受影响）。
+     */
+    var accessorySpecResolver: ((
+        modelId: String,
+        accessoryId: String,
+    ) -> com.neethu.corelib.accessory.AccessorySpec?)? = null
+
     // ── 共享 MToon 材质库（舞台级一份，多演员复用编译产物）───────────────
 
     var mtoonFactory: MToonMaterialFactory? = null

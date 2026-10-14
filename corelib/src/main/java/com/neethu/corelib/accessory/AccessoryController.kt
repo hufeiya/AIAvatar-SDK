@@ -3,8 +3,8 @@ package com.neethu.corelib.accessory
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 单个虚拟人的配饰控制器（docs/accessory-feasibility.md §5.5；P0 只落地
- * attach/detach/setVisible 最小闭环，bindToAnimation 动画联动排 P1）。
+ * 单个虚拟人的配饰控制器（docs/accessory-feasibility.md §5.5；P1 起含
+ * bindToAnimation 动画联动）。
  *
  * 实现（[AccessoryManager]）每个 [com.neethu.corelib.stage.AvatarHandle]
  * 一份：团播 N 个演员各持独立配饰状态与独立 GLB 实例，互不干扰。
@@ -26,6 +26,20 @@ interface AccessoryController {
 
     /** 不卸载只显隐（Scene 增删实现；未挂载返回 false）。 */
     fun setVisible(id: String, visible: Boolean): Boolean
+
+    /**
+     * 动画联动：注册「播 [animationClipPath] 期间 [accessoryId] 自动在场」
+     * （显式白名单，路径精确匹配）。命中 [VrmaStarted] 时自动挂载（规格由
+     * 舞台级解析器给出，sidecar 默认+per-model 校准）并显示；收尾/被打断/
+     * 被顶替经 crossfade 窗口（0.25s）隐藏。true = 已登记。
+     */
+    fun bindToAnimation(accessoryId: String, animationClipPath: String): Boolean
+
+    /** 解除动画绑定（剪辑与配饰都匹配才解除；true = 确有此绑定）。 */
+    fun unbindFromAnimation(accessoryId: String, animationClipPath: String): Boolean
+
+    /** 当前绑定表快照（clipPath → accessoryId，诊断/观测用）。 */
+    val animationBindings: Map<String, String>
 
     /** 当前已挂载配饰（调试/观测）。 */
     val accessories: StateFlow<List<AccessoryState>>
