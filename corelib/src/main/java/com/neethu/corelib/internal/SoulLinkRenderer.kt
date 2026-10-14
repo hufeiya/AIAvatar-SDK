@@ -1847,7 +1847,24 @@ internal class SoulLinkRenderer(
         stopRendering()
     }
 
+    /**
+     * onDestroy 的护栏（幂等 + 视图已拆除即跳过）。销毁会从两条路径各到一次：
+     * lifecycle ON_DESTROY 先清一遍；随后 SurfaceView 从窗口拆除触发
+     * filament-utils ModelViewer 的内建 detach listener（addDetachListener，
+     * 1.68.3 ModelViewer.kt:392）执行全套销毁并 engine.destroy()；最后
+     * AvatarView 的 onRelease 还会再调一次 [onDestroy]——此时引擎已
+     * shutdown，destroyModel → ResourceLoader asyncCancelLoad → flushAndWait
+     * 直接 SIGABRT（gltfio 1.68.3 ResourceLoader.cpp:488，真机实证）。
+     * PreconditionPanic 是 native abort，Java 层捕获不了，只能保证不再进去：
+     * - destroyed：本次 renderer 已清理过，重复调用直接跳过；
+     * - !isAttachedToWindow：view 已拆 ⇒ ModelViewer 内建 listener 必已把
+     *   引擎销毁（两路径谁先谁后都成立），同样不能碰任何引擎调用。
+     */
+    private var destroyed = false
+
     override fun onDestroy(owner: LifecycleOwner) {
+        if (destroyed || !surfaceView.isAttachedToWindow) return
+        destroyed = true
         stopRendering()
         shotSteering = false
         activeShot = null
