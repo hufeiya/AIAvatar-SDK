@@ -350,7 +350,7 @@ adb logcat -s FreeSpeech         # VAD 电平/门限
 - 每回合多条 Log.i 全量落盘请求/回复（LlmPrompt tag），生产环境有噪声/体积负担。
 
 **app**
-- ⚠ **`app/aiavatar-release.jks`、`app/release-key.jks` 被 git 追踪**——正式签名密钥入库，与 build.gradle.kts 注释「严禁入库」矛盾。**上架后这是最高优先级安全问题**（建议：移出仓库+轮换密钥+密钥库永不上传）。
+- ✅ **签名密钥从未入库（2026-10-16 全面复核，更正本节旧记载）**：此前写「两个 jks 被 git 追踪」有误——`app/aiavatar-release.jks`、`app/release-key.jks`、`keystore.properties` 从未出现在任何提交（本地全部分支 + origin/main 全历史对象扫描零命中），.gitignore 的 `*.jks` 规则自 Initial commit 即存在，GitHub 仓库公开且远端仅 main 一支。**无需移出/轮换**。真实剩余风险：`aiavatar-release.jks`（正式签名，alias aiavatar）仅本地一份，磁盘损坏即永久无法发布同签名更新，建议异地备份；`release-key.jks`（2026-02 建，口令不可知未启用）按原决策原样保留。
 - MainActivity 3744 行/DemoScreen 单 composable 超千行，改 UI 的认知成本高。
 - 调试钩子 `contextsSnapshot/selectContext` 在主线程 runBlocking 查 Room；release 未开 minify；`VideoPure.VisionKeywords` 已实现未接线（关键词拦截让位于「每轮都附图」策略）；大量 `runCatching{}: null` 吞异常。
 
