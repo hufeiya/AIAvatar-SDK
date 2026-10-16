@@ -123,6 +123,7 @@ class AvatarController : AvatarActor {
         renderer.onFpsUpdated = { value -> _fps.value = value }
         renderer.onWalkFinished = { finished -> _walkFinished.tryEmit(finished) }
         renderer.onAccessoriesUpdated = { list -> _accessories.value = list }
+        renderer.onEffectsUpdated = { list -> _effects.value = list }
         // A material-driven mode switch happens mid-load (the model is already
         // rendered in the detected mode), so bookkeeping only: keep the reload
         // trigger in sync and expose the value — no reload, no settings push.
@@ -139,6 +140,7 @@ class AvatarController : AvatarActor {
         renderer?.onFpsUpdated = null
         renderer?.onWalkFinished = null
         renderer?.onAccessoriesUpdated = null
+        renderer?.onEffectsUpdated = null
         this.renderer = null
         _fps.value = 0
         // Don't reset state — the controller can outlive the view
@@ -432,6 +434,49 @@ class AvatarController : AvatarActor {
     /** 当前动画绑定表快照（归一化 clipPath → accessoryId）。 */
     val accessoryAnimationBindings: Map<String, String>
         get() = renderer?.accessoryAnimationBindings ?: emptyMap()
+
+    // ── Public API: VFX 特效 ─────────────────────────────────────────────
+
+    private val _effects =
+        MutableStateFlow<List<com.neethu.corelib.vfx.VfxInfo>>(emptyList())
+
+    /** 活跃特效列表（play/stop/播完自停发布；世界系，模型重载不清空）。 */
+    val effects: StateFlow<List<com.neethu.corelib.vfx.VfxInfo>> = _effects.asStateFlow()
+
+    /**
+     * 播放一个特效（docs/vfx-feasibility.md）：世界系粒子系统，首次调用
+     * 惰性初始化渲染后端（材质运行时编译）。模型重载/场景切换不影响在播特效。
+     *
+     * @param spec 特效规格（内置见 [com.neethu.corelib.vfx.VfxPresets]）
+     * @param anchor 锚点（P0 世界点；默认模型脚底原点）
+     * @return 句柄（凭 `.id` 可 [stopVfx]）；null = 渲染未就绪或批容量已满
+     */
+    fun playVfx(
+        spec: com.neethu.corelib.vfx.VfxSpec,
+        anchor: com.neethu.corelib.vfx.VfxAnchor = com.neethu.corelib.vfx.VfxAnchor.World(0f, 0f, 0f),
+    ): com.neethu.corelib.vfx.VfxHandle? {
+        val r = renderer ?: return null
+        return r.playVfx(spec, anchor)
+    }
+
+    /** 停止一个特效（true = 确有此特效）。 */
+    fun stopVfx(id: String): Boolean = renderer?.stopVfx(id) ?: false
+
+    /** 停止全部特效。 */
+    fun stopAllVfx() {
+        renderer?.stopAllVfx()
+    }
+
+    /** 活跃特效实时快照（调试用；稳定观察走 [effects]）。 */
+    fun vfxSnapshot(): List<com.neethu.corelib.vfx.VfxInfo> =
+        renderer?.vfxSnapshot() ?: emptyList()
+
+    /**
+     * 角色实时世界位置（脚底，米；out 3 float）。fx 缺省锚点数据源；
+     * false = 无模型（out 内容未定义）。
+     */
+    fun avatarWorldPos(out: FloatArray): Boolean =
+        renderer?.avatarWorldPos(out) ?: false
 
     // ── Public API: Gaze / Look-At ───────────────────────────────────────
 

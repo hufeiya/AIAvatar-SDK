@@ -57,6 +57,12 @@ import com.neethu.corelib.accessory.AccessoryManager
 import com.neethu.corelib.accessory.AccessoryHost
 import com.neethu.corelib.accessory.AccessorySpec
 import com.neethu.corelib.accessory.AccessoryState
+import com.neethu.corelib.vfx.VfxAnchor
+import com.neethu.corelib.vfx.VfxHandle
+import com.neethu.corelib.vfx.VfxInfo
+import com.neethu.corelib.vfx.VfxSpec
+import com.neethu.corelib.vfx.internal.VfxHost
+import com.neethu.corelib.vfx.internal.VfxManager
 
 /**
  * Internal rendering engine backed by Filament [ModelViewer].
@@ -184,6 +190,27 @@ internal class SoulLinkRenderer(
     // Set when the model pose is about to snap (animation / VRMA start-stop); the
     // spring bone tails are re-anchored after the first frame of the new pose.
     private var pendingSpringReset: Boolean = false
+
+    // ── VFX 特效库（世界系，与模型生命周期解耦；docs/vfx-feasibility.md）──
+
+    /**
+     * 特效管理器：首次 playVfx 惰性创建（材质运行时编译 ~百毫秒级，不用
+     * 特效的消费者零启动开销）；destroy 走 [onDestroy] 护栏块（引擎 shutdown
+     * 前必须跑完，坑 13 顺序）。
+     */
+    private var vfxManager: VfxManager? = null
+
+    /** 特效列表变化（play/stop/播完自停）→ AvatarController 稳定 StateFlow 中继。 */
+    var onEffectsUpdated: ((List<VfxInfo>) -> Unit)? = null
+
+    /** 特效宿主缝：引擎/场景取自 ModelViewer，相机三元组来自自有 Manipulator。 */
+    private val vfxHost = object : VfxHost {
+        override val vfxEngine: Engine get() = modelViewer.engine
+        override val vfxScene: Scene get() = modelViewer.scene
+        override fun vfxCameraLookAt(outEye: FloatArray, outTarget: FloatArray, outUp: FloatArray) {
+            cameraManipulator.getLookAt(outEye, outTarget, outUp)
+        }
+    }
 
     // Drag mode translates the humanoid hips bone (three-vrm mouse.html semantics)
     // instead of the asset root, so spring bones react to the body motion.
@@ -539,6 +566,9 @@ internal class SoulLinkRenderer(
             // (bones may have moved this very frame, so this runs after the
             // animation/spring-bone updates, right before render).
             updateCameraShot(frameTimeNanos)
+            // VFX 泵：updateCameraShot 之后（同帧相机基向量刚写入 Manipulator，
+            // Billboard 无一帧滞后）、render 之前（docs/vfx-feasibility.md §4.4）。
+            vfxManager?.update(frameTimeNanos)
             lastFrameTimeNanos = frameTimeNanos
 
             updateFps(frameTimeNanos)
@@ -1871,6 +1901,11 @@ internal class SoulLinkRenderer(
         // 配饰先走（renderable 持材质实例 + 挂在骨骼层级内，先于模型销毁）
         accessoryManager?.destroyAll()
         accessoryManager = null
+        // 特效批渲染：摘 renderable → 毁 VB/IB → 毁材质实例 → 毁材质/纹理
+        // （坑 13 顺序；引擎随 ModelViewer detach listener shutdown 前必须跑完）
+        vfxManager?.destroy()
+        vfxManager = null
+        onEffectsUpdated?.invoke(emptyList())
         // Same in-use precondition as in loadModelBytes: the avatar's
         // renderables still hold the MToon material instances, so the model
         // must go first or destroyMaterialInstance aborts.
@@ -1949,6 +1984,50 @@ internal class SoulLinkRenderer(
 
     fun accessoryStates(): List<AccessoryState> =
         accessoryManager?.accessories?.value ?: emptyList()
+
+    // ── VFX 特效（世界系；播放/停止/快照，docs/vfx-feasibility.md）──────
+
+    /**
+     * 播放一个特效。首次调用惰性初始化渲染器（材质编译 + 批缓冲）。
+     * @return 句柄；null = 渲染未就绪或对应混合档批容量已满。
+     */
+    fun playVfx(spec: VfxSpec, anchor: VfxAnchor): VfxHandle? {
+        val mgr = vfxManager ?: VfxManager(vfxHost).also { mgr ->
+            mgr.onChange = { onEffectsUpdated?.invoke(mgr.effects.value) }
+            vfxManager = mgr
+        }
+        return mgr.play(spec, anchor)
+    }
+
+    /** 停止一个特效（凭 [VfxHandle.id]）。 */
+    fun stopVfx(id: String): Boolean = vfxManager?.stop(id) ?: false
+
+    /** 停止全部特效。 */
+    fun stopAllVfx() {
+        vfxManager?.stopAll()
+    }
+
+    /** 活跃特效实时快照（调试用；稳定观察走 [onEffectsUpdated] 中继）。 */
+    fun vfxSnapshot(): List<VfxInfo> = vfxManager?.snapshot() ?: emptyList()
+
+    private val avatarWorldMat = FloatArray(16)
+
+    /**
+     * 角色实时世界位置（脚底，米；asset.root 世界变换平移列）。fx play 的
+     * 缺省锚点数据源——自由走动/换模型后角色不在原点，锚原点 = 生成在取景框
+     * 外（2026-10-17 真机首验教训）。false = 无模型。
+     */
+    fun avatarWorldPos(out: FloatArray): Boolean {
+        val asset = modelViewer.asset ?: return false
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return false
+        tm.getWorldTransform(instance, avatarWorldMat)
+        out[0] = avatarWorldMat[12]
+        out[1] = avatarWorldMat[13]
+        out[2] = avatarWorldMat[14]
+        return true
+    }
 
     // ── Frustum Culling (avatar) ─────────────────────────────────────────
 
