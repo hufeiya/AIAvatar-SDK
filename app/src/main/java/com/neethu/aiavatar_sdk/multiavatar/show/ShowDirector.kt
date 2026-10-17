@@ -109,6 +109,20 @@ sealed interface DirectorCmd {
         override val label: String get() = "clap $performer"
     }
 
+    /**
+     * 特效插幕开（P1，docs/vfx-feasibility.md §六）：[preset] 为 VfxCatalog
+     * 预设 id；[performer] 给了 = 锚其头顶世界位快照，[bone] 给了 = 骨骼锚定
+     * （两者都空 = 舞台中心）。fire-and-forget 播放，不打断编舞。
+     */
+    data class PlayFx(val preset: String, val performer: String? = null, val bone: String? = null) : DirectorCmd {
+        override val label: String get() = "fx $preset${performer?.let { " @$it" } ?: ""}"
+    }
+
+    /** 特效插幕收（fx 幕 hold 完成后；按预设 id 停，仍在播才停得掉）。 */
+    data class StopFx(val preset: String) : DirectorCmd {
+        override val label: String get() = "fx stop $preset"
+    }
+
     /** 幕次/兜底日志（调试通道可见）。 */
     data class Log(val text: String) : DirectorCmd {
         override val label: String get() = text
@@ -271,6 +285,7 @@ class ShowDirector(
                 ActTypes.BOW -> performBow(act, cast, out, durationOf)
                 ActTypes.MOVE -> performMove(act, out, anchorOf)
                 ActTypes.MUSIC -> performMusic(act, script, out)
+                ActTypes.FX -> performFx(act, out)
             }
             index++
             consumeInsertions(queue)
@@ -324,6 +339,18 @@ class ShowDirector(
             MusicActions.DUCK -> out(DirectorCmd.MusicVolume(MusicActions.DUCK_VOLUME, "duck"))
             MusicActions.FULL -> out(DirectorCmd.MusicVolume(MusicActions.BASE_VOLUME, "full"))
         }
+    }
+
+    /**
+     * 特效插幕（P1 §六）：播 → hold 秒数（可被 skip 提前收）→ 按预设 id 停。
+     * 全程不等待任何表演事件——特效是幕间观感件，不打断编舞（burst 型在
+     * hold 内自然播完，StopFx 空转无害）。
+     */
+    private suspend fun performFx(act: ShowAct, out: (DirectorCmd) -> Unit) {
+        val preset = act.fx ?: return
+        out(DirectorCmd.PlayFx(preset, act.performer, act.bone))
+        hold(act.seconds ?: DEFAULT_FX_SECONDS)
+        out(DirectorCmd.StopFx(preset))
     }
 
     /** 独舞：观众席注视+应援 → [line 串场词] → 切机位 → one-shot → 播完/超时 → 走回队列。 */
@@ -474,6 +501,9 @@ class ShowDirector(
         const val CLAP_MAX_FANS = 2
 
         const val DEFAULT_GROUP_SECONDS = 12f
+
+        /** fx 幕缺省时长（秒；特效播完即收，节目单可用 seconds 覆盖）。 */
+        const val DEFAULT_FX_SECONDS = 3f
 
         /** 串场词收尾兜底（§4.6：TTS 首包 1~2s + 句长余量）。 */
         const val SAY_TIMEOUT_S = 8f

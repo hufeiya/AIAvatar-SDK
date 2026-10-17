@@ -1,0 +1,766 @@
+{
+  "_comment": "VFX 预设 sidecar 目录（docs/vfx-feasibility.md §5.2）。与 corelib VfxPresets 同源的 8 配方：app 层 VfxCatalog 三层合并（内置常量打底、本文件覆盖同名项）——真机调参改这里，不用动 SDK。texture 为 vfx/ 下相对路径；坐标单位=米，锚点 (0,0,0)=模型脚底。",
+  "presets": [
+    {
+      "id": "spark_burst",
+      "name": "星尘爆发",
+      "nameEn": "Spark Burst",
+      "texture": "textures/spark.png",
+      "blending": "additive",
+      "maxParticles": 96,
+      "overflow": "reject",
+      "burst": 96,
+      "rate": 0,
+      "lifetime": [
+        0.5,
+        1.1
+      ],
+      "size": [
+        0.02,
+        0.055
+      ],
+      "emitter": {
+        "shape": "sphere",
+        "center": [
+          0,
+          1.2,
+          0
+        ],
+        "radius": 0.08,
+        "speed": [
+          1.2,
+          2.8
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "drag",
+          "coefficient": 2.2
+        },
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -0.6,
+            0
+          ]
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              0.95,
+              0.72,
+              1.0
+            ],
+            [
+              0.35,
+              1.0,
+              0.62,
+              0.22,
+              0.9
+            ],
+            [
+              1.0,
+              0.75,
+              0.18,
+              0.04,
+              0.0
+            ]
+          ]
+        },
+        {
+          "type": "size_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.35
+            ]
+          ]
+        }
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "snow",
+      "name": "漫天飞雪",
+      "nameEn": "Snowfall",
+      "texture": "textures/soft_dot.png",
+      "blending": "transparent",
+      "maxParticles": 400,
+      "overflow": "recycle_oldest",
+      "rate": 60,
+      "lifetime": [
+        4,
+        7
+      ],
+      "size": [
+        0.025,
+        0.05
+      ],
+      "emitter": {
+        "shape": "box",
+        "center": [
+          0,
+          2.2,
+          0
+        ],
+        "halfExtents": [
+          1.6,
+          0.2,
+          1.6
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "speed": [
+          0.25,
+          0.5
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -0.6,
+            0
+          ]
+        },
+        {
+          "type": "sway",
+          "axis": "x",
+          "amplitude": 0.25,
+          "frequency": 0.6
+        },
+        {
+          "type": "sway",
+          "axis": "z",
+          "amplitude": 0.18,
+          "frequency": 0.8,
+          "phase": 2.1
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.15,
+              1.0,
+              1.0,
+              1.0,
+              0.9
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ]
+          ]
+        },
+        {
+          "type": "size_over_life",
+          "keys": [
+            [
+              0.0,
+              0.5
+            ],
+            [
+              1.0,
+              1.0
+            ]
+          ]
+        }
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "ring_pulse",
+      "name": "环形脉冲",
+      "nameEn": "Ring Pulse",
+      "texture": "textures/soft_dot.png",
+      "blending": "additive",
+      "maxParticles": 64,
+      "overflow": "reject",
+      "burst": 64,
+      "rate": 0,
+      "lifetime": [
+        0.7,
+        1.0
+      ],
+      "size": [
+        0.035,
+        0.06
+      ],
+      "emitter": {
+        "shape": "ring",
+        "center": [
+          0,
+          0.05,
+          0
+        ],
+        "radius": 0.15,
+        "speed": [
+          1.4,
+          2.0
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "drag",
+          "coefficient": 1.8
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              0.55,
+              0.9,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.2,
+              0.45,
+              0.9,
+              0.0
+            ]
+          ]
+        },
+        {
+          "type": "size_over_life",
+          "keys": [
+            [
+              0.0,
+              0.8
+            ],
+            [
+              1.0,
+              2.2
+            ]
+          ]
+        }
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "rain",
+      "name": "阵雨",
+      "nameEn": "Rain",
+      "texture": "textures/streak.png",
+      "blending": "transparent",
+      "maxParticles": 220,
+      "overflow": "recycle_oldest",
+      "rate": 140,
+      "lifetime": [
+        0.8,
+        1.2
+      ],
+      "size": [
+        0.012,
+        0.02
+      ],
+      "emitter": {
+        "shape": "box",
+        "center": [
+          0,
+          2.4,
+          0
+        ],
+        "halfExtents": [
+          1.3,
+          0.1,
+          1.3
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "speed": [
+          2.0,
+          3.2
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -9,
+            0
+          ]
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              0.75,
+              0.85,
+              1.0,
+              0.0
+            ],
+            [
+              0.1,
+              0.75,
+              0.85,
+              1.0,
+              0.55
+            ],
+            [
+              1.0,
+              0.75,
+              0.85,
+              1.0,
+              0.0
+            ]
+          ]
+        }
+      ],
+      "stretchByVelocity": 7,
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "fire",
+      "name": "篝火",
+      "nameEn": "Campfire",
+      "texture": "textures/flame_4x4.png",
+      "blending": "additive",
+      "maxParticles": 96,
+      "overflow": "recycle_oldest",
+      "rate": 42,
+      "lifetime": [
+        0.7,
+        1.0
+      ],
+      "size": [
+        0.1,
+        0.17
+      ],
+      "emitter": {
+        "shape": "cone",
+        "center": [
+          0,
+          0.02,
+          0
+        ],
+        "radius": 0.16,
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "speed": [
+          0.7,
+          1.2
+        ],
+        "radialFraction": 0.25
+      },
+      "behaviors": [
+        {
+          "type": "drag",
+          "coefficient": 0.8
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              0.92,
+              0.55,
+              0.0
+            ],
+            [
+              0.15,
+              1.0,
+              0.85,
+              0.4,
+              0.95
+            ],
+            [
+              0.55,
+              1.0,
+              0.45,
+              0.1,
+              0.75
+            ],
+            [
+              1.0,
+              0.45,
+              0.08,
+              0.02,
+              0.0
+            ]
+          ]
+        },
+        {
+          "type": "size_over_life",
+          "keys": [
+            [
+              0.0,
+              0.55
+            ],
+            [
+              0.35,
+              1.0
+            ],
+            [
+              1.0,
+              0.6
+            ]
+          ]
+        }
+      ],
+      "flipbook": {
+        "columns": 4,
+        "rows": 4
+      },
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "confetti",
+      "name": "开演彩带",
+      "nameEn": "Confetti",
+      "texture": "textures/confetti.png",
+      "blending": "transparent",
+      "maxParticles": 300,
+      "overflow": "recycle_oldest",
+      "rate": 80,
+      "lifetime": [
+        2.5,
+        4
+      ],
+      "size": [
+        0.03,
+        0.055
+      ],
+      "emitter": {
+        "shape": "box",
+        "center": [
+          0,
+          2.2,
+          0
+        ],
+        "halfExtents": [
+          1.4,
+          0.15,
+          1.4
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "speed": [
+          0.15,
+          0.4
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -0.8,
+            0
+          ]
+        },
+        {
+          "type": "sway",
+          "axis": "x",
+          "amplitude": 0.3,
+          "frequency": 0.9
+        },
+        {
+          "type": "turbulence",
+          "strength": 0.18,
+          "scale": 1.6,
+          "evolution": 0.7
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.08,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              0.85,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ]
+          ]
+        }
+      ],
+      "palette": [
+        [
+          1.0,
+          0.3,
+          0.35,
+          1
+        ],
+        [
+          1.0,
+          0.72,
+          0.15,
+          1
+        ],
+        [
+          0.3,
+          0.85,
+          0.45,
+          1
+        ],
+        [
+          0.25,
+          0.6,
+          1.0,
+          1
+        ],
+        [
+          0.8,
+          0.4,
+          1.0,
+          1
+        ],
+        [
+          1.0,
+          1.0,
+          1.0,
+          1
+        ]
+      ],
+      "spin": [
+        -240,
+        240
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "petals",
+      "name": "风吹花瓣",
+      "nameEn": "Petals in the Wind",
+      "texture": "textures/petal.png",
+      "blending": "transparent",
+      "maxParticles": 160,
+      "overflow": "recycle_oldest",
+      "rate": 26,
+      "lifetime": [
+        3,
+        5
+      ],
+      "size": [
+        0.035,
+        0.06
+      ],
+      "emitter": {
+        "shape": "box",
+        "center": [
+          -1.2,
+          1.4,
+          0
+        ],
+        "halfExtents": [
+          0.3,
+          1.0,
+          1.5
+        ],
+        "direction": [
+          1,
+          -0.12,
+          0
+        ],
+        "speed": [
+          0.45,
+          0.85
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -0.22,
+            0
+          ]
+        },
+        {
+          "type": "turbulence",
+          "strength": 0.3,
+          "scale": 2.2,
+          "evolution": 0.9
+        },
+        {
+          "type": "sway",
+          "axis": "y",
+          "amplitude": 0.22,
+          "frequency": 1.3
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.1,
+              1.0,
+              1.0,
+              1.0,
+              0.95
+            ],
+            [
+              0.85,
+              1.0,
+              1.0,
+              1.0,
+              0.95
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              0.0
+            ]
+          ]
+        }
+      ],
+      "spin": [
+        -200,
+        200
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "lightstick_spark",
+      "name": "应援星光",
+      "nameEn": "Lightstick Spark",
+      "texture": "textures/spark.png",
+      "blending": "additive",
+      "maxParticles": 64,
+      "overflow": "recycle_oldest",
+      "burst": 12,
+      "rate": 36,
+      "lifetime": [
+        0.4,
+        0.8
+      ],
+      "size": [
+        0.02,
+        0.045
+      ],
+      "emitter": {
+        "shape": "sphere",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.06,
+        "speed": [
+          0.08,
+          0.25
+        ]
+      },
+      "behaviors": [
+        {
+          "type": "drag",
+          "coefficient": 2.5
+        },
+        {
+          "type": "gravity",
+          "value": [
+            0,
+            -0.15,
+            0
+          ]
+        },
+        {
+          "type": "color_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0,
+              0.97,
+              0.8,
+              1.0
+            ],
+            [
+              0.45,
+              0.55,
+              0.85,
+              1.0,
+              0.85
+            ],
+            [
+              1.0,
+              0.25,
+              0.45,
+              1.0,
+              0.0
+            ]
+          ]
+        },
+        {
+          "type": "size_over_life",
+          "keys": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.2
+            ]
+          ]
+        }
+      ],
+      "defaultBone": "rightHand",
+      "license": "CC0 (self-made)"
+    }
+  ]
+}

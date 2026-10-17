@@ -31,6 +31,7 @@ import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.ToneMappingMode
 import com.neethu.corelib.internal.MToonMaterialFactory
+import com.neethu.corelib.vfx.internal.VfxManager
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -94,6 +95,41 @@ internal class Stage(
     override val accAssetLoader: AssetLoader? get() = avatarAssetLoader
     override val accResourceLoader: ResourceLoader? get() = accessoryResourceLoader
     override fun accReadSourceBytes(source: String): ByteArray = readSourceBytes(source)
+
+    // ── VFX 特效宿主缝（P1 团播第二实现，docs/vfx-feasibility.md §六）────
+
+    /**
+     * 特效管理器：首次 playVfx 惰性创建（材质运行时编译，与单人路径同构）；
+     * destroy 走 [onDestroy]（引擎仍在位时按坑 13 顺序收干净）。
+     */
+    private var vfxManager: VfxManager? = null
+
+    /** 特效列表变化（play/stop/播完自停/骨锚失效自停）→ 门面 StateFlow 中继。 */
+    var onEffectsUpdated: ((List<com.neethu.corelib.vfx.VfxInfo>) -> Unit)? = null
+
+    /** 特效宿主缝：相机三元组来自舞台 Manipulator，骨锚/资产按演员解析。 */
+    private val vfxHost = object : com.neethu.corelib.vfx.internal.VfxHost {
+        override val vfxEngine: Engine get() = engine
+        override val vfxScene: Scene get() = scene
+        override fun vfxCameraLookAt(outEye: FloatArray, outTarget: FloatArray, outUp: FloatArray) {
+            cameraManipulator.getLookAt(outEye, outTarget, outUp)
+        }
+
+        override fun vfxResolveBone(avatarId: String?, boneName: String, out: FloatArray): Boolean {
+            val runtime = synchronized(runtimes) {
+                when {
+                    avatarId != null ->
+                        runtimes.firstOrNull { it.id.equals(avatarId, ignoreCase = true) }
+                    else -> focusedRuntime ?: runtimes.firstOrNull()
+                }
+            } ?: return false
+            return runtime.resolveBonePosition(boneName, out)
+        }
+
+        override fun vfxReadAssetBytes(path: String): ByteArray? = runCatching {
+            readSourceBytes(path)
+        }.getOrNull()
+    }
 
     // ── 演员与加载器 ─────────────────────────────────────────────────────
 
@@ -181,6 +217,32 @@ internal class Stage(
     private var sceneBaseMatrix: FloatArray? = null
 
     fun hasScene(): Boolean = sceneAsset != null
+
+    // ── VFX 特效（P1 团播路径；与单人 SoulLinkRenderer 同构）─────────────
+
+    /**
+     * 播放一个特效。首次调用惰性初始化渲染器（材质编译 + 批缓冲）。
+     * @return 句柄；null = 渲染未就绪或对应批容量已满。
+     */
+    fun playVfx(spec: com.neethu.corelib.vfx.VfxSpec, anchor: com.neethu.corelib.vfx.VfxAnchor): com.neethu.corelib.vfx.VfxHandle? {
+        val mgr = vfxManager ?: VfxManager(vfxHost).also { m ->
+            m.onChange = { onEffectsUpdated?.invoke(m.effects.value) }
+            vfxManager = m
+        }
+        return mgr.play(spec, anchor)
+    }
+
+    /** 停止一个特效（凭 [com.neethu.corelib.vfx.VfxHandle.id]）。 */
+    fun stopVfx(id: String): Boolean = vfxManager?.stop(id) ?: false
+
+    /** 停止全部特效。 */
+    fun stopAllVfx() {
+        vfxManager?.stopAll()
+    }
+
+    /** 活跃特效实时快照（STAGE_CMD `fx state` 数据源）。 */
+    fun vfxSnapshot(): List<com.neethu.corelib.vfx.VfxInfo> =
+        vfxManager?.snapshot() ?: emptyList()
 
     fun getScenePlacement(): ScenePlacement? = activeScenePlacement
 
@@ -399,6 +461,10 @@ internal class Stage(
                 }
             }
             populateSceneEntities()
+
+            // VFX 泵：updateCameraShot 之后（同帧相机基向量）、render 之前
+            //（docs/vfx-feasibility.md §4.4；演员骨骼已在步骤②提交）
+            vfxManager?.update(frameTimeNanos)
 
             val probeT3 = if (STAGE_PROFILE) System.nanoTime() else 0L
             modelViewer.render(frameTimeNanos)
@@ -1170,6 +1236,10 @@ internal class Stage(
         activeShot = null
         shotTarget = null
         shotTargets = null
+
+        // VFX 先收（renderable/缓冲/材质/纹理仍要引擎在位；坑 13 顺序）
+        vfxManager?.destroy()
+        vfxManager = null
 
         // 演员：in-use 顺序（asset 先于 MToon 实例，SIGABRT 红线）
         synchronized(runtimes) {

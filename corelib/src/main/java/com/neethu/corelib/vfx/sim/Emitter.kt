@@ -80,6 +80,28 @@ object Emitter {
                 outVel[1] = 0f
                 outVel[2] = dirZ * speed
             }
+
+            EmitterShape.CONE -> {
+                // 底面圆盘均匀采样（√u 面积均匀），初速 = 轴向(direction) +
+                // 径向展开(radialFraction·半径向)——篝火底盘上升外扩
+                val theta = 2f * PI.toFloat() * random.nextFloat()
+                val rr = params.radius * sqrt(random.nextFloat())
+                val rx = cos(theta) * rr
+                val rz = sin(theta) * rr
+                out[0] = cx + rx
+                out[1] = cy
+                out[2] = cz + rz
+                velocityAlongDirection(params, random, speed, outVel)
+                val frac = params.radialFraction
+                if (frac > 0f && params.radius > 1e-6f) {
+                    val rl = sqrt(rx * rx + rz * rz)
+                    if (rl > 1e-6f) {
+                        val radialSpeed = speed * frac * (rl / params.radius)
+                        outVel[0] += rx / rl * radialSpeed
+                        outVel[2] += rz / rl * radialSpeed
+                    }
+                }
+            }
         }
     }
 

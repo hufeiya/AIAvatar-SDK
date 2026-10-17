@@ -1104,6 +1104,43 @@ internal class AvatarRuntime(
 
     fun headWorldPosition(): FloatArray = boneAnchor(headEntity, STAGE_HEAD_FALLBACK_Y)
 
+    // ── VFX 骨骼锚定（docs/vfx-feasibility.md §4.8）──────────────────────
+
+    private val vfxBoneMat = FloatArray(16)
+
+    /**
+     * 语义骨世界位置（VfxAnchor.Bone 数据源）：boneSemantics 查实体 → 世界
+     * 变换平移列。false = 演员未加载/语义骨缺失/实体已失效（destroyAsset 后
+     * 陈旧实体 getInstance=0）——调用方（VfxManager）据此安静自停特效。
+     */
+    fun resolveBonePosition(boneName: String, out: FloatArray): Boolean {
+        if (asset == null) return false
+        val entity = boneSemantics[boneName.lowercase()] ?: return false
+        if (entity == 0) return false
+        val tm = stage.engine.transformManager
+        val instance = tm.getInstance(entity)
+        if (instance == 0) return false
+        tm.getWorldTransform(instance, vfxBoneMat)
+        out[0] = vfxBoneMat[12]
+        out[1] = vfxBoneMat[13]
+        out[2] = vfxBoneMat[14]
+        return true
+    }
+
+    /** 角色脚底世界位置（root 世界变换平移列；fx 世界锚点的演员态数据源）。 */
+    fun worldPos(out: FloatArray): Boolean {
+        val asset = asset ?: return false
+        val tm = stage.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return false
+        val mat = FloatArray(16)
+        tm.getWorldTransform(instance, mat)
+        out[0] = mat[12]
+        out[1] = mat[13]
+        out[2] = mat[14]
+        return true
+    }
+
     // ── MToon 灯光参数（舞台 key 灯变化时全演员推送）──────────────────────
 
     fun pushMToonKeyLight() {

@@ -241,4 +241,41 @@ class ShowScriptTest {
         // camera 3 + say 3 + dance 8 + wait 1.5 + group 12 + bow 3 = 30.5
         assertEquals(30.5f, estimateSeconds(script), 0.01f)
     }
+
+    // ── fx 幕（P1，docs/vfx-feasibility.md §六）──────────────────────────
+
+    @Test
+    fun `fx幕解析通过且字段映射正确`() {
+        val script = parse(
+            """{"version":1,"acts":[
+               {"type":"fx","fx":"confetti","seconds":3},
+               {"type":"fx","fx":"lightstick_spark","performer":"A","bone":"rightHand"}]}""",
+        ).getOrThrow()
+        assertEquals("confetti", script.acts[0].fx)
+        assertEquals(3f, script.acts[0].seconds)
+        assertEquals(null, script.acts[0].bone)
+        assertEquals("lightstick_spark", script.acts[1].fx)
+        assertEquals("A", script.acts[1].performer)
+        assertEquals("rightHand", script.acts[1].bone)
+    }
+
+    @Test
+    fun `fx幕缺fx字段拒绝`() {
+        val result = parse("""{"version":1,"acts":[{"type":"fx"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("缺 fx"))
+    }
+
+    @Test
+    fun `fx幕非法seconds拒绝`() {
+        val result = parse("""{"version":1,"acts":[{"type":"fx","fx":"snow","seconds":0}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("seconds"))
+    }
+
+    @Test
+    fun `fx幕seconds缺省合法（导演用默认时长）`() {
+        val script = parse("""{"version":1,"acts":[{"type":"fx","fx":"snow"}]}""").getOrThrow()
+        assertEquals(null, script.acts[0].seconds)
+    }
 }

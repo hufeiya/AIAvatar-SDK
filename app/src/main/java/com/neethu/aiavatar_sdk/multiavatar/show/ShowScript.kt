@@ -30,7 +30,7 @@ data class ShowScript(
     }
 }
 
-/** 幕类型词表（§4.4 act 表）。 */
+/** 幕类型词表（§4.4 act 表；P1 增 fx 特效插幕）。 */
 object ActTypes {
     const val DANCE = "dance"
     const val GROUP_DANCE = "group_dance"
@@ -40,8 +40,9 @@ object ActTypes {
     const val CAMERA = "camera"
     const val MUSIC = "music"
     const val WAIT = "wait"
+    const val FX = "fx"
 
-    val ALL = setOf(DANCE, GROUP_DANCE, BOW, SAY, MOVE, CAMERA, MUSIC, WAIT)
+    val ALL = setOf(DANCE, GROUP_DANCE, BOW, SAY, MOVE, CAMERA, MUSIC, WAIT, FX)
 }
 
 /** 机位词表（STAGE_CMD cam 的同名子集）。 */
@@ -101,6 +102,18 @@ data class ShowAct(
      * 与动画绑定表（bindings.json 自动出道具）正交：同 id 已在场则跳过挂载。
      */
     val props: List<String>? = null,
+    /**
+     * fx 幕的特效预设 id（P1 docs/vfx-feasibility.md §六：目录见
+     * assets/vfx/presets.json）。特效插幕不打断编舞（fire-and-forget 播放 +
+     * hold [seconds] 后停，§4.4 对齐 enqueueAct 语义）。
+     */
+    val fx: String? = null,
+    /**
+     * fx 幕的锚定骨骼名（可选；缺省：performer 给了 = 锚其头顶世界位快照，
+     * 没给 = 舞台中心）。给了 bone 则走骨骼锚定（发射器跟随、已存活粒子留
+     * 世界系），如 lightstick_spark 配 rightHand。
+     */
+    val bone: String? = null,
 )
 
 /**
@@ -167,6 +180,10 @@ object ShowScriptParser {
                 }
                 ActTypes.WAIT -> if (act.seconds == null || act.seconds <= 0f) {
                     errors += "$at: 缺/非法 seconds"
+                }
+                ActTypes.FX -> {
+                    if (act.fx.isNullOrBlank()) errors += "$at: 缺 fx（预设 id，见 assets/vfx/presets.json）"
+                    if (act.seconds != null && act.seconds <= 0f) errors += "$at: 非法 seconds（>0 或缺省）"
                 }
             }
             // 幕内机位与 camera 幕的 shot 共用词表

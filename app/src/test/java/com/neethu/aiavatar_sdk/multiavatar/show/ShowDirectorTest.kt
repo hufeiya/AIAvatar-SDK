@@ -579,4 +579,61 @@ class ShowDirectorTest {
         assertTrue(cmds.none { it.startsWith("prop ") })
         assertEquals(ShowState.DONE, dir.state.value)
     }
+
+    // ── fx 幕（P1，docs/vfx-feasibility.md §六）──────────────────────────
+
+    @Test
+    fun `fx幕先播后停在默认时长收`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "fx", fx = "confetti")),
+            listOf("A"),
+            out = autoOut(dir, cmds),
+        )
+        runCurrent()
+        assertEquals("开幕即播", listOf("fx confetti"), cmds.toList())
+        // 默认 3s：2.9s 还没停
+        advanceTimeBy(2_900); runCurrent()
+        assertEquals(listOf("fx confetti"), cmds.toList())
+        advanceTimeBy(200); runCurrent()
+        // 末尾还会跟 done 日志行，只断指令前缀
+        assertEquals("hold 完按预设 id 停", listOf("fx confetti", "fx stop confetti"), cmds.take(2))
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `fx幕seconds覆盖默认时长且带锚点字段透传`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "fx", fx = "lightstick_spark", performer = "A", bone = "rightHand", seconds = 1f)),
+            listOf("A"),
+            out = autoOut(dir, cmds),
+        )
+        runCurrent()
+        assertEquals(listOf("fx lightstick_spark @A"), cmds.toList())
+        advanceTimeBy(1_100); runCurrent()
+        assertEquals(listOf("fx lightstick_spark @A", "fx stop lightstick_spark"), cmds.take(2))
+    }
+
+    @Test
+    fun `fx幕可被skip提前收且后续幕继续`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(
+                ShowAct(type = "fx", fx = "confetti", seconds = 5f),
+                ShowAct(type = "wait", seconds = 0.5f),
+            ),
+            listOf("A"),
+            out = autoOut(dir, cmds),
+        )
+        runCurrent()
+        dir.skip(); runCurrent()
+        // skip 提前收 fx 幕 → StopFx → 进 wait（0.5s 静默）
+        assertEquals(listOf("fx confetti", "fx stop confetti"), cmds.toList())
+        advanceTimeBy(600); runCurrent()
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
 }

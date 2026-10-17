@@ -210,6 +210,33 @@ internal class SoulLinkRenderer(
         override fun vfxCameraLookAt(outEye: FloatArray, outTarget: FloatArray, outUp: FloatArray) {
             cameraManipulator.getLookAt(outEye, outTarget, outUp)
         }
+
+        override fun vfxResolveBone(avatarId: String?, boneName: String, out: FloatArray): Boolean =
+            resolveBonePosition(boneName, out)
+
+        override fun vfxReadAssetBytes(path: String): ByteArray? = runCatching {
+            surfaceView.context.assets.open(path).use { it.readBytes() }
+        }.getOrNull()
+    }
+
+    private val vfxBoneMat = FloatArray(16)
+
+    /**
+     * 语义骨世界位置（VfxAnchor.Bone 数据源）：boneSemantics 查实体 →
+     * TransformManager 读世界变换平移列。false = 无模型/语义骨缺失/实体已
+     * 失效（模型重载后 boneSemantics 被置空/重建，陈旧实体 getInstance=0）。
+     */
+    private fun resolveBonePosition(boneName: String, out: FloatArray): Boolean {
+        val entity = boneSemantics[boneName.lowercase()] ?: return false
+        if (entity == 0) return false
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(entity)
+        if (instance == 0) return false
+        tm.getWorldTransform(instance, vfxBoneMat)
+        out[0] = vfxBoneMat[12]
+        out[1] = vfxBoneMat[13]
+        out[2] = vfxBoneMat[14]
+        return true
     }
 
     // Drag mode translates the humanoid hips bone (three-vrm mouse.html semantics)

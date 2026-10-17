@@ -19,4 +19,16 @@ internal interface VfxHost {
      * Billboard 基向量从此导出（VfxMath.basisFromLookAt）。
      */
     fun vfxCameraLookAt(outEye: FloatArray, outTarget: FloatArray, outUp: FloatArray)
+
+    /**
+     * 骨骼锚点解析（P1 §4.8）：把 [boneName]（语义名，大小写不敏感）的当前
+     * 世界位置写进 [out]（out 3 float）。true = 解析成功；false = 无模型/
+     * 演员不在场/语义骨缺失/实体已失效——调用方据此安静自停特效（不持
+     * 陈旧 entity，模型重载前科）。[avatarId] 仅团播有意义（null = 单人
+     * 当前角色）。
+     */
+    fun vfxResolveBone(avatarId: String?, boneName: String, out: FloatArray): Boolean
+
+    /** assets 字节读取（P1 资产贴图；null = 不存在/读取失败，回退兜底纹理）。 */
+    fun vfxReadAssetBytes(path: String): ByteArray?
 }

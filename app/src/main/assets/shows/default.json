@@ -5,6 +5,7 @@
   "acts": [
     { "type": "camera", "shot": "group" },
     { "type": "music", "action": "start" },
+    { "type": "fx", "fx": "confetti", "seconds": 3 },
     { "type": "move", "performer": "A", "target": "stage_a" },
     { "type": "move", "performer": "B", "target": "stage_b" },
     { "type": "say", "performer": "A", "text": "欢迎来到今晚的团播现场，我是小柔～" },
@@ -15,6 +16,7 @@
     { "type": "wait", "seconds": 1.5 },
     { "type": "dance", "performer": "A", "clip": "08_舞蹈与表演/MC Rapping On The Microphone", "camera": "medium", "fans": ["clap"], "props": ["microphone"], "line": "接下来是我的说唱时间！" },
     { "type": "group_dance", "clip": "08_舞蹈与表演/Doing The Shuffling Dance", "seconds": 12, "camera": "group" },
+    { "type": "fx", "fx": "spark_burst" },
     { "type": "bow", "camera": "group", "props": ["lightstick"] },
     { "type": "music", "action": "stop" },
     { "type": "camera", "shot": "group" }

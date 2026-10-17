@@ -58,6 +58,7 @@ import com.neethu.aiavatar_sdk.sceneMetaAssetName
 import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarState
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.vfx.VfxAnchor
 import com.neethu.corelib.accessory.AccessorySource
 import com.neethu.corelib.accessory.AccessorySpec
 import com.neethu.corelib.stage.AvatarHandle
@@ -135,6 +136,9 @@ internal class Slots {
     /** 就位演员 id（团播 cast 的来源）。 */
     fun readyIds(): List<String> =
         entries().filter { it.second?.isReady == true }.map { it.first }
+
+    /** 全部槽位 id（fx play 的 slot 归属判定用）。 */
+    fun ids(): Set<String> = entries().map { it.first }.toSet()
 }
 
 /** 字幕分道的一行（P1 §4.9：ChatLine 加 speaker 语义的舞台版）。 */
@@ -769,6 +773,14 @@ const val ACTION_STAGE_CMD = "com.neethu.aiavatar_sdk.STAGE_CMD"
  * ... --es cmd "acc bind A radio <动画路径>"   # 追加动画绑定（白名单；玩手机动画自动出手机即内置表）
  * ... --es cmd "acc bindings [A]"         # 查看绑定表
  * ```
+ * 特效（P1，docs/vfx-feasibility.md §六）：
+ * ```
+ * ... --es cmd "fx list"                  # 目录（内置+presets.json 合并）+ 在播快照
+ * ... --es cmd "fx play confetti"         # 舞台中心 (0,0,-4) 播彩带
+ * ... --es cmd "fx play confetti A"       # 锚定 A 脚底实时位
+ * ... --es cmd "fx play fire B bone:rightHand"   # B 右手骨骼锚定（发射跟随）
+ * ... --es cmd "fx stop <id|all>" / "fx state"
+ * ```
  * 演出中聊天框文本自动走点播路由（演出归导演）；演出收场后可 topic 开题
  * 圆桌点评（两套节目形态合流，§7-P2 彩蛋）。
  * topic 开题时若台上 ≥2 人就位，自动先走对谈位（stage_a/stage_b 锚点优先、
@@ -1085,6 +1097,77 @@ private class StageCommandRouter(
                             "show|hide <slot> <id>|import <glb路径>|cal <slot> <id> [clear|show]|" +
                             "bind|unbind <slot> <id> <动画路径...>|bindings [slot]]",
                     )
+                }
+            }
+
+            // ── VFX 特效（P1，docs/vfx-feasibility.md §六）────────────────
+            "fx" -> {
+                val sub = t.getOrNull(1)?.lowercase()
+                when (sub) {
+                    null, "list" -> {
+                        val presets = VfxCatalog.all(context)
+                        val catalog = presets.values.joinToString(", ") { p ->
+                            "${p.id}(${p.blending.name.lowercase()}, max=${p.maxParticles}, " +
+                                (if (p.burst > 0) "burst=${p.burst}" else "rate=${p.rate}") +
+                                (p.defaultBone?.let { ", bone=$it" } ?: "") + ")"
+                        }
+                        val active = stage.vfxSnapshot()
+                            .joinToString(", ") { "${it.id}:${it.presetId}×${it.activeParticles}" }
+                        log("presets(${presets.size}): $catalog\nactive: ${active.ifEmpty { "(none)" }}")
+                    }
+                    "play" -> {
+                        // fx play <preset> [slot] [bone:<骨名>] [x y z]
+                        // 锚点优先级：bone: > 显式 x y z > slot 演员脚底 > 预设
+                        // defaultBone(带 slot) > 舞台中心 (0,0,-4)
+                        val presetId = t.getOrNull(2)
+                        val preset = presetId?.let { VfxCatalog.find(context, it) }
+                        if (preset == null) {
+                            log("unknown preset '${presetId ?: "?"}' (try: fx list)")
+                        } else {
+                            val rest = t.drop(3)
+                            val boneArg = rest.firstOrNull {
+                                it.startsWith("bone:", true) || it.startsWith("anchor:", true)
+                            }?.substringAfter(':')?.takeIf { it.isNotBlank() }
+                            val slot = rest.firstOrNull { it.uppercase() in slots.ids() }
+                            val nums = rest.filter { it != slot && !(boneArg != null && (it.equals("bone:$boneArg", true) || it.equals("anchor:$boneArg", true))) }
+                                .mapNotNull { it.toFloatOrNull() }
+                            val xyz = nums.takeIf { it.size >= 3 }
+                            val defaultBone = preset.defaultBone
+                            val anchor = when {
+                                boneArg != null -> VfxAnchor.Bone(boneArg, slot?.uppercase())
+                                xyz != null -> VfxAnchor.World(xyz[0], xyz[1], xyz[2])
+                                slot != null -> {
+                                    val ws = slots[slot]?.getWalkState()
+                                    if (ws != null) VfxAnchor.World(ws.x, 0f, ws.z)
+                                    else VfxAnchor.World(0f, 0f, -4f)
+                                }
+                                defaultBone != null -> VfxAnchor.Bone(defaultBone)
+                                else -> VfxAnchor.World(0f, 0f, -4f)
+                            }
+                            val handle = stage.playVfx(preset, anchor)
+                            log(if (handle != null) "fx play ${preset.id} ok as ${handle.id}"
+                                else "fx play rejected (renderer not ready or batch full)")
+                        }
+                    }
+                    "stop" -> when (val id = t.getOrNull(2)) {
+                        null -> log("usage: fx stop <id|all>")
+                        "all", "ALL" -> {
+                            val n = stage.vfxSnapshot().size
+                            stage.stopAllVfx()
+                            log("fx stop all ok ($n active)")
+                        }
+                        else -> log(if (stage.stopVfx(id)) "fx stop $id ok" else "no fx $id (try: fx state)")
+                    }
+                    "state" -> {
+                        val live = stage.vfxSnapshot()
+                        log(if (live.isEmpty()) "fx: (none active)"
+                            else live.joinToString("\n") { info ->
+                                "fx ${info.id}: ${info.presetId} ${info.blending.name.lowercase()} " +
+                                    "particles=${info.activeParticles} age=${"%.1f".format(info.ageSeconds)}s" +
+                                    (info.anchor.takeIf { it.isNotEmpty() }?.let { " @$it" } ?: "")
+                            })
+                    }
+                    else -> log("usage: fx [list|play <preset> [slot] [bone:<骨名>] [x y z]|stop <id|all>|state]")
                 }
             }
 

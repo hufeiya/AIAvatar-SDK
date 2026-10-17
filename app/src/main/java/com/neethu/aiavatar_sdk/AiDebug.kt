@@ -123,10 +123,12 @@ fun aiDebugHelp(): String = """
     |                           import <glb path> / cal [show|clear] <id>. Phone
     |                           animations auto-show the phone via the built-in
     |                           binding table (registered on model ready)
-    |  fx <sub>                 VFX family (P0): list / play <preset> [ai_x ai_y
-    |                           ai_z world meters, default origin] / stop <id|all> /
-    |                           state. Built-ins: spark_burst (additive) |
-    |                           snow (transparent) | ring_pulse (additive)
+    |  fx <sub>                 VFX family (P1): list / play <preset> [ai_x ai_y
+    |                           ai_z world meters] [anchor:<bone>] / stop <id|all> /
+    |                           state. Catalog = built-ins + presets.json
+    |                           (fx list): spark_burst | snow | ring_pulse | rain |
+    |                           fire | confetti | petals | lightstick_spark
+    |                           (default-anchors rightHand)
     |  set_idle <arg>           Set .vrma as looping idle (LLM gestures return to it).
     |                           arg = file name fragment; persist across restarts
     |  idle_off                 Clear idle; one-shots fall back to rest pose

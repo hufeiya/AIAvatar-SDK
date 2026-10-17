@@ -5,6 +5,8 @@ import android.util.Log
 import com.neethu.aiavatar_sdk.loadWalkAnchors
 import com.neethu.aiavatar_sdk.multiavatar.AccessoryCatalog
 import com.neethu.aiavatar_sdk.multiavatar.Slots
+import com.neethu.aiavatar_sdk.multiavatar.VfxCatalog
+import com.neethu.corelib.vfx.VfxAnchor
 import com.neethu.aiavatar_sdk.multiavatar.StageChatRig
 import com.neethu.corelib.CameraShot
 import com.neethu.corelib.WalkStartResult
@@ -177,7 +179,8 @@ internal class DanceShowController(
             h?.stopVrmaAnimation(0.3f)
             if (h?.isReady == true) h.lookAtCamera()
         }
-        log("停演（音乐停/停舞回 idle/走动停/注视复位）")
+        stage.stopAllVfx()
+        log("停演（音乐停/停舞回 idle/走动停/注视复位/特效全停）")
     }
 
     /** 跳过当前幕。 */
@@ -339,6 +342,12 @@ internal class DanceShowController(
             for (p in act.props.orEmpty()) {
                 if (AccessoryCatalog.find(appContext, p) == null) return "$at: 道具 '$p' 不在配饰目录"
             }
+            // fx 幕（P1）：预设必须在特效目录
+            if (act.type == ActTypes.FX && act.fx != null &&
+                VfxCatalog.find(appContext, act.fx) == null
+            ) {
+                return "$at: 特效 '${act.fx}' 不在目录（assets/vfx/presets.json）"
+            }
         }
         if (ShowDirector.BOW_CLIP !in whitelist) return "谢幕曲目不在白名单 ${ShowDirector.BOW_CLIP}"
         return null
@@ -410,6 +419,33 @@ internal class DanceShowController(
                 // 没挂着 = 静默（绑定表自动出的道具不归 props 摘）
                 if (h.detachAccessory(cmd.accessoryId)) {
                     log("prop off: ${cmd.performer} -${cmd.accessoryId}")
+                }
+            }
+            is DirectorCmd.PlayFx -> {
+                // 锚点：bone 给了 = 骨骼锚定（发射跟随）；performer = 头顶世界位
+                // 快照；都空 = 舞台中心（AvatarStage 缺省锚）
+                val anchor = when {
+                    cmd.bone != null -> VfxAnchor.Bone(cmd.bone, cmd.performer)
+                    cmd.performer != null -> {
+                        val head = slots[cmd.performer]?.headWorldPosition()
+                        if (head != null) VfxAnchor.World(head[0], head[1] + 0.3f, head[2])
+                        else VfxAnchor.World(0f, 0f, -4f)
+                    }
+                    else -> VfxAnchor.World(0f, 0f, -4f)
+                }
+                val spec = VfxCatalog.find(appContext, cmd.preset)
+                if (spec == null) {
+                    log("warn: fx preset '${cmd.preset}' 不在目录（跳过）")
+                } else {
+                    stage.playVfx(spec, anchor)?.let { log("fx on: ${cmd.preset} as ${it.id}") }
+                        ?: log("warn: fx '${cmd.preset}' 播放被拒（批满/渲染未就绪）")
+                }
+            }
+            is DirectorCmd.StopFx -> {
+                // 按预设 id 停（fx 幕收幕；burst 型已自然播完 = 静默）
+                val live = stage.vfxSnapshot().firstOrNull { it.presetId.equals(cmd.preset, true) }
+                if (live != null && stage.stopVfx(live.id)) {
+                    log("fx off: ${cmd.preset}")
                 }
             }
             is DirectorCmd.Log -> log(cmd.text)

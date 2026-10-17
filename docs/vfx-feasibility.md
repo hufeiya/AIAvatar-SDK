@@ -1,6 +1,6 @@
 # 3D 特效库（VFX）可行性调研与落地方案
 
-> 生成时间：2026-10-16。对应代码状态：`main@3741d25`（配饰 P1.5+P2 之后）。**P0 渲染内核已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P0），P1/P2 未开发**。
+> 生成时间：2026-10-16。对应代码状态：`main@3741d25`（配饰 P1.5+P2 之后）。**P0 渲染内核已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P0）；P1 预设资产包+锚定发射+团播接入已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P1），P2 未开发**。
 > 起点：与 Gemini 的外部方案讨论（three.quarks 移植 + Billboard 批渲染 + 万能材质三层架构），本文结合仓库现状逐条校准——采纳什么、修正什么、否决什么（§二）。
 > 回答四个问题：①特效库怎么分层、哪部分能下沉 JVM 单测？②Filament 侧承接件（动态网格/材质/贴图）在本仓库的落点与先例？③怎么接进单人渲染/团播舞台/AI 工具三条业务线？④P0/P1/P2 各做什么、多少工作量、真机怎么验？
 
@@ -291,18 +291,23 @@ app/src/main/assets/vfx/
       "texture": "textures/soft_dot.png",
       "blending": "transparent",
       "maxParticles": 400, "overflow": "recycle_oldest",
-      "emitter": { "shape": "box", "center": [0, 4.5, -2], "halfExtents": [3, 0.2, 3], "rate": 60 },
+      "rate": 60, "lifetime": [4, 7], "size": [0.025, 0.05],
+      "emitter": { "shape": "box", "center": [0, 2.2, 0], "halfExtents": [1.6, 0.2, 1.6], "direction": [0, -1, 0], "speed": [0.25, 0.5] },
       "behaviors": [
         { "type": "gravity", "value": [0, -0.6, 0] },
         { "type": "sway", "axis": "x", "amplitude": 0.3, "frequency": 0.8 },
-        { "type": "color_over_life", "keys": [[0, [1, 1, 1, 0]], [0.15, [1, 1, 1, 0.9]], [1, [1, 1, 1, 0]]] },
+        { "type": "color_over_life", "keys": [[0, 1, 1, 1, 0], [0.15, 1, 1, 1, 0.9], [1, 1, 1, 1, 0]] },
         { "type": "size_over_life", "keys": [[0, 0.02], [1, 0.045]] }
       ],
-      "lifetime": [4, 7], "license": "CC0 (self-made)"
+      "license": "CC0 (self-made)"
     }
   ]
 }
 ```
+
+> 曲线 keys 为扁平数组：color_over_life 每键 `[t, r, g, b, a]`、size_over_life
+> 每键 `[t, v]`（P1 落地定稿——调研稿的 `[t, [r,g,b,a]]` 异构嵌套无法映射
+> `List<List<Float>>`，已扁平化）。
 
 解析在 app 层（kotlinx.serialization），脏条目丢弃 + 字段钳制（配饰 `AccessoryCatalog` 同款纪律），经 `vfxSpecResolver` 缝注入 corelib；corelib 内置 3 个代码常量预设做 SDK 兜底。
 
@@ -367,6 +372,30 @@ MToon 模型（10.vrm）+ PBR 模型各验一遍 → LINEAR/ACES 两种色调映
 
 **真机验收清单**：雨/雪/火/花瓣/彩带五配方逐个 `fx play` 目验；手骨星光锚定后 `walk_to` 走动全程跟随不脱钩、VrmaStarted/Finished 切换期间无残留；团播节目单插 `fx` act 不打断编舞（对照 multi-dance 验收口径）；三特效同屏（雪+彩带+火）`ai_cmd state` fps ≥ 50；fps 预算表记档。
 
+#### P1 验收实录（2026-10-17 真机，raphael/K20 Pro · MIUI 12.5 · debug 包）
+
+| 项 | 结果 |
+|---|---|
+| 五配方目验（单人路径） | snow 满屏雪花横摆飘落 / rain 细长雨丝速度拉伸下落 / fire 脚底 flipbook 火苗橙黄→暗红加色燃烧 / petals 左侧风送粉色花瓣自转飘入 / confetti 六色调色板彩纸旋转飘落，全部 60fps（HUD 口径） |
+| 彩带调色板 bug（当场抓改） | 首版 confetti 全白——`ColorOverLife` 曾**覆写**粒子色把 spawn 采样的 palette 配色洗掉；语义改为**曲线 × 起始色**（ParticlePool 增 baseRGBA 四数组），重验六色齐出；白色起始配方（spark_burst 等）数学不变，单测 `color curve multiplies base color keeping palette hue` 锁死 |
+| 骨骼锚定 | `fx play lightstick_spark` 缺省锚 rightHand；`fx state` 显 `@bone:rightHand`；walk_to 走动 + Waving 挥手动画切换全程特效存活不脱钩（age 25s+，解析失败即自停的机制下「存活」即「解析持续成功」）；spark_burst 显式 `anchor:rightHand` 爆发位置随手部 |
+| 团播 fx 命令族 | `fx list`（合并目录 8 预设）/ `fx play confetti`（舞台中心）/ `fx play fire B bone:rightHand`（B 右手火焰目验清晰）/ `fx state` / `fx stop all` 全通 |
+| 节目单 fx 幕 | 默认单 17 幕装载（fx 幕预设校验过目录）；开演 confetti 幕 3s hold 收口后 say/move/dance 无缝推进；谢幕前 spark_burst 幕 burst 自然播完 StopFx 空转；`show done` 全程 fps=60——插幕不打断编舞 ✓ |
+| 三特效同屏 | 单人（snow+confetti+fire）fps=60；团播（snow 328 + confetti 258 + fire 36 = 622 粒）fps=60——验收线 ≥50 大幅富余 |
+| fps 预算表（ai_cmd state 口径，K20 Pro/Adreno） | snow 400 粒 TRANSPARENT=60 · rain 220 粒（域 2.6×0.2×2.6m 细长粒）=60 · fire 96 粒 flipbook ADD=60 · confetti 300 粒=60 · petals 160 粒=60 · 三特效 622 粒同屏=60；透明档预算规则延续 P0 结论：域收紧 + 粒子屏幕占比小是第一纪律 |
+| ×20 play/stop + load_model ×3 | 双路径（单人 am start ai_cmd + 团播 STAGE_CMD broadcast）循环零 FATAL/SIGABRT；PSS 1.394GB→1.348GB（降，无泄漏）；进程全程存活 |
+| 单测 | VFX P1 新增 20 条（corelib sim 6：cone/sway/turbulence/flipbook/palette/曲线×起始色；app 14：VfxCatalog 7 含对照 assets 树、ShowScript fx 幕 4、ShowDirector fx 幕 3），全模块 **2026 条全绿** |
+
+**P1 实施差异与首验项结论（回填 §八）**：
+
+1. **UV 方向（§八 #3）**：petal/confetti/spark 非对称贴图真机目验——本轮贴图均为弱方向性设计（花瓣中脉、四芒星、方块折痕），且花瓣/彩带配方自带自转，无可辨「上下颠倒」观感，风险降级为低；CPU 端翻 V 预案保留在 `VfxMath.writeParticle` 注释，未来引入带文字/强方向贴图时一行修。
+2. **批按（混合档 × 贴图）键控**（§4.5「全屏 2 draw call」的 P1 修正）：材质实例一张 mainTexture，异贴图特效不能共批——批键加贴图维度，全屏 draw call 数 = 在用（档×贴图）组合数（个位数），换仿真实成本可忽略。
+3. **贴图缓存**：VfxManager 按 `VfxTexture` 键缓存 GPU 纹理（同贴图多预设共享一张）；Asset 加载失败回退柔边圆点并缓存，`destroy` 走 distinct 去重（防同纹理双毁）。
+4. **预设供给两层**：corelib `VfxPresets` 扩到 8 配方（§七表，SDK 零资产兜底可跑）；app `VfxCatalog` 三层合并（内置打底 → presets.json 覆盖同名 → 未来显式参数），presets.json 为真机调参权威表（两者同源，`VfxCatalogTest` 防漂移断言）。**与文档 §4.3 的一处偏差**：未加 `AvatarController.vfxSpecResolver` 注入缝——配饰的 resolver 缝有 corelib 内部消费者（动画联动状态机），VFX 的全部消费者（FxTools/StageCommandRouter/节目单）都在 app 层可直接调 VfxCatalog，加缝只会造 write-only API；P2 LLM 工具同为 app 层，届时仍无 corelib 消费者。
+5. **DanceRequestRouter 白名单扩展预研结论**（P1 清单第 4 条末项）：LLM 点播特效走导播链的扩展点已就绪——router 输出 JSON 增可选 `"fx"` 字段、`VfxCatalog.find` 双向校验（同 clip 白名单模式）、命中即组装 `ShowAct(type="fx")` 走既有 enqueueAct 插幕；校验/拒绝降级链零新增。留 P2 与单人 `play_effect` LLM 工具（§六 P2 第 1 条）一并落地，本期限于「点播特效无 LLM 工具通道时不可达」未提前实现。
+6. **新坑 C（ColorOverLife 覆写语义）**：曲线行为曾整体覆写粒子色——palette 配色被（白色）alpha 包络洗成纯白，真机 confetti 当场暴露。已改为曲线 × 起始色（起始白 = 纯曲线，palette 色 = 本色过包络）；任何新增「逐粒子属性 + 曲线行为」组合都须先定义乘法还是覆写语义。
+7. **flipbook 帧推进语义**：帧号随**生命进度**（出生=第 0 帧、消亡=末帧）而非独立 fps——寿命即动画周期，fire 配方 16 帧/0.7~1.0s 自然得到 16~23fps 播放，省一个参数；单测选址须避开 `frac×totalFrames` 整数边界（浮点噪声翻帧，`ParticleSystemTest.flipbook` 注释有记录）。
+
 ### P2 —— AI 通道 + 高级材质（预估 3~4 人日）
 
 1. **LLM 工具**：`play_effect(effect: enum 白名单, at: enum {around_me, stage_center, camera_front} 可选, position 可选)` + `stop_effect`——照 wearAccessory 五步落点（`AgentToolCatalog` 工厂 + `PromptTexts` 双语 description/hint/结果文案 + app `AgentEffectTools` 幂等注册 + `AiChat.fxTools` 开关默认关 + `MainActivity` 接线一行）；失败归因枚举（UnknownEffect/NotAvailable）全回灌不炸回合；**为什么用工具不用行内标签**：`<fx:>` 会成为第四个标签命名空间（协议块膨胀 + InlineTagExtractor 正则面扩大 + 模型滥用刷屏风险），而特效是场景级事件不是逐句修饰，工具的 enum 白名单 + 失败回灌链路（坑 26 的兜底体系）全部现成；
@@ -407,7 +436,7 @@ MToon 模型（10.vrm）+ PBR 模型各验一遍 → LINEAR/ACES 两种色调映
 |---|---|---|---|
 | 1 | **ADD 混合 alpha 语义**（filament ONE/ONE 不读目标 alpha，淡出需源端预乘） | ~~P0 首验~~ ✅已闭环 | shader 内 `rgb *= a` 预乘写死（§4.6）；纯灰底目验平滑淡出无黑框（§六 P0 实录 #1） |
 | 2 | **TRANSPARENT 的 premultiplied 约定**（filament 默认 ONE/ONE_MINUS_SRC_ALPHA） | ~~P0 首验~~ ✅已闭环 | 同上预乘写法；白雪高斯边缘干净（§六 P0 实录 #2） |
-| 3 | **自有 PNG 的 UV 方向**（Bitmap 行序 top-down vs GL v 轴向上；MToon 的 flipUV(false) 是 GLB 语境） | P1 首验 | 径向对称贴图 P0 无法判定；上下颠倒则 CPU 端翻 V（VfxMath 一行），结论记档 |
+| 3 | **自有 PNG 的 UV 方向**（Bitmap 行序 top-down vs GL v 轴向上；MToon 的 flipUV(false) 是 GLB 语境） | ~~P1 首验~~ ✅已闭环 | P1 非对称贴图（petal/spark/confetti）真机目验：弱方向性设计 + 自转配方下无可辨颠倒，风险降级为低；CPU 端翻 V 预案保留在 `VfxMath.writeParticle`（注释在案），引入强方向贴图时一行修（§六 P1 实录 #1） |
 | 4 | setBufferAt 五参的 position/byteOffset 精确语义 | ~~P0 首验~~ ✅已闭环 | JNI 从 buffer position 起读 sizeBytes；position(0)+limit(n) 下三参/五参真机 A/B 等价（§六 P0 实录 #4），五参部分上传为正路 |
 | 5 | GPU 资源 destroy 顺序（坑 13 SIGABRT 前科 + 二次 onDestroy 前科） | 高 | §4.5 幂等 destroy 状态机；抽屉往返 ×5 回归进 P0 验收清单 |
 | 6 | 透明粒子互叠排序（depthWrite=false 下加色无序OK、透明档有序感） | 中 | transparent 粒子按出生序写入近似排序（新粒子后写=盖在上面，多数配方自然成立）；严重时 P2 按视深排序写入段 |
@@ -421,7 +450,7 @@ MToon 模型（10.vrm）+ PBR 模型各验一遍 → LINEAR/ACES 两种色调映
 
 ## 九、测试与验收策略
 
-- **JVM 单测**（纯数学层，目标 +20~30 条）：ParticlePool（回收/预算/溢出/dt 钳制）、ParticleSystem（种子确定性积分序列）、VfxMath（基向量正交/四角/拉伸轴/flipbook UV）、Behavior 逐个、VfxCatalog（对照 assets 树，坑 25）、AgentEffectToolsCatalog（P2，schema 锁/白名单/双语）。基线：当前全量 832 条，交付后应 ≥850 全绿。
+- **JVM 单测**（纯数学层）：ParticlePool（回收/预算/溢出/dt 钳制）、ParticleSystem（种子确定性积分序列）、VfxMath（基向量正交/四角/拉伸轴/flipbook UV）、Behavior 逐个、VfxCatalog（对照 assets 树，坑 25）、AgentEffectToolsCatalog（P2，schema 锁/白名单/双语）。基线：P1 交付后全模块 **2026 条全绿**（本轮 VFX 新增 20 条）。
 - **真机口径**：fps 只认 `ai_cmd state` 的 `fps=` 字段（坑 14）；视觉差分先 `camera_shot closeup` 固定机位再 screencap；命令注入一律 ai_cmd（MIUI 禁 shell 触摸）。
 - **回归清单**（特效层改动不得波及）：MToon 渲染/切角色、弹簧骨骼、走动（含 FOLLOW 跟拍）、配饰挂载、抽屉跳转往返、模型重载 ×5 泄漏。
 

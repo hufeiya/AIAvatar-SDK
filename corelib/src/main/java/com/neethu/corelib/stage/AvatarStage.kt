@@ -247,6 +247,41 @@ class AvatarStage internal constructor(
 
     fun isDragMode(): Boolean = impl?.isDragMode ?: false
 
+    // ── VFX 特效（P1 团播路径，docs/vfx-feasibility.md §六）──────────────
+
+    private val _effects =
+        MutableStateFlow<List<com.neethu.corelib.vfx.VfxInfo>>(emptyList())
+
+    /** 活跃特效列表（play/stop/播完自停发布；世界系，演员增减不清空）。 */
+    val effects: StateFlow<List<com.neethu.corelib.vfx.VfxInfo>> = _effects.asStateFlow()
+
+    /**
+     * 播放一个特效（世界系粒子系统；缺省锚点 = 舞台中心地面 (0,0,−4)——
+     * Stage.MODEL_CENTER，与默认取景同心）。
+     *
+     * @param spec 特效规格（内置见 [com.neethu.corelib.vfx.VfxPresets]）
+     * @param anchor 锚点（世界点或骨骼锚定；骨骼锚定带 [com.neethu.corelib.vfx.VfxAnchor.Bone.avatarId]）
+     * @return 句柄（凭 `.id` 可 [stopVfx]）；null = 渲染未就绪或批容量已满
+     */
+    fun playVfx(
+        spec: com.neethu.corelib.vfx.VfxSpec,
+        anchor: com.neethu.corelib.vfx.VfxAnchor =
+            com.neethu.corelib.vfx.VfxAnchor.World(0f, 0f, -4f),
+    ): com.neethu.corelib.vfx.VfxHandle? =
+        impl?.playVfx(spec, anchor)
+
+    /** 停止一个特效（true = 确有此特效）。 */
+    fun stopVfx(id: String): Boolean = impl?.stopVfx(id) ?: false
+
+    /** 停止全部特效。 */
+    fun stopAllVfx() {
+        impl?.stopAllVfx()
+    }
+
+    /** 活跃特效实时快照（STAGE_CMD `fx state` 数据源；稳定观察走 [effects]）。 */
+    fun vfxSnapshot(): List<com.neethu.corelib.vfx.VfxInfo> =
+        impl?.vfxSnapshot() ?: emptyList()
+
     // ── 截帧 ─────────────────────────────────────────────────────────────
 
     /** 下一帧渲染完成回调 Bitmap（主线程）；渲染未启动 = false。 */
@@ -266,17 +301,20 @@ class AvatarStage internal constructor(
         stage.startup()
         // fps 回调在这里接（Stage 每帧回调 → 门面 StateFlow）
         stage.onFpsUpdated = { value -> _fps.value = value }
+        // 特效列表变化中继（play/stop/播完自停/骨锚失效自停）
+        stage.onEffectsUpdated = { list -> _effects.value = list }
         // attach 前注入的配饰解析器在此补推（门面存住值，impl 时序无关）
         stage.accessorySpecResolver = _accessorySpecResolver
         _attached.value = true
     }
 
     internal fun detachFromView() {
-        impl?.onFpsUpdated = null
+        impl?.let { it.onFpsUpdated = null; it.onEffectsUpdated = null }
         impl?.onDestroy()
         impl = null
         implView = null
         _fps.value = 0
+        _effects.value = emptyList()
         _attached.value = false
     }
 

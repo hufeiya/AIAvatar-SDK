@@ -27,6 +27,12 @@ class ParticlePool(val capacity: Int) {
     val cg = FloatArray(capacity)
     val cb = FloatArray(capacity)
     val ca = FloatArray(capacity)
+    /** 起始色（spawn 采样定格；ColorOverLife 输出 = 曲线 × 起始色——palette
+     *  配色不被白色曲线覆写，2026-10-17 真机 confetti 目验教训）。 */
+    val baseR = FloatArray(capacity)
+    val baseG = FloatArray(capacity)
+    val baseB = FloatArray(capacity)
+    val baseA = FloatArray(capacity)
 
     var activeCount = 0
         private set
@@ -61,6 +67,7 @@ class ParticlePool(val capacity: Int) {
         baseSize[i] = size; curSize[i] = size
         angle[i] = angleRad; angularVel[i] = angVelRad
         cr[i] = r; cg[i] = g; cb[i] = b; ca[i] = a
+        baseR[i] = r; baseG[i] = g; baseB[i] = b; baseA[i] = a
         return i
     }
 
@@ -84,6 +91,7 @@ class ParticlePool(val capacity: Int) {
         baseSize[i] = size; curSize[i] = size
         angle[i] = angleRad; angularVel[i] = angVelRad
         cr[i] = r; cg[i] = g; cb[i] = b; ca[i] = a
+        baseR[i] = r; baseG[i] = g; baseB[i] = b; baseA[i] = a
     }
 
     /**
@@ -111,6 +119,8 @@ class ParticlePool(val capacity: Int) {
             baseSize[i] = baseSize[last]; curSize[i] = curSize[last]
             angle[i] = angle[last]; angularVel[i] = angularVel[last]
             cr[i] = cr[last]; cg[i] = cg[last]; cb[i] = cb[last]; ca[i] = ca[last]
+            baseR[i] = baseR[last]; baseG[i] = baseG[last]
+            baseB[i] = baseB[last]; baseA[i] = baseA[last]
         }
         activeCount--
     }

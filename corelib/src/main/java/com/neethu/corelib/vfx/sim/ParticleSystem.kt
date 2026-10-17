@@ -39,6 +39,15 @@ internal class ParticleSystem(
     private var emitAccumulator = 0f
     private var burstDone = burst <= 0
 
+    // flipbook 子矩形步长（配置期一次；null = 整图）
+    private val flipDu: Float = spec.flipbook?.let { 1f / it.columns } ?: 1f
+    private val flipDv: Float = spec.flipbook?.let { 1f / it.rows } ?: 1f
+    private val flipColumns: Int = spec.flipbook?.columns ?: 1
+    private val flipTotal: Int = spec.flipbook?.totalFrames ?: 1
+
+    // 随机取色表（confetti；null = 恒 startColor）
+    private val palette: List<com.neethu.corelib.vfx.VfxColor>? = spec.palette?.takeIf { it.isNotEmpty() }
+
     /** 一次性特效是否已播完（burst 已放且池空）。持续型恒 false，直到 stop。 */
     val isFinished: Boolean
         get() = burstDone && rate <= 0f && pool.activeCount == 0
@@ -101,17 +110,19 @@ internal class ParticleSystem(
     }
 
     private fun spawn(count: Int, anchorX: Float, anchorY: Float, anchorZ: Float) {
+        val pal = palette
         for (k in 0 until count) {
             Emitter.sample(emitterParams, anchorX, anchorY, anchorZ, random, samplePos, sampleVel)
             val lifeSec = sampleRange(random, lifetimeMin, lifetimeMax)
             val size = sampleRange(random, sizeMin, sizeMax)
             val spin = sampleRange(random, spinMin, spinMax)
+            val color = if (pal != null) pal[random.nextInt(pal.size)] else startColor
             val slot = pool.append(
                 x = samplePos[0], y = samplePos[1], z = samplePos[2],
                 velX = sampleVel[0], velY = sampleVel[1], velZ = sampleVel[2],
                 lifeSec = lifeSec, size = size,
                 angleRad = 0f, angVelRad = spin,
-                r = startColor.r, g = startColor.g, b = startColor.b, a = startColor.a,
+                r = color.r, g = color.g, b = color.b, a = color.a,
             )
             if (slot >= 0) continue
             when (overflow) {
@@ -122,7 +133,7 @@ internal class ParticleSystem(
                     velX = sampleVel[0], velY = sampleVel[1], velZ = sampleVel[2],
                     lifeSec = lifeSec, size = size,
                     angleRad = 0f, angVelRad = spin,
-                    r = startColor.r, g = startColor.g, b = startColor.b, a = startColor.a,
+                    r = color.r, g = color.g, b = color.b, a = color.a,
                 )
             }
         }
@@ -155,9 +166,26 @@ internal class ParticleSystem(
         outFloatIndex: Int,
     ): Int {
         val n = pool.activeCount
+        val hasFlip = flipTotal > 1
         var o = outFloatIndex
         for (i in 0 until n) {
             val s = pool.curSize[i]
+            var u0 = 0f
+            var v0 = 0f
+            var du = 1f
+            var dv = 1f
+            if (hasFlip) {
+                // 序列帧：帧号随生命进度推进（出生=第 0 帧，消亡=末帧），整图
+                // 均匀网格左→右、上→下取子矩形
+                val t = pool.lifeFraction(i)
+                val frame = (t * flipTotal).toInt().coerceIn(0, flipTotal - 1)
+                val col = frame % flipColumns
+                val row = frame / flipColumns
+                du = flipDu
+                dv = flipDv
+                u0 = col * du
+                v0 = row * dv
+            }
             if (stretch > 0f) {
                 // 速度拉伸（雨丝）：长轴沿速度，短轴垂直于速度×视线
                 VfxMath.stretchAxes(
@@ -168,12 +196,13 @@ internal class ParticleSystem(
                     out, o,
                     pool.px[i], pool.py[i], pool.pz[i],
                     widthAxis, longAxis, s, s * stretch,
+                    u0, v0, du, dv,
                 )
             } else if (pool.angle[i] != 0f) {
                 VfxMath.rotateBasis(right, up, pool.angle[i], rotRight, rotUp)
-                VfxMath.writeParticle(out, o, pool.px[i], pool.py[i], pool.pz[i], rotRight, rotUp, s, s)
+                VfxMath.writeParticle(out, o, pool.px[i], pool.py[i], pool.pz[i], rotRight, rotUp, s, s, u0, v0, du, dv)
             } else {
-                VfxMath.writeParticle(out, o, pool.px[i], pool.py[i], pool.pz[i], right, up, s, s)
+                VfxMath.writeParticle(out, o, pool.px[i], pool.py[i], pool.pz[i], right, up, s, s, u0, v0, du, dv)
             }
             val r = pool.cr[i]; val g = pool.cg[i]; val b = pool.cb[i]; val a = pool.ca[i]
             var vo = o + VfxMath.COLOR_OFFSET

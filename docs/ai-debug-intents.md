@@ -36,7 +36,7 @@
 | `play_animation` | `ai_arg`=文件名，可选 `ai_loop` | 播放 assets/animations 下的 .vrma 动作 |
 | `stop_animation` | — | 停止动作（设了待机时回到待机循环，否则回 rest pose） |
 | `accessory` | `ai_arg`=子命令（见下） | **配饰族**（P1.5 单人路径，docs/accessory-feasibility.md §5.7）：`list`（目录+绑定表+在身清单）/ `attach <id> [bone] [dx dy dz rx ry rz scale colliderR]`（显式参数逐层覆盖：命令 > per-model 校准 preset > sidecar 默认；colliderR=弹簧骨骼外部碰撞体半径米，P2-3 帽子压头发实验）/ `detach\|show\|hide <id>` / `bind\|unbind <id> <动画路径...>`（追加/解除动画绑定白名单）/ `bindings` / `import <glb路径>` / `cal [show\|clear] <id>`（把最近一次挂载规格落成 per-model preset）。内置 8 条手机动画→phone、2 条唱歌/说唱→microphone 的绑定表在模型就绪时自动注册——播对应动画道具自动出场；LLM 侧另有 wear_accessory/remove_accessory 工具（`ai_accessory_tools` 开关） |
-| `fx` | `ai_arg`=子命令，位置用 `ai_x`/`ai_y`/`ai_z` | **特效族**（P0 渲染内核，docs/vfx-feasibility.md §六）：`list`（内置预设目录+在播清单）/ `play <preset>`（世界点锚定，`ai_x/ai_y/ai_z`=世界坐标米，缺省 0,0,0=模型脚底；内置 `spark_burst` 加色爆发 / `snow` 透明飘雪 / `ring_pulse` 加色光环；一次性特效播完自停）/ `stop <id\|all>`（id 形如 fx1）/ `state`（在播特效实时粒子数与年龄）。世界系：模型重载/场景切换不影响在播特效 |
+| `fx` | `ai_arg`=子命令，位置用 `ai_x`/`ai_y`/`ai_z` | **特效族**（P1 资产包+锚定，docs/vfx-feasibility.md §六）：`list`（合并目录=内置 8 配方+presets.json 覆盖，含在播清单）/ `play <preset> [ai_x ai_y ai_z] [anchor:<骨名>]`（锚点优先级=显式 anchor: > 显式坐标（按轴覆盖角色实时位）> 预设 defaultBone（lightstick_spark→rightHand）> 角色脚底实时位；目录=`spark_burst/snow/ring_pulse/rain/fire/confetti/petals/lightstick_spark`；一次性特效播完自停）/ `stop <id\|all>`（id 形如 fx1）/ `state`（实时粒子数/年龄/锚点）。世界系：模型重载/场景切换不影响在播特效；骨骼锚定发射器跟随、已存活粒子留世界系，骨失效（模型重载）安静自停 |
 | `set_idle` | `ai_arg`=文件名片段 | 把一个 .vrma 设为循环待机（LLM 手势播完/手动停止后回到它），持久化到 demo_settings；不设则用内置优先级自动选（Idle Stand Looking Around 优先） |
 | `idle_off` | — | 清除待机，一次性动作播完回落 rest pose |
 | `move` | `ai_x` `ai_y` `ai_z` | 平移人物（世界坐标米）：+x 右、+y 上、+z 朝相机 |
@@ -139,10 +139,10 @@ adb shell am start -n $PKG/.MainActivity \
 adb shell am start -n $PKG/.MainActivity \
     --es ai_cmd accessory --es ai_arg "attach trashcan head 0 0.15 0 0 0 0 1 0.09"
 
-# 特效:星尘爆发(默认锚点 0,0,0)/指定世界点放雪/停掉全部
+# 特效:星尘爆发(锚角色脚底实时位)/手骨锚定应援星光(应援模式)/停掉全部
 adb shell am start -n $PKG/.MainActivity --es ai_cmd fx --es ai_arg "play spark_burst"
-adb shell am start -n $PKG/.MainActivity \
-    --es ai_cmd fx --es ai_arg "play snow" --ef ai_x 0 --ef ai_y 0 --ef ai_z 0
+adb shell am start -n $PKG/.MainActivity --es ai_cmd fx --es ai_arg "play lightstick_spark"
+adb shell am start -n $PKG/.MainActivity --es ai_cmd fx --es ai_arg "play snow" --ef ai_x 0 --ef ai_y 2 --ef ai_z 0
 adb shell am start -n $PKG/.MainActivity --es ai_cmd fx --es ai_arg "stop all"
 
 # 移动人物：向右 0.2m、向下 0.1m

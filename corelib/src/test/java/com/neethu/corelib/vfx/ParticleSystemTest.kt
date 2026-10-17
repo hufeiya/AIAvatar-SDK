@@ -233,4 +233,166 @@ class ParticleSystemTest {
         assertEquals(0, system.pool.activeCount)
         assertTrue(system.isFinished)
     }
+
+    // ── P1：Cone 发射器 / Sway / Turbulence / flipbook / palette ──────────
+
+    @Test
+    fun `cone emits from base disc with axis plus radial velocity`() {
+        val spec = VfxSpec(
+            id = "t", maxParticles = 24, burst = 24,
+            lifetimeMin = 1f, lifetimeMax = 1f, sizeMin = 0.1f, sizeMax = 0.1f,
+            emitter = EmitterParams(
+                shape = EmitterShape.CONE,
+                radius = 0.16f,
+                direction = VfxVec3(0f, 1f, 0f),
+                speedMin = 1f, speedMax = 1f,
+                radialFraction = 0.5f,
+            ),
+        )
+        val system = ParticleSystem(spec, Random(17))
+        val out = FloatArray(24 * VfxMath.FLOATS_PER_PARTICLE)
+        update(system, 0.016f, out = out)
+        val p = system.pool
+        var withRadial = 0
+        for (i in 0 until p.activeCount) {
+            // 位置：底盘圆内（含本帧积分位移 ≤ speed·dt 的余量）
+            assertTrue(kotlin.math.sqrt(p.px[i] * p.px[i] + p.pz[i] * p.pz[i]) <= 0.17f)
+            // 轴向速度恒 = speed；径向只加在水平两轴
+            assertEquals(1f, p.vy[i], 1e-5f)
+            val radial = kotlin.math.sqrt(p.vx[i] * p.vx[i] + p.vz[i] * p.vz[i])
+            if (radial > 1e-4f) withRadial++
+            // 径向速度上限 = speed × fraction（圆心粒子为 0）
+            assertTrue(radial <= 0.5f + 1e-4f)
+        }
+        assertTrue("离圆心粒子应带径向分量", withRadial > 0)
+    }
+
+    @Test
+    fun `sway rewrites axis velocity sinusoidally by elapsed age`() {
+        val system = ParticleSystem(
+            burstSpec(
+                burst = 1, maxParticles = 1,
+                behaviors = listOf(BehaviorParams.Sway(axis = "x", amplitude = 0.5f, frequency = 1f)),
+            ),
+            Random(23),
+        )
+        update(system, 0.016f)
+        // 已活时长 = maxLife − life = 0.016（寿命固定）；v = amplitude·sin(2π·f·已活)
+        val expected = 0.5f * Math.sin(2.0 * Math.PI * 0.016).toFloat()
+        assertEquals(expected, system.pool.vx[0], 1e-4f)
+        assertEquals(0f, system.pool.vy[0], 1e-6f)
+        // 相位推进：下一帧已活 0.032
+        update(system, 0.016f)
+        assertEquals(0.5f * Math.sin(2.0 * Math.PI * 0.032).toFloat(), system.pool.vx[0], 1e-4f)
+    }
+
+    @Test
+    fun `turbulence is deterministic bounded and strength-zero is a no-op`() {
+        val spec = burstSpec(
+            burst = 8, maxParticles = 8,
+            behaviors = listOf(BehaviorParams.Turbulence(strength = 0.3f, scale = 2f, evolution = 1f)),
+        )
+        val a = ParticleSystem(spec, Random(41))
+        val b = ParticleSystem(spec, Random(41))
+        val none = ParticleSystem(burstSpec(burst = 8, maxParticles = 8), Random(41))
+        update(a, 0.016f); update(b, 0.016f); update(none, 0.016f)
+        for (i in 0 until 8) {
+            assertEquals(a.pool.px[i], b.pool.px[i], 1e-6f)
+            assertEquals(a.pool.vy[i], b.pool.vy[i], 1e-6f)
+        }
+        // 有界：单帧 0.016s 内速度扰动 ≤ strength×dt×常数（量级护栏）
+        assertTrue(abs(a.pool.vx[0]) < 0.3f)
+        // strength=0 退化为无行为
+        val zero = ParticleSystem(
+            burstSpec(burst = 1, maxParticles = 1, behaviors = listOf(BehaviorParams.Turbulence(strength = 0f))),
+            Random(41),
+        )
+        update(zero, 0.016f)
+        assertEquals(0f, zero.pool.vx[0], 1e-7f)
+    }
+
+    @Test
+    fun `flipbook remaps uv subrect by life fraction`() {
+        // 选址避开帧边界（frac×totalFrames 恰落整数时 toInt 被浮点噪声翻帧）
+        // 且 dt ≤ DT_MAX(0.05)：寿命 0.16s、dt 0.05 → frac = 0.3125（二进制
+        // 精确）→ ×4 = 1.25 → 帧 1（col1 row0）
+        val spec = burstSpec(burst = 1, maxParticles = 1)
+            .copy(flipbook = FlipbookParams(columns = 2, rows = 2), lifetimeMin = 0.16f, lifetimeMax = 0.16f)
+        val system = ParticleSystem(spec, Random(51))
+        val out = FloatArray(VfxMath.FLOATS_PER_PARTICLE)
+        update(system, 0.05f, out = out)
+        assertEquals(0.5f, out[3], 1e-5f) // V0 u = u0
+        assertEquals(0.0f, out[4], 1e-5f) // V0 v = v0
+        assertEquals(1.0f, out[18 + 3], 1e-5f) // V2 u = u0+du
+        assertEquals(0.5f, out[18 + 4], 1e-5f) // V2 v = v0+dv（2×2 子矩形 dv=0.5）
+        // 末帧：寿命略大于 dt（恰等时粒子被当场回收），frac ≈ 0.83 → 帧 3（col1 row1）
+        val fresh = ParticleSystem(
+            spec.copy(lifetimeMin = 0.06f, lifetimeMax = 0.06f), Random(51),
+        )
+        val out2 = FloatArray(VfxMath.FLOATS_PER_PARTICLE)
+        update(fresh, 0.05f, out = out2)
+        assertEquals(0.5f, out2[3], 1e-5f)
+        assertEquals(0.5f, out2[4], 1e-5f)
+    }
+
+    @Test
+    fun `palette samples per particle colors`() {
+        val red = VfxColor(1f, 0f, 0f, 1f)
+        val blue = VfxColor(0f, 0f, 1f, 1f)
+        val spec = burstSpec(burst = 12, maxParticles = 12).copy(palette = listOf(red, blue))
+        val system = ParticleSystem(spec, Random(61))
+        update(system, 0.016f)
+        val p = system.pool
+        var reds = 0
+        var blues = 0
+        for (i in 0 until p.activeCount) {
+            val isRed = p.cr[i] == 1f && p.cb[i] == 0f
+            val isBlue = p.cr[i] == 0f && p.cb[i] == 1f
+            assertTrue("颜色必须出自调色板", isRed || isBlue)
+            if (isRed) reds++ else blues++
+        }
+        assertTrue("两种颜色都该被采到（12 粒二选一）", reds > 0 && blues > 0)
+    }
+
+    @Test
+    fun `color curve multiplies base color keeping palette hue`() {
+        // 2026-10-17 真机 confetti 教训：ColorOverLife 曾整体覆写粒子色，palette
+        // 配色被白色 alpha 包络洗成纯白——语义改为 曲线 × 起始色
+        val red = VfxColor(1f, 0f, 0f, 1f)
+        val spec = burstSpec(
+            burst = 1, maxParticles = 1,
+            behaviors = listOf(
+                BehaviorParams.ColorOverLife(
+                    listOf(
+                        ColorKey(0f, VfxColor(1f, 1f, 1f, 0f)),
+                        ColorKey(1f, VfxColor(1f, 1f, 1f, 1f)),
+                    ),
+                ),
+            ),
+        ).copy(palette = listOf(red))
+        val system = ParticleSystem(spec, Random(71))
+        update(system, 0.016f)
+        val p = system.pool
+        assertClose(1f, p.cr[0]) // 红通道保留
+        assertClose(0f, p.cb[0]) // 蓝通道保留
+        assertClose(0.016f, p.ca[0], 1e-3f) // alpha 走曲线包络（0→1 淡入，t=0.016）
+        // 起始白 + 彩色曲线 = 纯曲线渐变（spark_burst 语义不变）
+        val curve = ParticleSystem(
+            burstSpec(
+                burst = 1, maxParticles = 1,
+                behaviors = listOf(
+                    BehaviorParams.ColorOverLife(
+                        listOf(
+                            ColorKey(0f, VfxColor(1f, 0f, 0f, 1f)),
+                            ColorKey(1f, VfxColor(0f, 0f, 1f, 0f)),
+                        ),
+                    ),
+                ),
+            ),
+            Random(73),
+        )
+        update(curve, 0.05f)
+        assertClose(0.95f, curve.pool.cr[0])
+        assertClose(0.05f, curve.pool.cb[0])
+    }
 }

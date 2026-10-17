@@ -1,6 +1,7 @@
 package com.neethu.corelib.vfx.internal
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import com.google.android.filament.Engine
 import com.google.android.filament.Texture
@@ -14,9 +15,10 @@ import kotlin.math.max
 
 /**
  * 特效贴图工厂（docs/vfx-feasibility.md §4.2 第三层承接件）：P0 程序化柔边
- * 圆点（零资产自证）；上传纪律照抄 MToonApplier.decodeAndUpload——逐张
- * flushAndWait 排空（像素缓冲下一帧 beginFrame 才消费，同时存活顶爆 Java 堆，
- * 坑 11）。P1 的 assets PNG 走同一 upload 通道。
+ * 圆点（零资产自证）；P1 起接 assets PNG（spark/streak/petal/confetti/flame
+ * ——tools/vfx-samples/gen_textures.py 程序化生成，§五）。上传纪律照抄
+ * MToonApplier.decodeAndUpload——逐张 flushAndWait 排空（像素缓冲下一帧
+ * beginFrame 才消费，同时存活顶爆 Java 堆，坑 11）。
  */
 internal object VfxTextureFactory {
 
@@ -26,16 +28,30 @@ internal object VfxTextureFactory {
     private const val PROC_SIZE = 64
 
     /**
-     * 按 [VfxTexture] 描述建 Texture。P0 仅 [VfxTexture.SoftDot]；
-     * [VfxTexture.Asset] P1 接 assets PNG（先占位回退 SoftDot，不炸主流程）。
+     * 按 [VfxTexture] 描述建 Texture。[readBytes] 供 assets 路径取字节
+     * （host 缝注入）；读取/解码失败回退柔边圆点（不炸主流程，§4.2）。
      */
-    fun create(engine: Engine, texture: VfxTexture): Texture = when (texture) {
-        is VfxTexture.SoftDot -> softDot(engine)
-        is VfxTexture.Asset -> {
-            Log.w(TAG, "asset textures arrive in P1; falling back to soft dot for '${texture.path}'")
-            softDot(engine)
+    fun create(engine: Engine, texture: VfxTexture, readBytes: (String) -> ByteArray?): Texture =
+        when (texture) {
+            is VfxTexture.SoftDot -> softDot(engine)
+            is VfxTexture.Asset -> {
+                val bytes = readBytes(texture.path)
+                val bitmap = bytes?.let { runCatching { BitmapFactory.decodeByteArray(it, 0, it.size) }.getOrNull() }
+                if (bitmap == null) {
+                    Log.w(TAG, "asset texture load failed: '${texture.path}'; falling back to soft dot")
+                    softDot(engine)
+                } else {
+                    // 非 ARGB_8888（罕见）先转码再走统一上传通道
+                    if (bitmap.config != Bitmap.Config.ARGB_8888) {
+                        val converted = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                        bitmap.recycle()
+                        upload(engine, converted, srgb = true).also { converted.recycle() }
+                    } else {
+                        upload(engine, bitmap, srgb = true).also { bitmap.recycle() }
+                    }
+                }
+            }
         }
-    }
 
     /** 程序化径向渐变圆点：高斯衰减 alpha（边缘 ~1%），白色 RGB。 */
     fun softDot(engine: Engine): Texture {

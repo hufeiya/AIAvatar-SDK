@@ -86,10 +86,12 @@ object VfxMath {
     /**
      * 写一个粒子的 4 个 Billboard 角点 + UV 到 [out]（交错布局）。
      * [r]/[u] 为（可自转后的）Billboard 平面基向量，[halfW]/[halfH] 为半宽/半高
-     * （米）；速度拉伸时调用方直接传拉伸后的轴。
+     * （米）；速度拉伸时调用方直接传拉伸后的轴。UV 默认整图四角；flipbook 传
+     * 子矩形（[u0]/[v0] 左下原点 + [du]/[dv] 步长）。
      *
-     * 角序 V0 左下 → V1 右下 → V2 右上 → V3 左上；UV 固定 (0,0)(1,0)(1,1)(0,1)
-     * ——V 方向若真机目验上下颠倒，翻这里的 V 一行修（§八首验项 3）。
+     * 角序 V0 左下 → V1 右下 → V2 右上 → V3 左上；UV = (u0,v0)(u0+du,v0)
+     * (u0+du,v0+dv)(u0,v0+dv)——V 方向若真机目验上下颠倒，翻这里的 V 一行修
+     * （§八首验项 3，P1 非对称贴图实测）。
      */
     fun writeParticle(
         out: FloatArray,
@@ -99,31 +101,37 @@ object VfxMath {
         u: FloatArray,
         halfW: Float,
         halfH: Float,
+        u0: Float = 0f,
+        v0: Float = 0f,
+        du: Float = 1f,
+        dv: Float = 1f,
     ) {
+        val u1 = u0 + du
+        val v1 = v0 + dv
         var o = outFloatIndex
-        // V0 = P − r·hw − u·hh（左下, uv 0,0）
+        // V0 = P − r·hw − u·hh（左下, uv u0,v0）
         out[o] = px - r[0] * halfW - u[0] * halfH
         out[o + 1] = py - r[1] * halfW - u[1] * halfH
         out[o + 2] = pz - r[2] * halfW - u[2] * halfH
-        out[o + UV_OFFSET] = 0f; out[o + UV_OFFSET + 1] = 0f
+        out[o + UV_OFFSET] = u0; out[o + UV_OFFSET + 1] = v0
         o += FLOATS_PER_VERTEX
-        // V1 = P + r·hw − u·hh（右下, uv 1,0）
+        // V1 = P + r·hw − u·hh（右下, uv u1,v0）
         out[o] = px + r[0] * halfW - u[0] * halfH
         out[o + 1] = py + r[1] * halfW - u[1] * halfH
         out[o + 2] = pz + r[2] * halfW - u[2] * halfH
-        out[o + UV_OFFSET] = 1f; out[o + UV_OFFSET + 1] = 0f
+        out[o + UV_OFFSET] = u1; out[o + UV_OFFSET + 1] = v0
         o += FLOATS_PER_VERTEX
-        // V2 = P + r·hw + u·hh（右上, uv 1,1）
+        // V2 = P + r·hw + u·hh（右上, uv u1,v1）
         out[o] = px + r[0] * halfW + u[0] * halfH
         out[o + 1] = py + r[1] * halfW + u[1] * halfH
         out[o + 2] = pz + r[2] * halfW + u[2] * halfH
-        out[o + UV_OFFSET] = 1f; out[o + UV_OFFSET + 1] = 1f
+        out[o + UV_OFFSET] = u1; out[o + UV_OFFSET + 1] = v1
         o += FLOATS_PER_VERTEX
-        // V3 = P − r·hw + u·hh（左上, uv 0,1）
+        // V3 = P − r·hw + u·hh（左上, uv u0,v1）
         out[o] = px - r[0] * halfW + u[0] * halfH
         out[o + 1] = py - r[1] * halfW + u[1] * halfH
         out[o + 2] = pz - r[2] * halfW + u[2] * halfH
-        out[o + UV_OFFSET] = 0f; out[o + UV_OFFSET + 1] = 1f
+        out[o + UV_OFFSET] = u0; out[o + UV_OFFSET + 1] = v1
         // 颜色由 [ParticleSystem] 顶点写出时统一填（逐粒子 RGBA）
     }
 

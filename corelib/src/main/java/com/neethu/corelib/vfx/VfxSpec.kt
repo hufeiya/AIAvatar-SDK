@@ -46,8 +46,8 @@ data class VfxColor(val r: Float, val g: Float, val b: Float, val a: Float) {
 data class ColorKey(val t: Float, val color: VfxColor)
 data class ScalarKey(val t: Float, val value: Float)
 
-/** 发射器形状（three.quarks shape/ 子集；P0 = Point/Sphere/Box/Ring）。 */
-enum class EmitterShape { POINT, SPHERE, BOX, RING }
+/** 发射器形状（three.quarks shape/ 子集；P1 集齐 Point/Sphere/Box/Ring/Cone）。 */
+enum class EmitterShape { POINT, SPHERE, BOX, RING, CONE }
 
 /**
  * 发射器参数：形状 + 相对锚点的偏移域 + 初始速度域。
@@ -55,21 +55,25 @@ enum class EmitterShape { POINT, SPHERE, BOX, RING }
  * - [shape]=SPHERE：体积内均匀采样，初速沿「中心→粒子」径向放射；
  * - [shape]=BOX：半尺寸盒内均匀采样，初速沿 [direction]；
  * - [shape]=RING：XZ 平面圆周采样，初速沿径向水平放射（ring_pulse）；
+ * - [shape]=CONE：底面圆盘均匀采样（火焰底盘），初速 = [direction] 轴向 +
+ *   径向展开（[radialFraction] 份额；篝火上升外扩）；
  * - [shape]=POINT：锚点单点，初速沿 [direction]。
  */
 data class EmitterParams(
     val shape: EmitterShape = EmitterShape.POINT,
     /** 发射域中心（相对锚点，米）。 */
     val center: VfxVec3 = VfxVec3.ZERO,
-    /** SPHERE 半径 / RING 半径（米）。 */
+    /** SPHERE 半径 / RING 半径 / CONE 底盘半径（米）。 */
     val radius: Float = 0.5f,
     /** BOX 半尺寸（米）。 */
     val halfExtents: VfxVec3 = VfxVec3(1f, 1f, 1f),
-    /** POINT/BOX 的初始速度方向（SPHERE/RING 忽略，恒径向）。 */
+    /** POINT/BOX/CONE 的初始速度方向（SPHERE/RING 忽略，恒径向）。 */
     val direction: VfxVec3 = VfxVec3.DOWN,
     /** 初始速度域 [speedMin, speedMax]（米/秒，逐粒子采样）。 */
     val speedMin: Float = 0.5f,
     val speedMax: Float = 1.0f,
+    /** CONE 径向展开份额（0=纯轴向，0.3=火苗外扩；乘在速度上）。 */
+    val radialFraction: Float = 0f,
 )
 
 /** 行为参数（sealed：模拟层映射到对应 Behavior 实现）。 */
@@ -85,6 +89,32 @@ sealed class BehaviorParams {
 
     /** 生命进度 → 尺寸倍率曲线（乘在逐粒子基础尺寸上）。 */
     data class SizeOverLife(val keys: List<ScalarKey>) : BehaviorParams()
+
+    /**
+     * 横摆（雪的飘）：沿 [axis]（"x"/"y"/"z" 小写）直接改写速度分量为
+     * `amplitude × sin(2π·frequency·粒子已活时长 + phase)`——速度目标式而非
+     * 加速度累积，落速不被横摆抬走。粒子各活各的相位，天然错落。
+     */
+    data class Sway(val axis: String, val amplitude: Float, val frequency: Float, val phase: Float = 0f) : BehaviorParams()
+
+    /**
+     * 湍流（P1 简化版，花瓣/烟的扰动）：三角函数伪流场——
+     * `force = strength × (sin(py·k+t), sin(pz·k+t), sin(px·k+t))`（k 由
+     * [scale] 导出，t 随粒子已活时长演化）。非真 curl（无散度约束），视觉
+     * 够用且零查表零分配；完整版留 P2。
+     */
+    data class Turbulence(val strength: Float, val scale: Float = 1f, val evolution: Float = 1f) : BehaviorParams()
+}
+
+/** flipbook 序列帧参数（[VfxSpec.flipbook]）：贴图按列×行网格切子矩形。 */
+data class FlipbookParams(
+    val columns: Int,
+    val rows: Int,
+) {
+    val totalFrames: Int get() = columns.coerceAtLeast(1) * rows.coerceAtLeast(1)
+    init {
+        require(columns >= 1 && rows >= 1) { "flipbook columns/rows must be >= 1" }
+    }
 }
 
 /**
@@ -115,17 +145,34 @@ data class VfxSpec(
     val sizeMax: Float = 0.10f,
     /** 无 ColorOverLife 时的恒定颜色。 */
     val startColor: VfxColor = VfxColor.WHITE,
+    /** 逐粒子随机取色表（confetti 彩色纸屑；null = 恒用 [startColor]）。 */
+    val palette: List<VfxColor>? = null,
     /** 自转角速度域（度/秒，绕屏幕轴；0 = 不转）。 */
     val spinMin: Float = 0f,
     val spinMax: Float = 0f,
     /** >0 = 按速度方向拉伸粒子（雨丝；拉伸倍率）。 */
     val stretchByVelocity: Float = 0f,
+    /** 序列帧（null = 整张贴图；火焰 flipbook）。 */
+    val flipbook: FlipbookParams? = null,
+    /**
+     * 缺省锚定骨骼（P1 应援模式：lightstick_spark 缺省锚 rightHand——调用方
+     * 不给锚点时按骨骼锚定发射，骨骼跟随、已存活粒子留世界系；null = 世界点）。
+     */
+    val defaultBone: String? = null,
 )
 
-/** 特效锚点。P0 仅世界点；P1 增骨骼锚定（发射器跟随、已存活粒子留世界系）。 */
+/** 特效锚点（P1 集齐世界点 + 骨骼锚定，docs/vfx-feasibility.md §4.8）。 */
 sealed interface VfxAnchor {
     /** 固定世界点（米；模型经 transformToUnitCube 后原点在脚底）。 */
     data class World(val x: Float, val y: Float, val z: Float) : VfxAnchor
+
+    /**
+     * 骨骼锚定：发射器原点每帧跟随骨骼世界位置（发射跟随、已存活粒子留在
+     * 世界系——Unity world-simulation 语义，走路时手部流光拖尾自然）。
+     * [avatarId] 仅团播有意义（null = 单人当前角色）；解析失败（模型重载/
+     * 演员离场后实体失效）→ 特效安静自停，不持陈旧 entity（§4.8）。
+     */
+    data class Bone(val boneName: String, val avatarId: String? = null) : VfxAnchor
 }
 
 /** 一次播放的句柄（[VfxManager] 生成 id，`stopVfx` 凭它停止）。 */
@@ -140,4 +187,6 @@ data class VfxInfo(
     val blending: VfxBlending,
     val activeParticles: Int,
     val ageSeconds: Float,
+    /** 锚点描述（P1 调试目验骨锚跟随用；如 "world(0.0,0.0,-3.9)" / "bone:rightHand"）。 */
+    val anchor: String = "",
 )
