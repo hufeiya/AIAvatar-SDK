@@ -93,6 +93,7 @@ import com.neethu.aiavatar_sdk.resolveEdgeVoice
 import com.neethu.aiavatar_sdk.resolveLlmModel
 import com.neethu.aiavatar_sdk.resolveTtsModel
 import com.neethu.aiavatar_sdk.resolveVoice
+import com.neethu.aiavatar_sdk.multiavatar.VfxCatalog
 import com.neethu.corelib.AmbientOcclusionQuality
 import com.neethu.corelib.AntiAliasingMode
 import com.neethu.aiavatar_sdk.MotionSettings
@@ -101,6 +102,8 @@ import com.neethu.corelib.LightingRig
 import com.neethu.corelib.QualityPreset
 import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ToneMappingMode
+import com.neethu.corelib.vfx.VfxInfo
+import com.neethu.corelib.vfx.VfxSpec
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -113,6 +116,7 @@ internal const val SECTION_QUALITY = "quality"
 internal const val SECTION_LIVENESS = "liveness"
 internal const val SECTION_FREE_SPEECH = "free_speech"
 internal const val SECTION_LANGUAGE = "language"
+internal const val SECTION_VFX = "vfx"
 
 /** 下拉框的一个选项：[value] 为存进 prefs 的值，[label] 为显示名。 */
 internal data class DropdownOption(val value: String, val label: String)
@@ -213,6 +217,11 @@ internal fun SettingsScreen(
     onDeleteContext: (ConversationContextSummary) -> Unit,
     /** 打开记忆管理面板（长期记忆隐私文案下的入口）。 */
     onOpenMemoryPanel: () -> Unit = {},
+    /** 在播特效快照（随渲染帧刷新；特效组停止行的计数数据源）。 */
+    activeVfx: List<VfxInfo> = emptyList(),
+    /** 点按预设即播（锚点语义 = FxTools.defaultAnchor：缺省骨 > 角色实时位）。 */
+    onPlayVfx: (VfxSpec) -> Unit = {},
+    onStopAllVfx: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -636,6 +645,34 @@ internal fun SettingsScreen(
                             if (useExternalAnimations) {
                                 SettingsGroupLabel(s.animExternalDir(externalRootPath))
                             }
+                        }
+                    }
+
+                    // ── 特效（VFX 预设点播） ─────────────────────────────
+                    item {
+                        CollapsibleSection(
+                            title = s.sectionVfx,
+                            expanded = SECTION_VFX in expandedSections,
+                            onToggle = { toggleSection(SECTION_VFX) }
+                        ) {
+                            // 目录 = 三层合并（内置常量打底 + presets.json 覆盖），面板打开时读一次
+                            val vfxPresets = remember(context) { VfxCatalog.all(context).values.toList() }
+                            SettingsGroupLabel(s.vfxGroupLabel)
+                            vfxPresets.forEach { preset ->
+                                SettingsActionRow(
+                                    title = if (appLang == com.neethu.corelib.Lang.EN) {
+                                        preset.labelEn ?: preset.label
+                                    } else preset.label,
+                                    subtitle = "${preset.id} · ${preset.blending.name.lowercase()} · " +
+                                        (if (preset.burst > 0) "burst ${preset.burst}" else "rate ${preset.rate.toInt()}"),
+                                    onClick = { onPlayVfx(preset) }
+                                )
+                            }
+                            SettingsActionRow(
+                                title = s.vfxStopAll,
+                                subtitle = s.vfxStopAllSubtitle(activeVfx.size),
+                                onClick = onStopAllVfx
+                            )
                         }
                     }
 

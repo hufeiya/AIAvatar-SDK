@@ -381,6 +381,15 @@ class Strings(val lang: Lang) {
         zh("目录：${path ?: "外部存储不可用"}\n将 .vrma 文件放入该目录即可（支持子文件夹分类）",
             "Directory: ${path ?: "external storage unavailable"}\nPut .vrma files there (subfolders become categories)")
 
+    val sectionVfx: String get() = zh("特效 (VFX)", "VFX Effects")
+    val vfxGroupLabel: String get() =
+        zh("点按即播：普通特效播在角色当前位置，应援星光锚定右手；可多点几路叠加",
+            "Tap to play: presets emit at the avatar's current spot, Lightstick Spark anchors to the right hand; tap again to layer more")
+    val vfxStopAll: String get() = zh("停止全部特效", "Stop all effects")
+    fun vfxStopAllSubtitle(n: Int): String =
+        if (n > 0) zh("正在播放 $n 个特效", "$n effect(s) playing")
+        else zh("当前没有播放中的特效", "Nothing playing")
+
     val sectionQuality: String get() = zh("画质设置 (Quality)", "Graphics (Quality)")
     val sectionLiveness: String get() = zh("拟人感 (呼吸 / 视线 / 眨眼)", "Liveness (breath / gaze / blink)")
     val livenessGroupLabel: String get() = zh("自主微动作；改动立即生效并持久化", "Autonomous micro-motions; changes apply instantly and persist")

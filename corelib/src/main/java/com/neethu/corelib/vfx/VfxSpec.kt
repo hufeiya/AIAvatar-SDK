@@ -159,6 +159,8 @@ data class VfxSpec(
      * 不给锚点时按骨骼锚定发射，骨骼跟随、已存活粒子留世界系；null = 世界点）。
      */
     val defaultBone: String? = null,
+    /** 英文显示名（presets.json 的 nameEn；null = 回落 [label]）。 */
+    val labelEn: String? = null,
 )
 
 /** 特效锚点（P1 集齐世界点 + 骨骼锚定，docs/vfx-feasibility.md §4.8）。 */

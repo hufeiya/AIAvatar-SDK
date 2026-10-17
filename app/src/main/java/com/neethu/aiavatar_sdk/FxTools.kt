@@ -66,7 +66,6 @@ internal object FxTools {
         val boneArg = t.drop(2).firstOrNull {
             it.startsWith("anchor:", true) || it.startsWith("bone:", true)
         }?.substringAfter(':')?.takeIf { it.isNotBlank() }
-        val defaultBone = preset.defaultBone
         val anchor = when {
             boneArg != null -> VfxAnchor.Bone(boneArg)
             x != null || y != null || z != null -> {
@@ -79,24 +78,29 @@ internal object FxTools {
                     z ?: (if (have) pos[2] else 0f),
                 )
             }
-            // 应援模式：预设带缺省骨 → 骨骼锚定（发射器跟随、粒子留世界系）
-            defaultBone != null -> VfxAnchor.Bone(defaultBone)
-            else -> {
-                // 缺省 = 角色脚底实时位（自由走动后角色不在原点）
-                val pos = FloatArray(3)
-                val have = controller.avatarWorldPos(pos)
-                VfxAnchor.World(
-                    if (have) pos[0] else 0f,
-                    if (have) pos[1] else 0f,
-                    if (have) pos[2] else 0f,
-                )
-            }
+            else -> defaultAnchor(controller, preset)
         }
         val handle = controller.playVfx(preset, anchor)
         return when {
             handle != null -> "fx play ${preset.id} ok as ${handle.id} @ ${describeAnchor(anchor)}"
             else -> "fx play rejected (renderer not ready or batch full)"
         }
+    }
+
+    /**
+     * 缺省锚点（设置界面点播与 ai_cmd fx play 共用，P1 口径）：预设带缺省骨
+     * → 骨骼锚定（发射器跟随、粒子留世界系）；否则角色脚底实时位（自由走动
+     * 后角色不在原点，锚 (0,0,0) 全部生成在取景框外——P0 首验教训）。
+     */
+    fun defaultAnchor(controller: AvatarController, preset: VfxSpec): VfxAnchor {
+        preset.defaultBone?.let { return VfxAnchor.Bone(it) }
+        val pos = FloatArray(3)
+        val have = controller.avatarWorldPos(pos)
+        return VfxAnchor.World(
+            if (have) pos[0] else 0f,
+            if (have) pos[1] else 0f,
+            if (have) pos[2] else 0f,
+        )
     }
 
     private fun describeAnchor(anchor: VfxAnchor): String = when (anchor) {

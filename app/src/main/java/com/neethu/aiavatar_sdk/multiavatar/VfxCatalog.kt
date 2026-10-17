@@ -64,6 +64,7 @@ internal object VfxCatalog {
     data class SidecarEntry(
         val id: String,
         val name: String = id,
+        val nameEn: String? = null,
         val texture: String? = null,
         val blending: String = "additive",
         val maxParticles: Int = 256,
@@ -193,6 +194,7 @@ internal object VfxCatalog {
                 runCatching { FlipbookParams(it.columns, it.rows) }.getOrNull()
             },
             defaultBone = e.defaultBone?.trim()?.takeIf { it.isNotEmpty() },
+            labelEn = e.nameEn?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
 

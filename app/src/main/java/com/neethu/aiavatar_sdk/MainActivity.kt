@@ -89,14 +89,6 @@ import com.neethu.aiadapter.api.EmbeddingConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleEmbeddingAdapter
 import com.neethu.orchestrator.memory.memoryTextsOf
 import com.neethu.aiavatar_sdk.multiavatar.MultiAvatarActivity
-import com.neethu.aiavatar_sdk.ui.SECTION_AI
-import com.neethu.aiavatar_sdk.ui.SECTION_ANIMATIONS
-import com.neethu.aiavatar_sdk.ui.SECTION_CARD
-import com.neethu.aiavatar_sdk.ui.SECTION_CONTEXT
-import com.neethu.aiavatar_sdk.ui.SECTION_FREE_SPEECH
-import com.neethu.aiavatar_sdk.ui.SECTION_LANGUAGE
-import com.neethu.aiavatar_sdk.ui.SECTION_LIVENESS
-import com.neethu.aiavatar_sdk.ui.SECTION_QUALITY
 import com.neethu.aiavatar_sdk.ui.OnboardingGuideSheet
 import com.neethu.aiavatar_sdk.ui.MemoryPanel
 import com.neethu.aiavatar_sdk.ui.GuideVariant
@@ -914,6 +906,8 @@ private fun DemoScreen(
     val controller = rememberAvatarController()
     val state by controller.state.collectAsState()
     val fps by controller.fps.collectAsState()
+    // 在播特效快照：设置页特效组的停止行计数
+    val activeVfx by controller.effects.collectAsState()
 
     // ── 界面语言（多语言支持）：语言变化 = 重组全部 UI 文案 + 重建 AI 会话 ──
     val strings = remember(uiState.lang) { Strings(uiState.lang) }
@@ -1065,12 +1059,10 @@ private fun DemoScreen(
         if (uiState.activePanel == PanelType.SETTINGS) contextListVersion++
     }
 
-    // 设置面板的滚动位置与分类展开状态：Activity 级持有，面板关开不丢失
+    // 设置面板的滚动位置与分类展开状态：Activity 级持有，面板关开不丢失。
+    // 默认全部收起（分类多，全铺开难找目标）；点开过的分类面板关开不丢。
     val settingsExpandedSections = rememberSaveable {
-        mutableStateOf(setOf(
-            SECTION_LANGUAGE, SECTION_AI, SECTION_CARD, SECTION_CONTEXT,
-            SECTION_ANIMATIONS, SECTION_QUALITY, SECTION_LIVENESS, SECTION_FREE_SPEECH,
-        ))
+        mutableStateOf(emptySet<String>())
     }
     val settingsListState = rememberLazyListState()
 
@@ -3067,6 +3059,11 @@ private fun DemoScreen(
                 },
                 onDismiss = { uiState.activePanel = PanelType.NONE },
                 onOpenMemoryPanel = { uiState.activePanel = PanelType.MEMORY },
+                activeVfx = activeVfx,
+                onPlayVfx = { preset ->
+                    controller.playVfx(preset, FxTools.defaultAnchor(controller, preset))
+                },
+                onStopAllVfx = { controller.stopAllVfx() },
             )
         }
 
