@@ -2,12 +2,12 @@ package com.neethu.corelib.vfx.internal
 
 import android.util.Log
 import com.google.android.filament.Texture
-import com.google.android.filament.filamat.MaterialBuilder
 import com.neethu.corelib.vfx.VfxAnchor
 import com.neethu.corelib.vfx.VfxBlending
 import com.neethu.corelib.vfx.VfxHandle
 import com.neethu.corelib.vfx.VfxInfo
 import com.neethu.corelib.vfx.VfxMath
+import com.neethu.corelib.vfx.VfxRenderMode
 import com.neethu.corelib.vfx.VfxSpec
 import com.neethu.corelib.vfx.VfxTexture
 import com.neethu.corelib.vfx.sim.ParticleSystem
@@ -18,30 +18,45 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 
 /**
- * 多特效编排器（docs/vfx-feasibility.md §4.2）：play/stop 生命周期、每帧泵
- * （各 ParticleSystem update → 各批 flush）、幂等 destroy。
+ * 多特效编排器（docs/vfx-feasibility.md §4.2 + 画质升级 2026-10-17）：play/
+ * stop 生命周期、每帧泵、幂等 destroy。
  *
  * 每帧时序（[update]，挂在 updateCameraShot 之后、render 之前——同帧相机
- * 基向量无一帧滞后，骨骼 commit 已跑过）：dt 钳制 → 取相机三元组导基向量 →
- * Bone 锚点逐帧解析（发射器跟随、已存活粒子留世界系；解析失败自停，§4.8）→
- * 逐批按创建序把各特效顶点顺序写入批缓冲 → flush（动态索引数）。
+ * 基向量无一帧滞后，骨骼 commit 已跑过）：dt 钳制 → 全局风时钟推进 → 取
+ * 相机三元组导基向量 → Bone 锚点逐帧解析（发射器跟随、已存活粒子留世界系；
+ * 解析失败自停，§4.8）→ 逐特效逐层把顶点顺序写入各自批缓冲 → flush（动态
+ * 索引数）→ 灯架推进 → MToon featured 灯推送。
  *
- * 批按（混合档 × 贴图）键控（P1：材质实例一张 mainTexture，不同贴图的特效
- * 不能共批；全屏 draw call 数 = 在用贴图组合数，个位数）。贴图缓存按
- * [VfxTexture] 惰性加载（同贴图多预设共享一张 GPU 纹理）。
+ * 复合层（VfxSpec.layers）：一个预设 = 多个子发射器（火焰 = 火苗+辉光+火星+
+ * 烟），共享锚点与生命周期；全层播完才自停。舞台灯组（VfxSpec.lights）挂
+ * [VfxStageLightRig]（真灯+光束+地面光斑），纯灯特效永不自停（stop 才停）。
  *
- * 零 GC 纪律：基向量/锚点/scratch 全部预分配；update 路径仅剩 finished 时
- * 一次 removeAt，无其他分配（发布 StateFlow 的 map 只在结构变化时发生）。
+ * 批按（混合档 × 贴图 × 渲染模式）键控（材质实例一张 mainTexture，异贴图/
+ * 异顶点布局不能共批；全屏 draw call 数 = 在用组合数，个位数）。贴图缓存
+ * 按 [VfxTexture] 惰性加载（同贴图多预设共享一张 GPU 纹理）。
+ *
+ * 全局风时钟 [windSeconds] 单调推进：所有带风特效同相采样（阵风一致），
+ * 环境侧（头发弹簧骨骼）经 [ambientWind] 取同源采样。
+ *
+ * 零 GC 纪律：基向量/锚点/scratch/游标表全部预分配；update 路径仅剩 finished
+ * 时一次 removeAt，无其他分配。
  *
  * 线程约定：全部方法主线程调用（choreoCallback/broadcast 同线程）。
  */
 internal class VfxManager(private val host: VfxHost) {
 
-    private class Active(
-        val handle: VfxHandle,
+    /** 复合层内的一路子发射器（自己的系统 + 落进的批）。 */
+    private class Layer(
         val spec: VfxSpec,
         val system: ParticleSystem,
         val batch: VfxBatchRenderer,
+    )
+
+    private class Active(
+        val handle: VfxHandle,
+        val spec: VfxSpec,
+        val layers: List<Layer>,
+        val rig: VfxStageLightRig?,
         val anchor: VfxAnchor,
         /** 世界坐标锚点缓存（World = 一次写入；Bone = 每帧覆写）。 */
         val anchorPos: FloatArray,
@@ -57,11 +72,15 @@ internal class VfxManager(private val host: VfxHost) {
     private var textures = HashMap<VfxTexture, Texture>()
     private var destroyed = false
 
-    /** 批键：混合档 × 实际贴图实例（材质实例一张 mainTexture，异贴图不能共批）。 */
-    private data class BatchKey(val blending: VfxBlending, val texture: Texture)
+    /** 批键：混合档 × 实际贴图实例 × 渲染模式（CROSS 8 顶点与 Billboard 4 顶点不共批）。 */
+    private data class BatchKey(val blending: VfxBlending, val texture: Texture, val mode: VfxRenderMode)
 
     /** 上帧时间戳（dt 来源；0 = 首帧）。 */
     private var lastFrameNanos = 0L
+
+    /** 全局风时钟秒（单调推进；所有带风特效与头发外力同源采样）。 */
+    var windSeconds = 0.0
+        private set
 
     // 每帧 scratch（预分配零 GC）
     private val eye = FloatArray(3)
@@ -71,6 +90,11 @@ internal class VfxManager(private val host: VfxHost) {
     private val right = FloatArray(3)
     private val camUp = FloatArray(3)
     private val bonePos = FloatArray(3)
+    private val batchCursors = HashMap<VfxBatchRenderer, Int>()
+    private val lampOut = VfxStageLightRig.LampOut()
+    private val pushPos = FloatArray(3)
+    private val pushDir = FloatArray(3)
+    private val pushColor = FloatArray(3)
 
     /** 状态列表变化（play/stop/播完自停）→ 渲染器中继到 AvatarController。 */
     var onChange: (() -> Unit)? = null
@@ -85,21 +109,35 @@ internal class VfxManager(private val host: VfxHost) {
     fun play(spec: VfxSpec, anchor: VfxAnchor): VfxHandle? {
         if (destroyed) return null
         if (!ensureInit()) return null
-        val texture = ensureTexture(spec.texture)
-        val key = BatchKey(spec.blending, texture)
-        val batch = batches.getOrPut(key) {
-            val material = when (spec.blending) {
-                VfxBlending.ADDITIVE -> materialFactory!!.additive
-                VfxBlending.TRANSPARENT -> materialFactory!!.transparent
+        val factory = materialFactory!!
+
+        // 层展开（无层 = 单层自身）；预算先验后提交，拒绝时不留半成品
+        val layerSpecs: List<VfxSpec> = spec.layers?.takeIf { it.isNotEmpty() } ?: listOf(spec)
+        val plan = ArrayList<Layer>(layerSpecs.size)
+        for (ls in layerSpecs) {
+            val texture = ensureTexture(ls.texture)
+            val key = BatchKey(ls.blending, texture, ls.renderMode)
+            val batch = batches.getOrPut(key) {
+                val material = when (ls.blending) {
+                    VfxBlending.ADDITIVE -> factory.additive
+                    VfxBlending.TRANSPARENT -> factory.transparent
+                }
+                VfxBatchRenderer(
+                    host.vfxEngine, host.vfxScene, material, texture, BATCH_CAPACITY,
+                    if (ls.renderMode == VfxRenderMode.CROSS) 8 else 4,
+                ).also { batchCursors[it] = 0 }
             }
-            VfxBatchRenderer(host.vfxEngine, host.vfxScene, material, texture, BATCH_CAPACITY)
+            val budget = ls.maxParticles.coerceIn(1, batch.capacityParticles)
+            var used = 0
+            for (a in active) for (l in a.layers) if (l.batch === batch) used += l.spec.maxParticles
+            for (planned in plan) if (planned.batch === batch) used += planned.spec.maxParticles
+            if (used + budget > batch.capacityParticles) {
+                Log.w(TAG, "batch ${ls.blending}/${key.texture}/${ls.renderMode} full ($used/${batch.capacityParticles}); rejecting '${spec.id}'")
+                return null
+            }
+            plan.add(Layer(ls, ParticleSystem(ls.copy(maxParticles = budget), SEEDED_RANDOM), batch))
         }
-        val used = active.fold(0) { acc, a -> if (a.batch === batch) acc + a.spec.maxParticles else acc }
-        val budget = spec.maxParticles.coerceIn(1, batch.capacityParticles)
-        if (used + budget > batch.capacityParticles) {
-            Log.w(TAG, "batch ${spec.blending}/${key.texture} full ($used/${batch.capacityParticles}); rejecting '${spec.id}'")
-            return null
-        }
+
         // Bone 锚点播放瞬间先解析一次：起点即骨骼当前位置（解析失败照样播，
         // 播放期间失败才自停——模型重载竞态不拦播放）
         val pos = FloatArray(3)
@@ -116,28 +154,46 @@ internal class VfxManager(private val host: VfxHost) {
                 text = "bone:${anchor.boneName}${anchor.avatarId?.let { "@$it" } ?: ""}"
             }
         }
+
+        // 舞台灯架（纯灯特效 = layers 无粒子也常驻）
+        var rig: VfxStageLightRig? = null
+        if (spec.lights.isNotEmpty()) {
+            rig = VfxStageLightRig(
+                host.vfxEngine, host.vfxScene,
+                factory.beam, factory.additive, ensureTexture(VfxTexture.SoftDot),
+                spec.lights,
+            )
+        }
+
         val handle = VfxHandle("fx${idCounter.incrementAndGet()}")
-        active.add(
-            Active(
-                handle, spec, ParticleSystem(spec.copy(maxParticles = budget), SEEDED_RANDOM),
-                batch, anchor, pos, text, 0f,
-            ),
-        )
+        active.add(Active(handle, spec, plan, rig, anchor, pos, text, 0f))
         publish()
-        Log.i(TAG, "play '${spec.id}' as ${handle.id} (${spec.blending}, $budget particles @ $text)")
+        Log.i(TAG, "play '${spec.id}' as ${handle.id} (${spec.blending}, ${plan.size} layer(s), ${spec.lights.size} light(s) @ $text)")
         return handle
     }
 
-    /** 停止一个特效（粒子当帧不再写出）。 */
+    /** 停止一个特效（粒子当帧不再写出；灯架同帧摘除——真机回归抓漏：
+     *  stop 不销毁 rig 会让光束 MI/灯实体跨次播放累积，毁材质时
+     *  "N instances still alive" PreconditionPanic）。 */
     fun stop(id: String): Boolean {
-        val removed = active.removeAll { it.handle.id == id }
-        if (removed) publish()
-        return removed
+        var removedAny = false
+        val it = active.iterator()
+        while (it.hasNext()) {
+            val a = it.next()
+            if (a.handle.id == id) {
+                a.rig?.destroy()
+                it.remove()
+                removedAny = true
+            }
+        }
+        if (removedAny) publish()
+        return removedAny
     }
 
-    /** 停止全部特效。 */
+    /** 停止全部特效（同 [stop]：rig 先于列表清空销毁）。 */
     fun stopAll() {
         if (active.isEmpty()) return
+        active.forEach { it.rig?.destroy() }
         active.clear()
         publish()
     }
@@ -148,7 +204,7 @@ internal class VfxManager(private val host: VfxHost) {
             id = a.handle.id,
             presetId = a.spec.id,
             blending = a.spec.blending,
-            activeParticles = a.system.pool.activeCount,
+            activeParticles = a.layers.fold(0) { acc, l -> acc + l.system.pool.activeCount },
             ageSeconds = a.age,
             anchor = a.anchorText,
         )
@@ -163,6 +219,7 @@ internal class VfxManager(private val host: VfxHost) {
         val dt = if (lastFrameNanos == 0L) DEFAULT_DT
         else ((frameTimeNanos - lastFrameNanos).coerceAtLeast(0L)) / 1_000_000_000.0f
         lastFrameNanos = frameTimeNanos
+        windSeconds += dt
 
         // 同帧相机基向量（updateCameraShot 刚写入 Manipulator）
         host.vfxCameraLookAt(eye, target, camUpIn)
@@ -187,6 +244,7 @@ internal class VfxManager(private val host: VfxHost) {
                 val ok = host.vfxResolveBone(a.anchor.avatarId, a.anchor.boneName, bonePos)
                 if (!ok) {
                     Log.i(TAG, "anchor lost for ${a.handle.id} (${a.anchorText}); auto-stopping")
+                    a.rig?.destroy()
                     active.removeAt(i)
                     removedAny = true
                     continue
@@ -198,42 +256,113 @@ internal class VfxManager(private val host: VfxHost) {
             i++
         }
 
-        for ((_, batch) in batches) {
-            var cursor = 0
-            i = 0
-            while (i < active.size) {
-                val a = active[i]
-                if (a.batch !== batch) {
-                    i++
-                    continue
-                }
-                val count = a.system.update(
-                    dt, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2],
+        // 游标清零（批集合稳定，无新分配）
+        for (key in batchCursors.keys) batchCursors[key] = 0
+
+        i = 0
+        while (i < active.size) {
+            val a = active[i]
+            var allFinished = a.rig == null
+            for (layer in a.layers) {
+                val count = layer.system.update(
+                    dt, windSeconds, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2],
                     right, camUp, forward,
-                    batch.vertices, cursor,
+                    layer.batch.vertices,
+                    batchCursors[layer.batch] ?: 0,
                 )
-                cursor += count * VfxMath.FLOATS_PER_PARTICLE
-                a.age += dt
-                if (a.system.isFinished) {
-                    active.removeAt(i)
-                    removedAny = true
-                    continue // 换位补位后原下标重查
-                }
-                i++
+                batchCursors[layer.batch] = (batchCursors[layer.batch] ?: 0) + count * layer.batch.floatsPerParticle
+                if (!layer.system.isFinished) allFinished = false
             }
-            batch.flush(cursor / VfxMath.FLOATS_PER_PARTICLE)
+            a.age += dt
+            a.rig?.update(a.age, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2])
+            if (allFinished) {
+                a.rig?.destroy()
+                active.removeAt(i)
+                removedAny = true
+                continue // 换位补位后原下标重查
+            }
+            i++
         }
+
+        for ((batch, cursor) in batchCursors) {
+            batch.flush(cursor / batch.floatsPerParticle)
+        }
+        pushFeaturedMToonLight()
         if (removedAny) publish()
+    }
+
+    /**
+     * MToon featured 灯推送：全部活跃灯架中挑对角色（锚点代理）贡献最大的
+     * 一盏推给 MToon 材质；无活跃灯 → 推零关闭。
+     */
+    private fun pushFeaturedMToonLight() {
+        var best: VfxStageLightRig? = null
+        // 评估点用第一个活跃特效的锚点（角色脚底代理；Bone 锚即骨骼位置）
+        var ex = 0f; var ey = 0f; var ez = 0f
+        var haveEval = false
+        for (a in active) {
+            if (a.rig != null) {
+                if (!haveEval) {
+                    ex = a.anchorPos[0]; ey = a.anchorPos[1]; ez = a.anchorPos[2]
+                    haveEval = true
+                }
+                best = a.rig
+            }
+        }
+        if (best == null) {
+            if (mtoonStageLightActive) {
+                host.vfxPushMToonStageLight(pushPos, pushDir, pushColor, 0f, 1f, 0f)
+                mtoonStageLightActive = false
+            }
+            return
+        }
+        lampOut.evalX = ex; lampOut.evalY = ey; lampOut.evalZ = ez
+        if (!best.featuredLight(lampOut)) {
+            if (mtoonStageLightActive) {
+                host.vfxPushMToonStageLight(pushPos, pushDir, pushColor, 0f, 1f, 0f)
+                mtoonStageLightActive = false
+            }
+            return
+        }
+        pushPos[0] = lampOut.posX; pushPos[1] = lampOut.posY; pushPos[2] = lampOut.posZ
+        pushDir[0] = lampOut.dirX; pushDir[1] = lampOut.dirY; pushDir[2] = lampOut.dirZ
+        pushColor[0] = lampOut.colorR; pushColor[1] = lampOut.colorG; pushColor[2] = lampOut.colorB
+        host.vfxPushMToonStageLight(pushPos, pushDir, pushColor, lampOut.cosInner, lampOut.cosOuter, lampOut.range)
+        mtoonStageLightActive = true
+    }
+
+    private var mtoonStageLightActive = false
+
+    /**
+     * 环境风采样（头发弹簧骨骼外力馈送的数据源）：取「最强带风特效」的风场
+     * 在 (x,z) 处的水平风速（米/秒）写进 [out]（2 float）。@return true =
+     * 有活跃带风特效（false = 调用方应清零骨骼外力）。
+     */
+    fun ambientWind(x: Float, z: Float, out: FloatArray): Boolean {
+        var best: com.neethu.corelib.vfx.sim.WindField? = null
+        var bestStrength = -1f
+        for (a in active) for (l in a.layers) {
+            val w = l.system.windFieldOrNull() ?: continue
+            val s = l.spec.wind?.strength ?: 0f
+            if (s > bestStrength) {
+                bestStrength = s
+                best = w
+            }
+        }
+        best ?: return false
+        best.sample(x, z, windSeconds, out)
+        return true
     }
 
     /**
      * 幂等销毁（可重入，坑 13 + 二次 onDestroy 双护栏前科）。顺序 = §4.5：
      * 清绘制引用/摘 renderable（含 VB/IB/MI）→ 毁材质 → 毁纹理（实例先于
-     * 纹理，坑 13 尾注）。
+     * 纹理，坑 13 尾注）；灯架先行（真灯/束/光斑实体独立于批）。
      */
     fun destroy() {
         if (destroyed) return
         destroyed = true
+        active.forEach { it.rig?.destroy() }
         active.clear()
         batches.values.forEach { it.destroy() }
         batches.clear()
@@ -288,7 +417,7 @@ internal class VfxManager(private val host: VfxHost) {
     companion object {
         private const val TAG = "VfxManager"
 
-        /** 每批容量（粒子数；按（混合档×贴图）各一份）。 */
+        /** 每批容量（粒子数；按（混合档×贴图×渲染模式）各一份）。 */
         const val BATCH_CAPACITY = 512
 
         private const val DEFAULT_DT = 0.016f
@@ -298,6 +427,5 @@ internal class VfxManager(private val host: VfxHost) {
          * 每次播放的可复现性优先于统计随机性；真机差分验收可对拍。
          */
         private val SEEDED_RANDOM = kotlin.random.Random(20261016)
-
     }
 }

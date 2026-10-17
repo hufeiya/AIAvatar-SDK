@@ -45,9 +45,9 @@ class ParticleSystemTest {
         system: ParticleSystem,
         dt: Float,
         anchor: VfxVec3 = VfxVec3.ZERO,
-        out: FloatArray = FloatArray(64 * VfxMath.FLOATS_PER_PARTICLE),
+        out: FloatArray = FloatArray(64 * 8 * VfxMath.FLOATS_PER_VERTEX),
     ): Int = system.update(
-        dt, anchor.x, anchor.y, anchor.z, right, up, forward, out, 0,
+        dt, 0.0, anchor.x, anchor.y, anchor.z, right, up, forward, out, 0,
     )
 
     @Test

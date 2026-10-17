@@ -18,11 +18,13 @@ import java.nio.ByteOrder
 /**
  * 粒子批渲染桥（docs/vfx-feasibility.md §4.5，全仓库第一块程序化网格——
  * P0 真机首验对象）：静态 IndexBuffer + 动态 VertexBuffer + 单 primitive
- * Renderable。同混合档的全部特效共享一个批，任意多特效合计 1 个 draw call。
+ * Renderable。同（混合档×贴图×渲染模式）的全部特效共享一个批。
  *
  * 顶点交错布局（9 float = 36 字节）：POSITION FLOAT3 @0 + UV0 FLOAT2 @12 +
- * COLOR FLOAT4 @20。索引静态 (0,1,2, 2,3,0) 循环一次建终身不改；顶点每帧
- * 部分上传活跃前缀（五参 setBufferAt）+ 动态索引数（setGeometryAt）。
+ * COLOR FLOAT4 @20。[vertsPerParticle]=4 为经典 Billboard（6 索引/粒子）；
+ * =8 为 CROSS 双正交 quad（12 索引/粒子，画质升级 2026-10-17）。索引静态
+ * 循环一次建终身不改；顶点每帧部分上传活跃前缀（五参 setBufferAt）+ 动态
+ * 索引数（setGeometryAt）。
  *
  * 零 GC 纪律（弹簧骨骼 FloatArray 前科）：[vertices]/[directBuffer]/[floatView]
  * 全部预分配，flush 路径零 new。
@@ -37,9 +39,17 @@ internal class VfxBatchRenderer(
     texture: Texture,
     /** 批容量（粒子数上限；全批次共享）。 */
     val capacityParticles: Int,
+    /** 每粒子顶点数（4=Billboard / 8=CROSS）；批键维度之一。 */
+    val vertsPerParticle: Int = 4,
 ) {
+    /** 每粒子索引数（4 顶点 2 三角 = 6；8 顶点 4 三角 = 12）。 */
+    val indicesPerParticle: Int = vertsPerParticle / 4 * 6
+
+    /** 每粒子 float 步长。 */
+    val floatsPerParticle: Int = VfxMath.FLOATS_PER_VERTEX * vertsPerParticle
+
     /** 模拟层直写的顶点暂存（写满批容量）。 */
-    val vertices = FloatArray(capacityParticles * VfxMath.FLOATS_PER_PARTICLE)
+    val vertices = FloatArray(capacityParticles * floatsPerParticle)
 
     private val vertexBuffer: VertexBuffer
     private val indexBuffer: IndexBuffer
@@ -57,7 +67,7 @@ internal class VfxBatchRenderer(
     private var destroyed = false
 
     init {
-        val vertexCount = capacityParticles * VfxMath.VERTICES_PER_PARTICLE
+        val vertexCount = capacityParticles * vertsPerParticle
         vertexBuffer = VertexBuffer.Builder()
             .bufferCount(1)
             .vertexCount(vertexCount)
@@ -67,7 +77,7 @@ internal class VfxBatchRenderer(
             .build(engine)
 
         indexBuffer = IndexBuffer.Builder()
-            .indexCount(capacityParticles * INDICES_PER_PARTICLE)
+            .indexCount(capacityParticles * indicesPerParticle)
             .bufferType(IndexBuffer.Builder.IndexType.USHORT)
             .build(engine)
         indexBuffer.setBuffer(engine, buildStaticIndices(capacityParticles))
@@ -110,13 +120,13 @@ internal class VfxBatchRenderer(
         val rm = engine.renderableManager
         rm.setGeometryAt(
             renderableInstance, 0, RenderableManager.PrimitiveType.TRIANGLES,
-            vertexBuffer, indexBuffer, 0, clamped * INDICES_PER_PARTICLE,
+            vertexBuffer, indexBuffer, 0, clamped * indicesPerParticle,
         )
         if (clamped > 0) {
             // 五参部分上传活跃前缀（§4.5；真机 A/B 实证与三参全量等价，
             // 2026-10-17）。JNI 从 buffer position 起读 sizeBytes 字节——
             // position(0)+limit(byteCount) 下两种读法一致。
-            val floatCount = clamped * VfxMath.FLOATS_PER_PARTICLE
+            val floatCount = clamped * floatsPerParticle
             val byteCount = floatCount * 4
             floatView.clear()
             floatView.put(vertices, 0, floatCount)
@@ -153,21 +163,23 @@ internal class VfxBatchRenderer(
     }
 
     private fun buildStaticIndices(particles: Int): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(particles * INDICES_PER_PARTICLE * 2)
+        val buffer = ByteBuffer.allocateDirect(particles * indicesPerParticle * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
         val view = buffer.asShortBuffer()
         for (i in 0 until particles) {
-            val b = (i * 4).toShort()
-            view.put(b); view.put((b + 1).toShort()); view.put((b + 2).toShort())
-            view.put((b + 2).toShort()); view.put((b + 3).toShort()); view.put(b)
+            val quadBase = (i * vertsPerParticle).toShort()
+            // 每片 quad（4 顶点）两个三角；CROSS 模式一片粒子含前后两片 quad
+            for (q in 0 until vertsPerParticle / 4) {
+                val b = (quadBase + q * 4).toShort()
+                view.put(b); view.put((b + 1).toShort()); view.put((b + 2).toShort())
+                view.put((b + 2).toShort()); view.put((b + 3).toShort()); view.put(b)
+            }
         }
         buffer.rewind()
         return buffer
     }
 
     companion object {
-        private const val INDICES_PER_PARTICLE = 6
-
         /** 线性过滤 + repeat 寻址（flipbook 子矩形 UV 的边缘安全兜底）。 */
         private val TEXTURE_SAMPLER = TextureSampler(
             TextureSampler.MinFilter.LINEAR_MIPMAP_LINEAR,

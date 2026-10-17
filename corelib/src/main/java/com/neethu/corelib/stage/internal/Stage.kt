@@ -129,6 +129,56 @@ internal class Stage(
         override fun vfxReadAssetBytes(path: String): ByteArray? = runCatching {
             readSourceBytes(path)
         }.getOrNull()
+
+        override fun vfxPushMToonStageLight(
+            pos: FloatArray,
+            dir: FloatArray,
+            colorRGB: FloatArray,
+            cosInner: Float,
+            cosOuter: Float,
+            rangeM: Float,
+        ) {
+            stageLightConeScratch[0] = cosInner
+            stageLightConeScratch[1] = cosOuter
+            synchronized(runtimes) {
+                runtimes.forEach { it.pushMToonStageLight(pos, dir, colorRGB, stageLightConeScratch, rangeM) }
+            }
+        }
+    }
+
+    /** VfxHost → 各演员 MToonApplier.setStageLight 的 cone 打包 scratch（主线程唯一）。 */
+    private val stageLightConeScratch = FloatArray(2)
+
+    // ── 头发弹簧骨骼风场馈送（画质升级 2026-10-17）──────────────────────
+
+    private val windSample = FloatArray(2)
+    private val windPosScratch = FloatArray(3)
+
+    /**
+     * 环境风 → 全体演员弹簧骨骼外力：取 VfxManager 全局风时钟同源采样（与
+     * 雪/花瓣阵风同相），限幅防 Verlet 失稳；无活跃风特效清零。
+     */
+    private fun feedSpringBoneWind() {
+        var fed = false
+        synchronized(runtimes) {
+            for (rt in runtimes) {
+                val mgr = rt.springBoneManager ?: continue
+                if (rt.worldPos(windPosScratch) &&
+                    vfxManager?.ambientWind(windPosScratch[0], windPosScratch[2], windSample) == true
+                ) {
+                    val k = SPRINGBONE_WIND_GAIN
+                    mgr.setWindAccel(
+                        (windSample[0] * k).coerceIn(-SPRINGBONE_WIND_MAX, SPRINGBONE_WIND_MAX),
+                        0f,
+                        (windSample[1] * k).coerceIn(-SPRINGBONE_WIND_MAX, SPRINGBONE_WIND_MAX),
+                    )
+                } else {
+                    mgr.setWindAccel(0f, 0f, 0f)
+                }
+                fed = true
+            }
+        }
+        if (!fed) return
     }
 
     // ── 演员与加载器 ─────────────────────────────────────────────────────
@@ -465,6 +515,7 @@ internal class Stage(
             // VFX 泵：updateCameraShot 之后（同帧相机基向量）、render 之前
             //（docs/vfx-feasibility.md §4.4；演员骨骼已在步骤②提交）
             vfxManager?.update(frameTimeNanos)
+            feedSpringBoneWind()
 
             val probeT3 = if (STAGE_PROFILE) System.nanoTime() else 0L
             modelViewer.render(frameTimeNanos)
@@ -1338,6 +1389,10 @@ internal class Stage(
         private const val RIM_CONE_OUTER = 0.9f
 
         private const val SPOT_FALLOFF_METERS = 15f
+
+        /** 头发风外力：风速→加速度增益与安全限幅（模型单位/秒²；Verlet 稳定优先）。 */
+        private const val SPRINGBONE_WIND_GAIN = 1.1f
+        private const val SPRINGBONE_WIND_MAX = 1.3f
         private const val CONTACT_SHADOW_STEPS = 8
         private const val AO_RADIUS = 0.15f
         private const val FPS_WINDOW_NANOS = 500_000_000L

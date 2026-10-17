@@ -175,6 +175,19 @@ internal class VrmSpringBoneManager(
         externalColliders.clear()
     }
 
+    // ── 环境外力（画质升级 2026-10-17：VFX 风场 → 头发/衣物摆动）────────
+
+    /**
+     * 全局风加速度（世界系，模型单位/秒²；与每链 gravityDir 同点位叠加进
+     * Verlet 步）。调用方（渲染线）每帧从 VFX WindField 同源采样馈送并限幅
+     * （零 = 关闭）。只改这个字段，不动每链 VRM 重力参数。
+     */
+    fun setWindAccel(x: Float, y: Float, z: Float) {
+        windAccel[0] = x; windAccel[1] = y; windAccel[2] = z
+    }
+
+    private val windAccel = FloatArray(3)
+
     fun externalCollidersCount(): Int = externalColliders.size
 
     /** Enables once-per-second logcat diagnostics (tag "SpringBone") for on-device verification. */
@@ -567,13 +580,14 @@ internal class VrmSpringBoneManager(
                 // Stiffness: pull toward the rest bone direction; gravity: world-space down.
                 val combinedRot = quatMultiply(parentRot, state.restLocalQuat)
                 val stiffnessDir = quatRotateVec(combinedRot, state.boneAxis)
+                // 风外力与重力同点叠加（世界系；调用方限幅防 Verlet 失稳）
                 var nextTail = floatArrayOf(
                     converted[0] + stiffnessDir[0] * params.stiffness * deltaTime
-                            + params.gravityDir[0] * params.gravityPower * deltaTime,
+                            + (params.gravityDir[0] * params.gravityPower + windAccel[0]) * deltaTime,
                     converted[1] + stiffnessDir[1] * params.stiffness * deltaTime
-                            + params.gravityDir[1] * params.gravityPower * deltaTime,
+                            + (params.gravityDir[1] * params.gravityPower + windAccel[1]) * deltaTime,
                     converted[2] + stiffnessDir[2] * params.stiffness * deltaTime
-                            + params.gravityDir[2] * params.gravityPower * deltaTime
+                            + (params.gravityDir[2] * params.gravityPower + windAccel[2]) * deltaTime
                 )
 
                 // ── Length Constraint ──

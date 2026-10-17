@@ -3,22 +3,26 @@
 
 用法: python3 tools/vfx-samples/gen_textures.py [输出目录=app/src/main/assets/vfx/textures]
 
-6 张 128² 级小贴图（flame 256²）：
+画质升级版（2026-10-17，docs/vfx-quality-upgrade.md §4）：
   soft_dot.png   柔边圆点（雪/烟/星云底版；高斯衰减 alpha）
   spark.png      四芒星（星光/烟花/应援）
   streak.png     竖向渐变细条（雨丝；顶部亮尾部淡）
   petal.png      花瓣剪影（风吹花瓣；淡粉着色，顶点色白）
   confetti.png   纸屑方块（团播彩带；白底，颜色走顶点色调色板）
-  flame_4x4.png  4×4 火焰序列帧（flipbook；白色火苗剪影，颜色走 ColorOverLife）
+  flame_4x4.png  4×4 火焰序列帧（旧版，保留作降级资产）
+  flame_8x8.png  8×8=64 帧 1024² 火焰序列帧（fBm 噪声火舌，时序连续）
+  snowflake.png  六角雪晶（近景 CROSS 翻滚雪花）
+  smoke.png      分形烟团（灰度形状，色调走顶点色）
 
 全部白色/素色 RGB + alpha 形状——材质里 tex × 顶点色，色调统一由预设管。
-确定性种子（固定 random.seed），可重复生成对拍。许可证：自制 CC0。
+确定性种子（固定 random.seed / numpy seed），可重复生成对拍。许可证：自制 CC0。
 """
 import math
 import os
 import random
 import sys
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
@@ -200,11 +204,156 @@ def gen_flame():
     save(img, "flame_4x4.png")
 
 
+# ── flame_8x8：高质量火焰序列帧（fBm 噪声火舌，64 帧时序连续）───────────
+def _value_noise(w, h, freq, rng):
+    """双线性上采样的值噪声网格（freq×freq 格 → w×h），float 0..1。"""
+    grid = (rng.random((freq + 1, freq + 1)) * 255).astype("uint8")
+    img = Image.fromarray(grid).resize((w, h), Image.BILINEAR)
+    return np.asarray(img).astype(np.float32) / 255.0
+
+
+def _fbm(w, h, rng, base_freq, octaves):
+    total = np.zeros((h, w), dtype=np.float32)
+    amp, norm = 1.0, 0.0
+    for o in range(octaves):
+        total += amp * _value_noise(w, h, base_freq * (2 ** o), rng)
+        norm += amp
+        amp *= 0.55
+    return total / norm
+
+
+def gen_flame_8x8():
+    """64 帧 128px/帧：火苗 = 「形状势场 − fBm 噪声」阈值化，噪声域随帧号
+    向上滚动（火舌上升）+ 轻微水平摆；白 RGB，颜色走 ColorOverLife。
+    噪声在 256² 大域上按帧滚动采样，保证 64 帧时序连续。"""
+    N, CELL = 8, 128
+    F = N * CELL
+    rng = np.random.default_rng(20261017)
+    NOISE = 256
+    scroll_speed = 0.9      # 帧/格：噪声域每帧上移量（× CELL 换算）
+    img = Image.new("RGBA", (F, F), (255, 255, 255, 0))
+    # 三个八度的大域噪声（一次生成，按帧滚动采样）
+    n1 = _value_noise(NOISE, NOISE, 7, rng)
+    n2 = _value_noise(NOISE, NOISE, 13, rng)
+    n3 = _value_noise(NOISE, NOISE, 25, rng)
+
+    for f in range(N * N):
+        col, row = f % N, f // N
+        t = f / float(N * N)                      # 0..1 循环相位
+        # 噪声采样窗口：y 向上滚（火舌上升），x 慢移
+        oy = int((t * N * CELL * scroll_speed) % (NOISE - CELL))
+        ox = int((t * 14.0) % (NOISE - CELL))
+
+        def crop_tall(n, x0, y0):
+            # 取矮窗口再拉伸到 CELL：特征纵向拉长（火舌形态）
+            win = n[y0:y0 + int(CELL * 0.55), x0:x0 + CELL]
+            return np.asarray(
+                Image.fromarray((win * 255).astype("uint8")).resize((CELL, CELL), Image.BILINEAR)
+            ).astype(np.float32) / 255.0
+
+        noise = 0.50 * crop_tall(n1, ox, oy) + 0.33 * crop_tall(n2, ox, oy) + 0.17 * crop_tall(n3, ox, oy)
+
+        xs = (np.arange(CELL) + 0.5) / CELL * 2.0 - 1.0     # -1..1
+        ys = 1.0 - (np.arange(CELL) + 0.5) / CELL * 2.0     # 顶=+1 底=-1
+        X, Y = np.meshgrid(xs, ys)
+
+        # 形状势场：底宽顶尖（凹边 profile），轴线由噪声驱动游移（火舌甩动）
+        base_y = -0.84
+        tip = 0.72 + 0.08 * (float(noise.mean()) - 0.5)
+        hgt = np.clip((Y - base_y) / (tip - base_y), 0.0, 1.15)   # 0=底 1=尖
+        wander = float(noise[CELL // 2, CELL // 2]) - 0.5
+        sway = 0.30 * wander * hgt ** 1.2
+        ax = np.abs(X - sway)
+        radius = 0.64 * np.clip(1.0 - hgt, 0.0, None) ** 1.1 + 0.05
+        shape = 1.0 - ax / radius - hgt * 0.34
+
+        # 锐利噪声蚀刻（火舌分叉/舔舐）+ 内芯增亮
+        d = shape - (noise - 0.5) * 0.85
+        alpha = np.clip((d - 0.08) / 0.14, 0.0, 1.0)
+        core = np.clip((d - 0.32) / 0.30, 0.0, 1.0)
+        alpha = np.clip(alpha * (0.55 + 0.45 * core), 0.0, 1.0)
+
+        # 尖端处理：主体在 hgt→1 处纵向淡出（消细针），之上叠独立滚动的
+        # 第二噪声场阈值化出的「分离烟舌块」（时有时无，打破锥形轮廓）
+        body_fade = np.clip((0.99 - hgt) * 5.0, 0.0, 1.0)
+        oy2 = int((t * N * CELL * scroll_speed * 0.62 + 37.0) % (NOISE - int(CELL * 0.55)))
+        lick_n = crop_tall(n2, ox, oy2)
+        upper = np.clip((Y - 0.10) * 2.6, 0.0, 1.0) * np.clip((1.05 - Y) * 3.0, 0.0, 1.0)
+        column = np.clip(1.0 - (ax - 0.18 * wander) / 0.30, 0.0, 1.0)
+        licks = np.clip((lick_n - 0.63) * 6.0, 0.0, 1.0) * upper * column
+        alpha = np.clip(alpha * body_fade + licks * 0.9, 0.0, 1.0)
+        alpha = (alpha * 255).astype("uint8")
+
+        frame = np.zeros((CELL, CELL, 4), dtype="uint8")
+        frame[..., 0] = 255
+        frame[..., 1] = 255
+        frame[..., 2] = 255
+        frame[..., 3] = alpha
+        # 1px 柔化 + 缩入 6% 格内留白（mipmap 串格防线：REPEAT 寻址下
+        # 相邻格火焰在高 mip 互渗，真机目验出现矩形亮边）
+        fr = Image.fromarray(frame, "RGBA").filter(ImageFilter.GaussianBlur(0.5))
+        pad = int(CELL * 0.06)
+        inner = CELL - 2 * pad
+        fr = fr.resize((inner, inner), Image.BILINEAR)
+        img.paste(fr, (col * CELL + pad, row * CELL + pad))
+    save(img, "flame_8x8.png")
+
+
+# ── snowflake：六角雪晶（近景 CROSS 翻滚雪花，白色形状）─────────────────
+def gen_snowflake():
+    S = 64
+    img = Image.new("RGBA", (S, S), (255, 255, 255, 0))
+    d = ImageDraw.Draw(img)
+    c = (S - 1) / 2.0
+    L = 26.0
+    for k in range(6):
+        ang = math.pi / 3.0 * k
+        dx, dy = math.cos(ang), math.sin(ang)
+        # 主枝
+        d.line([(c, c), (c + dx * L, c + dy * L)], fill=(255, 255, 255, 235), width=3)
+        # 侧枝（两段，向旋转 60° 方向）
+        for frac, blen in ((0.45, 9.0), (0.72, 6.0)):
+            bx, by = c + dx * L * frac, c + dy * L * frac
+            for sgn in (-1, 1):
+                bang = ang + sgn * math.pi / 3.0
+                d.line([(bx, by), (bx + math.cos(bang) * blen, by + math.sin(bang) * blen)],
+                       fill=(255, 255, 255, 210), width=2)
+    # 中心六边形小板
+    hexpts = [(c + 5.5 * math.cos(math.pi / 3 * k + math.pi / 6),
+               c + 5.5 * math.sin(math.pi / 3 * k + math.pi / 6)) for k in range(6)]
+    d.polygon(hexpts, fill=(255, 255, 255, 245))
+    img = img.filter(ImageFilter.GaussianBlur(0.6))
+    save(img, "snowflake.png")
+
+
+# ── smoke：分形烟团（灰度形状起伏，色调走顶点色/起始色）─────────────────
+def gen_smoke():
+    S = 128
+    rng = np.random.default_rng(20261018)
+    n = _fbm(S, S, rng, 4, 4)
+    xs = (np.arange(S) + 0.5) / S * 2.0 - 1.0
+    X, Y = np.meshgrid(xs, xs)
+    r2 = X * X + Y * Y
+    radial = np.clip(1.0 - r2, 0.0, 1.0) ** 0.9          # 圆形包络
+    alpha = np.clip((n - 0.34) / 0.5, 0.0, 1.0) * radial
+    alpha = (alpha * 235).astype("uint8")
+    frame = np.zeros((S, S, 4), dtype="uint8")
+    frame[..., 0] = 255
+    frame[..., 1] = 255
+    frame[..., 2] = 255
+    frame[..., 3] = alpha
+    img = Image.fromarray(frame, "RGBA").filter(ImageFilter.GaussianBlur(1.2))
+    save(img, "smoke.png")
+
+
 if __name__ == "__main__":
     gen_soft_dot()
     gen_spark()
     gen_streak()
     gen_petal()
     gen_confetti()
-    gen_flame()
+    # gen_flame()  # 旧 4×4 图集退役（8×8 高密度版替代；mipmap 串格+分辨率不足）
+    gen_flame_8x8()
+    gen_snowflake()
+    gen_smoke()
     print("done.")

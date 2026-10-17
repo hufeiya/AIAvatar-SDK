@@ -79,6 +79,10 @@ internal sealed class Behavior {
     /**
      * 湍流（简化三角伪流场，花瓣/烟扰动）：力沿三轴各取「下一轴坐标」的
      * 正弦——同轴取异轴坐标避免力与坐标同相；演化项随已活时长推进。
+     *
+     * 力 = 加速度（米/秒²），apply 内乘 dt（画质升级 2026-10-17 修复：曾漏乘
+     * dt，扰动力随帧率漂移——60fps 标定的强度在 30fps 下翻倍；修复后预设
+     * 强度按加速度量纲全量重标定，docs/vfx-quality-upgrade.md §2）。
      */
     internal class Turbulence(private val strength: Float, scale: Float, evolution: Float) : Behavior() {
         private val k = scale.coerceAtLeast(1e-4f)
@@ -86,9 +90,33 @@ internal sealed class Behavior {
         override fun apply(pool: ParticlePool, i: Int, dt: Float) {
             if (strength == 0f) return
             val t = (pool.maxLife[i] - pool.life[i]).toDouble()
-            pool.vx[i] += strength * sin(pool.py[i] * k + t * w).toFloat()
-            pool.vy[i] += strength * sin(pool.pz[i] * k + t * w * 0.83).toFloat()
-            pool.vz[i] += strength * sin(pool.px[i] * k + t * w * 0.71).toFloat()
+            pool.vx[i] += (strength * sin(pool.py[i] * k + t * w) * dt).toFloat()
+            pool.vy[i] += (strength * sin(pool.pz[i] * k + t * w * 0.83) * dt).toFloat()
+            pool.vz[i] += (strength * sin(pool.px[i] * k + t * w * 0.71) * dt).toFloat()
+        }
+    }
+
+    /**
+     * 地面碰撞（雪落地消融/雨丝到地即逝）：y 低于地面且下落时钉回地面、
+     * 竖向速度清零、水平速度指数衰减（摩擦），剩余寿命钳到 fade（落地后
+     * 短促淡出；fade=0 = 立即消亡）。粒子从地面下出生（y<groundY）不触发
+     * （只拦「下落穿越」），避免发射域低于地面时全体钉死。
+     */
+    internal class GroundCollision(
+        private val groundY: Float,
+        private val fadeSeconds: Float,
+        private val friction: Float,
+    ) : Behavior() {
+        override fun apply(pool: ParticlePool, i: Int, dt: Float) {
+            if (pool.py[i] > groundY || pool.vy[i] >= 0f) return
+            pool.py[i] = groundY
+            pool.vy[i] = 0f
+            if (friction > 0f) {
+                val f = exp(-friction * dt)
+                pool.vx[i] *= f
+                pool.vz[i] *= f
+            }
+            if (pool.life[i] > fadeSeconds) pool.life[i] = fadeSeconds
         }
     }
 
@@ -108,6 +136,9 @@ internal sealed class Behavior {
                 is BehaviorParams.Sway -> Sway(p.axis, p.amplitude, p.frequency, p.phase)
 
                 is BehaviorParams.Turbulence -> Turbulence(p.strength, p.scale, p.evolution)
+
+                is BehaviorParams.GroundCollision ->
+                    GroundCollision(p.groundY, p.fadeSeconds.coerceAtLeast(0f), p.friction)
             }
         }
     }

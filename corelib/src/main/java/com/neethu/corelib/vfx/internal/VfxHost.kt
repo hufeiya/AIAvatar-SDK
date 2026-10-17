@@ -31,4 +31,21 @@ internal interface VfxHost {
 
     /** assets 字节读取（P1 资产贴图；null = 不存在/读取失败，回退兜底纹理）。 */
     fun vfxReadAssetBytes(path: String): ByteArray?
+
+    /**
+     * MToon 舞台灯推送（画质升级 2026-10-17）：MToon 数学不吃场景灯，每帧把
+     * 「对角色贡献最大」的一盏局部灯以材质参数近似推给 MToon 表面材质。
+     * [pos]/[dir]（世界系，dir 已归一）、[colorRGB]（已按距离/强度折算的
+     * 线性 RGB）、[cosInner]/[cosOuter]（锥角余弦）、[rangeM]（衰减半径）。
+     * rangeM ≤ 0 = 关闭（推零）。默认空实现（宿主无 MToon 演员时不设）。
+     */
+    fun vfxPushMToonStageLight(
+        pos: FloatArray,
+        dir: FloatArray,
+        colorRGB: FloatArray,
+        cosInner: Float,
+        cosOuter: Float,
+        rangeM: Float,
+    ) {
+    }
 }

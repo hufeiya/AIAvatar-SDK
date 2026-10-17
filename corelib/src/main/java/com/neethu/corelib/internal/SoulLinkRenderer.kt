@@ -217,7 +217,23 @@ internal class SoulLinkRenderer(
         override fun vfxReadAssetBytes(path: String): ByteArray? = runCatching {
             surfaceView.context.assets.open(path).use { it.readBytes() }
         }.getOrNull()
+
+        override fun vfxPushMToonStageLight(
+            pos: FloatArray,
+            dir: FloatArray,
+            colorRGB: FloatArray,
+            cosInner: Float,
+            cosOuter: Float,
+            rangeM: Float,
+        ) {
+            stageLightConeScratch[0] = cosInner
+            stageLightConeScratch[1] = cosOuter
+            mtoonApplier?.setStageLight(pos, dir, colorRGB, stageLightConeScratch, rangeM)
+        }
     }
+
+    /** VfxHost → MToonApplier.setStageLight 的 cone 打包 scratch（主线程唯一）。 */
+    private val stageLightConeScratch = FloatArray(2)
 
     private val vfxBoneMat = FloatArray(16)
 
@@ -463,6 +479,10 @@ internal class SoulLinkRenderer(
 
         private const val SPOT_FALLOFF_METERS = 15f
 
+        /** 头发风外力：风速→加速度增益与安全限幅（模型单位/秒²；Verlet 稳定优先）。 */
+        private const val SPRINGBONE_WIND_GAIN = 1.1f
+        private const val SPRINGBONE_WIND_MAX = 1.3f
+
         private const val CONTACT_SHADOW_STEPS = 8
         private const val AO_RADIUS = 0.15f
 
@@ -596,6 +616,7 @@ internal class SoulLinkRenderer(
             // VFX 泵：updateCameraShot 之后（同帧相机基向量刚写入 Manipulator，
             // Billboard 无一帧滞后）、render 之前（docs/vfx-feasibility.md §4.4）。
             vfxManager?.update(frameTimeNanos)
+            feedSpringBoneWind()
             lastFrameTimeNanos = frameTimeNanos
 
             updateFps(frameTimeNanos)
@@ -2055,6 +2076,35 @@ internal class SoulLinkRenderer(
         out[2] = avatarWorldMat[14]
         return true
     }
+
+    // ── 头发弹簧骨骼风场馈送（画质升级 2026-10-17）──────────────────────
+
+    private val windSample = FloatArray(2)
+
+    /**
+     * 环境风 → 弹簧骨骼外力：有活跃带风特效时取 VfxManager 全局风时钟的同源
+     * 采样（阵风与雪/花瓣同相），按头发链长折算为安全小加速度馈送；无活跃
+     * 风特效清零。限幅防 Verlet 失稳（docs/vfx-quality-upgrade.md §3.4）。
+     */
+    private fun feedSpringBoneWind() {
+        val mgr = springBoneManager ?: return
+        val fed = if (avatarWorldPos(windPosScratch) &&
+            vfxManager?.ambientWind(windPosScratch[0], windPosScratch[2], windSample) == true
+        ) {
+            val k = SPRINGBONE_WIND_GAIN
+            mgr.setWindAccel(
+                (windSample[0] * k).coerceIn(-SPRINGBONE_WIND_MAX, SPRINGBONE_WIND_MAX),
+                0f,
+                (windSample[1] * k).coerceIn(-SPRINGBONE_WIND_MAX, SPRINGBONE_WIND_MAX),
+            )
+            true
+        } else {
+            false
+        }
+        if (!fed) mgr.setWindAccel(0f, 0f, 0f)
+    }
+
+    private val windPosScratch = FloatArray(3)
 
     // ── Frustum Culling (avatar) ─────────────────────────────────────────
 

@@ -319,6 +319,23 @@ internal class MToonMaterialFactory private constructor(private val engine: Engi
                 // getDiffuse(): BRDF_Lambert = /PI
                 vec3 col = lightColor * (mix(shadeColor, diffuse, shading) * MTOON_RECIPROCAL_PI);
 
+                // -- stage light (VFX 局部灯近似, 画质升级 2026-10-17) ---------
+                // MToon 数学不吃 Filament 场景灯（key 灯靠材质参数手推）；
+                // 舞台灯/火焰照明同理由 VfxManager 每帧推一盏「对角色贡献最大」
+                // 的局部灯。range <= 0 = 关闭（材质实例默认零，推零即灭）。
+                if (materialParams.stageLightRange > 0.0) {
+                    vec3 toStage = materialParams.stageLightPos - getWorldPosition();
+                    float dStage = length(toStage);
+                    vec3 Ls = toStage / max(dStage, 1e-4);
+                    float cosAngle = dot(-Ls, materialParams.stageLightDir);
+                    float coneFall = smoothstep(materialParams.stageLightCone.y,
+                                                materialParams.stageLightCone.x, cosAngle);
+                    float distFall = clamp(1.0 - dStage / materialParams.stageLightRange, 0.0, 1.0);
+                    float nlStage = clamp(dot(normal, Ls), 0.0, 1.0);
+                    col += materialParams.stageLightColor * coneFall * distFall * distFall
+                         * (diffuse * nlStage * MTOON_RECIPROCAL_PI);
+                }
+
                 // -- rim lighting ----------------------------------------------
                 vec3 V = normalize(getWorldViewVector());
                 vec3 rimMix = mix(vec3(1.0), lightColor * MTOON_RECIPROCAL_PI,
@@ -476,6 +493,14 @@ internal class MToonMaterialFactory private constructor(private val engine: Engi
             Pair(MaterialBuilder.UniformType.FLOAT, "alphaCutoff"),
             Pair(MaterialBuilder.UniformType.FLOAT3, "lightDirection"),
             Pair(MaterialBuilder.UniformType.FLOAT3, "lightColor"),
+            // VFX 舞台灯近似（画质升级 2026-10-17）：pos/dir 世界系、cone=(cosInner,cosOuter)、
+            // range<=0 关闭；默认零 = 无贡献（outline 变体不读，可能被编译器裁掉，
+            // MToonApplier.setStageLight 按 hasParameter 守卫——坑 10 纪律）
+            Pair(MaterialBuilder.UniformType.FLOAT3, "stageLightPos"),
+            Pair(MaterialBuilder.UniformType.FLOAT3, "stageLightDir"),
+            Pair(MaterialBuilder.UniformType.FLOAT3, "stageLightColor"),
+            Pair(MaterialBuilder.UniformType.FLOAT2, "stageLightCone"),
+            Pair(MaterialBuilder.UniformType.FLOAT, "stageLightRange"),
         )
 
         private val OUTLINE_ONLY_UNIFORM_PARAMS = listOf(

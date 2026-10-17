@@ -68,6 +68,13 @@ internal class MToonApplier(
     private var lightDirection = floatArrayOf(0f, 1f, 1f)
     private var lightColor = floatArrayOf(MTOON_PI, MTOON_PI, MTOON_PI)
 
+    // ── VFX 舞台灯近似（画质升级 2026-10-17；默认零 = 无贡献）──────────
+    private var stageLightPos = floatArrayOf(0f, 0f, 0f)
+    private var stageLightDir = floatArrayOf(0f, -1f, 0f)
+    private var stageLightColor = floatArrayOf(0f, 0f, 0f)
+    private var stageLightCone = floatArrayOf(0f, 1f)   // (cosInner, cosOuter)
+    private var stageLightRange = 0f
+
     // ── apply ─────────────────────────────────────────────────────────────
 
     private val renderableManager get() = engine.renderableManager
@@ -152,6 +159,37 @@ internal class MToonApplier(
         }
         lightColor = color.copyOf()
         applyLightParams()
+    }
+
+    /**
+     * VFX 舞台灯近似（画质升级 2026-10-17）：MToon 数学不吃 Filament 场景灯，
+     * 舞台灯/火焰照明由 VfxManager 每帧挑「对角色贡献最大」的一盏推到这里。
+     * [direction] 为灯瞄准方向（灯位→目标，世界系）；[color] 为已折算强度
+     * 的线性 RGB；[cone] = (cosInner, cosOuter)；[rangeM] ≤ 0 = 关闭。
+     * surface 变体读这些 uniform；outline/hidden 变体不读、可能被 filamat
+     * 裁掉——按 hasParameter 守卫（坑 10：对已裁 uniform setParameter 是
+     * PreconditionPanic）。
+     */
+    fun setStageLight(
+        pos: FloatArray,
+        direction: FloatArray,
+        color: FloatArray,
+        cone: FloatArray,
+        rangeM: Float,
+    ) {
+        stageLightPos = pos.copyOf(3)
+        stageLightDir = direction.copyOf(3)
+        stageLightColor = color.copyOf(3)
+        stageLightCone = cone.copyOf(2)
+        stageLightRange = rangeM
+        instances.forEach { mi ->
+            if (!mi.material.hasParameter("stageLightRange")) return@forEach
+            mi.setParameter("stageLightPos", stageLightPos[0], stageLightPos[1], stageLightPos[2])
+            mi.setParameter("stageLightDir", stageLightDir[0], stageLightDir[1], stageLightDir[2])
+            mi.setParameter("stageLightColor", stageLightColor[0], stageLightColor[1], stageLightColor[2])
+            mi.setParameter("stageLightCone", stageLightCone[0], stageLightCone[1])
+            mi.setParameter("stageLightRange", stageLightRange)
+        }
     }
 
     private fun applyLightParams() {

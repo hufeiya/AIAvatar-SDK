@@ -23,6 +23,13 @@ class ParticlePool(val capacity: Int) {
     /** 自转角（弧度）与角速度（弧度/秒）。 */
     val angle = FloatArray(capacity)
     val angularVel = FloatArray(capacity)
+    /** 三维姿态欧拉角（弧度，CROSS 模式空间翻滚）与三轴角速度（弧度/秒）。 */
+    val rotYaw = FloatArray(capacity)
+    val rotPitch = FloatArray(capacity)
+    val rotRoll = FloatArray(capacity)
+    val angYaw = FloatArray(capacity)
+    val angPitch = FloatArray(capacity)
+    val angRoll = FloatArray(capacity)
     val cr = FloatArray(capacity)
     val cg = FloatArray(capacity)
     val cb = FloatArray(capacity)
@@ -74,6 +81,8 @@ class ParticlePool(val capacity: Int) {
     /**
      * 覆盖第 [i] 个粒子（RECYCLE_OLDEST：满员时由调用方先找槽位再覆盖）。
      * 语义与 [append] 逐字段一致，只是写入既有槽位、计数不变。
+     * 三维姿态 6 数组（rotYaw…angRoll）不入参：CROSS 模式由调用方在
+     * spawn/overwrite 后直写（Billboard 模式恒忽略）。
      */
     fun overwrite(
         i: Int,
@@ -118,6 +127,8 @@ class ParticlePool(val capacity: Int) {
             life[i] = life[last]; maxLife[i] = maxLife[last]
             baseSize[i] = baseSize[last]; curSize[i] = curSize[last]
             angle[i] = angle[last]; angularVel[i] = angularVel[last]
+            rotYaw[i] = rotYaw[last]; rotPitch[i] = rotPitch[last]; rotRoll[i] = rotRoll[last]
+            angYaw[i] = angYaw[last]; angPitch[i] = angPitch[last]; angRoll[i] = angRoll[last]
             cr[i] = cr[last]; cg[i] = cg[last]; cb[i] = cb[last]; ca[i] = ca[last]
             baseR[i] = baseR[last]; baseG[i] = baseG[last]
             baseB[i] = baseB[last]; baseA[i] = baseA[last]

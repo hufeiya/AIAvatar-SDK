@@ -84,6 +84,35 @@ object VfxMath {
     }
 
     /**
+     * 欧拉角 → 世界系正交基（CROSS 模式的三维翻滚，画质升级 2026-10-17）：
+     * R = Ry(yaw)·Rx(pitch)·Rz(roll)，写出三个列向量 R·X/R·Y/R·Z（各 3
+     * float，outX/outY/outZ）。两片正交 quad 分别取 (outX,outY) 与
+     * (outZ,outY) 平面。纯函数零分配，JVM 单测锁正交性/单位长度/角序。
+     */
+    fun eulerBasis(
+        yawRad: Float,
+        pitchRad: Float,
+        rollRad: Float,
+        outX: FloatArray,
+        outY: FloatArray,
+        outZ: FloatArray,
+    ) {
+        val cy = cos(yawRad); val sy = sin(yawRad)
+        val cx = cos(pitchRad); val sx = sin(pitchRad)
+        val cz = cos(rollRad); val sz = sin(rollRad)
+        // R = Ry·Rx·Rz 展开列：
+        outX[0] = cy * cz + sy * sx * sz
+        outX[1] = cx * sz
+        outX[2] = -sy * cz + cy * sx * sz
+        outY[0] = -cy * sz + sy * sx * cz
+        outY[1] = cx * cz
+        outY[2] = sy * sz + cy * sx * cz
+        outZ[0] = sy * cx
+        outZ[1] = -sx
+        outZ[2] = cy * cx
+    }
+
+    /**
      * 写一个粒子的 4 个 Billboard 角点 + UV 到 [out]（交错布局）。
      * [r]/[u] 为（可自转后的）Billboard 平面基向量，[halfW]/[halfH] 为半宽/半高
      * （米）；速度拉伸时调用方直接传拉伸后的轴。UV 默认整图四角；flipbook 传

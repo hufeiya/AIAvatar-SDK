@@ -1155,6 +1155,21 @@ internal class AvatarRuntime(
         applier.setKeyLight(dir, MToonApplier.defaultLightColor(Stage.KEY_COLOR))
     }
 
+    /**
+     * VFX 舞台灯近似推送（画质升级 2026-10-17）：VfxManager 每帧挑出的
+     * featured 局部灯 → MToon 材质参数。pos/dir 世界系，dir = 灯瞄准方向；
+     * color 已折算强度；cone = (cosInner, cosOuter)；rangeM ≤ 0 = 关闭。
+     */
+    fun pushMToonStageLight(
+        pos: FloatArray,
+        dir: FloatArray,
+        color: FloatArray,
+        cone: FloatArray,
+        rangeM: Float,
+    ) {
+        mtoonApplier?.setStageLight(pos, dir, color, cone, rangeM)
+    }
+
     private fun normalize(v: FloatArray): FloatArray {
         val length = kotlin.math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
         return if (length > 0f) floatArrayOf(v[0] / length, v[1] / length, v[2] / length) else v

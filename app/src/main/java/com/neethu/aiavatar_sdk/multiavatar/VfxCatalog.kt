@@ -9,12 +9,16 @@ import com.neethu.corelib.vfx.EmitterShape
 import com.neethu.corelib.vfx.FlipbookParams
 import com.neethu.corelib.vfx.Overflow
 import com.neethu.corelib.vfx.ScalarKey
+import com.neethu.corelib.vfx.StageLightParams
+import com.neethu.corelib.vfx.StageLightType
 import com.neethu.corelib.vfx.VfxBlending
 import com.neethu.corelib.vfx.VfxColor
 import com.neethu.corelib.vfx.VfxPresets
+import com.neethu.corelib.vfx.VfxRenderMode
 import com.neethu.corelib.vfx.VfxSpec
 import com.neethu.corelib.vfx.VfxTexture
 import com.neethu.corelib.vfx.VfxVec3
+import com.neethu.corelib.vfx.WindParams
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -58,6 +62,41 @@ internal object VfxCatalog {
         val scale: Float = 1f,
         val evolution: Float = 1f,
         val keys: List<List<Float>>? = null,
+        // ground 碰撞
+        val y: Float? = null,
+        val fade: Float? = null,
+        val friction: Float? = null,
+    )
+
+    @Serializable
+    data class SidecarWind(
+        val direction: List<Float>? = null,
+        val strength: Float = 0.8f,
+        val gust: Float = 0.35f,
+        val gustFrequency: Float = 0.15f,
+        val swirl: Float = 0.25f,
+        val swirlScale: Float = 1.2f,
+        val responsiveness: Float = 1.6f,
+    )
+
+    @Serializable
+    data class SidecarLight(
+        val type: String = "spot",
+        val color: List<Float>? = null,
+        val intensity: Float = 120_000f,
+        val position: List<Float>? = null,
+        val target: List<Float>? = null,
+        val coneInner: Float = 7f,
+        val coneOuter: Float = 13f,
+        val range: Float = 14f,
+        val beamVisible: Boolean = true,
+        val realLight: Boolean = true,
+        val beamLength: Float = 0f,
+        val sweepSpeed: Float = 0f,
+        val sweepAmplitude: Float = 0f,
+        val sweepPhase: Float = 0f,
+        val flickerStrength: Float = 0f,
+        val flickerFrequency: Float = 8f,
     )
 
     @Serializable
@@ -81,6 +120,12 @@ internal object VfxCatalog {
         val stretchByVelocity: Float = 0f,
         val flipbook: SidecarFlipbook? = null,
         val defaultBone: String? = null,
+        // 画质升级（2026-10-17）：渲染模式 / 三维翻滚 / 风场 / 复合层 / 舞台灯
+        val renderMode: String? = null,
+        val tumble: List<Float>? = null,
+        val wind: SidecarWind? = null,
+        val layers: List<SidecarEntry>? = null,
+        val lights: List<SidecarLight>? = null,
         val license: String = "CC0",
     )
 
@@ -123,6 +168,9 @@ internal object VfxCatalog {
             "turbulence" -> if (b.strength == null) dirty()
             else BehaviorParams.Turbulence(b.strength, b.scale, b.evolution)
 
+            "ground" -> if (b.y == null || b.fade == null) dirty()
+            else BehaviorParams.GroundCollision(b.y, b.fade.coerceAtLeast(0f), (b.friction ?: 3f).coerceAtLeast(0f))
+
             "color_over_life" -> {
                 val keys = b.keys?.takeIf { it.isNotEmpty() }
                     ?.mapNotNull { k -> if (k.size >= 5) ColorKey(k[0], VfxColor(k[1], k[2], k[3], k[4])) else null }
@@ -142,9 +190,25 @@ internal object VfxCatalog {
     }
 
     /** sidecar 条目 → VfxSpec（字段钳制；null = 条目脏，经 [onError] 上报后整条丢弃）。 */
-    fun toSpec(e: SidecarEntry, onError: (String) -> Unit = {}): VfxSpec? {
+    fun toSpec(e: SidecarEntry, onError: (String) -> Unit = {}): VfxSpec? = toSpecInternal(e, onError, depth = 0)
+
+    private fun toSpecInternal(e: SidecarEntry, onError: (String) -> Unit, depth: Int): VfxSpec? {
         val id = e.id.trim()
         if (id.isEmpty()) return null
+        // 复合层：仅顶层允许嵌一层（深度 0 → 1），层数/总量钳制
+        val layers = e.layers?.takeIf { it.isNotEmpty() }?.takeIf { depth == 0 }?.mapNotNull { sub ->
+            toSpecInternal(sub.copy(id = sub.id.ifBlank { "${id}_layer" }), onError, depth = 1)
+        }?.takeIf { it.isNotEmpty() }?.also { ls ->
+            val total = ls.sumOf { it.maxParticles }
+            if (ls.size > MAX_LAYERS || total > MAX_LAYER_PARTICLES) {
+                onError("drop layers of '$id' (layers=${ls.size}, particles=$total)")
+                return null
+            }
+        }
+        val lights = e.lights?.takeIf { it.isNotEmpty() && depth == 0 }
+            ?.map { light(it) }
+            ?.takeIf { it.size <= MAX_LIGHTS } ?: emptyList()
+        val tumble = e.tumble?.takeIf { it.size >= 2 } ?: listOf(0f, 0f)
         val shape = when (e.emitter.shape.lowercase()) {
             "point" -> EmitterShape.POINT
             "sphere" -> EmitterShape.SPHERE
@@ -195,6 +259,51 @@ internal object VfxCatalog {
             },
             defaultBone = e.defaultBone?.trim()?.takeIf { it.isNotEmpty() },
             labelEn = e.nameEn?.trim()?.takeIf { it.isNotEmpty() },
+            renderMode = when (e.renderMode?.lowercase()) {
+                null, "", "billboard" -> VfxRenderMode.BILLBOARD
+                "cross" -> VfxRenderMode.CROSS
+                else -> return null
+            },
+            tumbleMin = tumble[0],
+            tumbleMax = tumble[1],
+            wind = e.wind?.let {
+                WindParams(
+                    direction = vec3(it.direction, VfxVec3(1f, 0f, 0f)),
+                    strength = it.strength.coerceAtLeast(0f),
+                    gust = it.gust.coerceIn(0f, 1f),
+                    gustFrequency = it.gustFrequency.coerceAtLeast(0f),
+                    swirl = it.swirl.coerceAtLeast(0f),
+                    swirlScale = it.swirlScale.coerceAtLeast(0.05f),
+                    responsiveness = it.responsiveness.coerceAtLeast(0f),
+                )
+            },
+            layers = layers,
+            lights = lights,
+        )
+    }
+
+    /** sidecar 灯条目 → StageLightParams（钳制；点灯忽略锥角/target）。 */
+    private fun light(l: SidecarLight): StageLightParams {
+        val type = if (l.type.equals("point", true)) StageLightType.POINT else StageLightType.SPOT
+        val coneOuter = l.coneOuter.coerceIn(1f, 60f)
+        val coneInner = l.coneInner.coerceIn(0.5f, coneOuter)
+        return StageLightParams(
+            type = type,
+            color = rgba(l.color, VfxColor.WHITE),
+            intensityCandela = l.intensity.coerceIn(100f, 2_000_000f),
+            position = vec3(l.position, VfxVec3(0f, 2.6f, 0.8f)),
+            target = vec3(l.target, VfxVec3(0f, 0.9f, 0f)),
+            coneInnerDeg = coneInner,
+            coneOuterDeg = coneOuter,
+            rangeMeters = l.range.coerceIn(0.5f, 40f),
+            beamVisible = l.beamVisible,
+            realLight = l.realLight,
+            beamLengthMeters = l.beamLength.coerceAtLeast(0f),
+            sweepSpeedDegPerSec = l.sweepSpeed.coerceIn(-90f, 90f),
+            sweepAmplitudeDeg = l.sweepAmplitude.coerceIn(0f, 170f),
+            sweepPhaseDeg = l.sweepPhase,
+            flickerStrength = l.flickerStrength.coerceIn(0f, 1f),
+            flickerFrequency = l.flickerFrequency.coerceAtLeast(0f),
         )
     }
 
@@ -241,4 +350,9 @@ internal object VfxCatalog {
     fun find(context: Context, id: String): VfxSpec? = all(context)[id.lowercase()]
 
     private const val TAG = "VfxCatalog"
+
+    /** 复合层/舞台灯上限（画质升级：防 sidecar 失控拖垮批预算）。 */
+    private const val MAX_LAYERS = 6
+    private const val MAX_LAYER_PARTICLES = 1200
+    private const val MAX_LIGHTS = 4
 }

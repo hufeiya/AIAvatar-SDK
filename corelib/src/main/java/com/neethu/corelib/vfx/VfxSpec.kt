@@ -9,6 +9,15 @@ package com.neethu.corelib.vfx
 /** 特效混合档：决定进哪个批渲染（每档一个 draw call、一个材质）。 */
 enum class VfxBlending { ADDITIVE, TRANSPARENT }
 
+/**
+ * 粒子渲染模式（画质升级 2026-10-17，docs/vfx-quality-upgrade.md §3.4）：
+ *  - [BILLBOARD]：经典面向相机四边形（远处便宜，默认）；
+ *  - [CROSS]：两片正交的世界系四边形（8 顶点/粒子）+ 三维翻滚——近景
+ *    雪/花瓣等薄片粒子获得真实空间翻滚，任意视角都有体积感（游戏惯用的
+ *    cross-quad 技法），不随视线转动。
+ */
+enum class VfxRenderMode { BILLBOARD, CROSS }
+
 /** 粒子贴图来源。P0 仅程序化柔边圆点（零资产自证）；P1 增 assets 路径。 */
 sealed interface VfxTexture {
     /** 程序化径向渐变圆点（64×64，运行时生成，零资产）。 */
@@ -98,12 +107,22 @@ sealed class BehaviorParams {
     data class Sway(val axis: String, val amplitude: Float, val frequency: Float, val phase: Float = 0f) : BehaviorParams()
 
     /**
-     * 湍流（P1 简化版，花瓣/烟的扰动）：三角函数伪流场——
+     * 湍流（简化三角伪流场，花瓣/烟的扰动）：三角函数伪流场——
      * `force = strength × (sin(py·k+t), sin(pz·k+t), sin(px·k+t))`（k 由
      * [scale] 导出，t 随粒子已活时长演化）。非真 curl（无散度约束），视觉
      * 够用且零查表零分配；完整版留 P2。
+     *
+     * 力语义 = 加速度（米/秒²），apply 内乘 dt（2026-10-17 修复：曾漏乘
+     * dt 导致扰动力随帧率漂移）。
      */
     data class Turbulence(val strength: Float, val scale: Float = 1f, val evolution: Float = 1f) : BehaviorParams()
+
+    /**
+     * 地面碰撞（雪落地消融/雨丝到地即逝）：粒子 y 低于 [groundY] 且在下落时
+     * 钉回地面、竖向速度清零、水平速度按 [friction] 指数衰减，剩余寿命钳到
+     * [fadeSeconds]（落地后短促淡出；0 = 立即消亡）。
+     */
+    data class GroundCollision(val groundY: Float, val fadeSeconds: Float, val friction: Float = 3f) : BehaviorParams()
 }
 
 /** flipbook 序列帧参数（[VfxSpec.flipbook]）：贴图按列×行网格切子矩形。 */
@@ -116,6 +135,84 @@ data class FlipbookParams(
         require(columns >= 1 && rows >= 1) { "flipbook columns/rows must be >= 1" }
     }
 }
+
+/**
+ * 风场参数（画质升级：雪/花瓣/烟共享同一阵风，docs/vfx-quality-upgrade.md
+ * §3.4）。风是速度目标（米/秒），模拟层按 [responsiveness] 逐帧把水平速度
+ * 拉向风采样值——帧率无关；竖向速度不受风影响（落速归重力管）。
+ *
+ * 同一 [VfxManager] 下所有带风特效共享全局风时钟：阵风相位一致，「雪与
+ * 花瓣受同一阵风」才成立。头发弹簧骨骼的外力馈送也取同一采样。
+ */
+data class WindParams(
+    /** 主风向（世界系；内部投影到水平面并归一）。 */
+    val direction: VfxVec3 = VfxVec3(1f, 0f, 0f),
+    /** 基础风速（米/秒）。 */
+    val strength: Float = 0.8f,
+    /** 阵风幅度（0~1，慢正弦包络调制强度）。 */
+    val gust: Float = 0.35f,
+    /** 阵风基频（Hz；叠加 2 个失谐正弦营造有机起伏）。 */
+    val gustFrequency: Float = 0.15f,
+    /** 局部扰动幅度（米/秒；位置相关的伪流场）。 */
+    val swirl: Float = 0.25f,
+    /** 扰动空间尺度（米）。 */
+    val swirlScale: Float = 1.2f,
+    /** 速度趋向风场的响应率（每秒；2 = ~0.5s 跟上）。 */
+    val responsiveness: Float = 1.6f,
+)
+
+/** 舞台灯类型。 */
+enum class StageLightType { SPOT, POINT }
+
+/**
+ * 舞台灯参数（画质升级能力线 A，docs/vfx-quality-upgrade.md §3.2）：一盏
+ * 真 Filament 聚光/点光（照亮地板与 PBR 场景）+ 可见光束锥 mesh（加色渐隐
+ * 体积近似）+ 地面光斑。位置/目标均为相对特效锚点的偏移（米）。
+ *
+ * - [sweepSpeedDegPerSec]：绕锚点竖轴扫摆（°/秒），position/target 同步旋转；
+ * - [flickerStrength]/[flickerFrequency]：强度闪烁（火焰照明/灯泡嗡闪）；
+ * - MToon 角色不自动吃场景灯：VfxManager 每帧挑「对角色贡献最大」的一盏
+ *   经 host 推给 MToon 材质（近似单盏局部光，全量多灯响应留后续）。
+ */
+data class StageLightParams(
+    val type: StageLightType = StageLightType.SPOT,
+    /** 灯色（RGB 线性；alpha 不用）。 */
+    val color: VfxColor = VfxColor(1f, 1f, 1f, 1f),
+    /** 光强（坎德拉；本仓库 key 灯 2.25M cd @ ~5.5m 的量级参照）。 */
+    val intensityCandela: Float = 120_000f,
+    /** 灯位（相对锚点，米）。 */
+    val position: VfxVec3 = VfxVec3(0f, 2.6f, 0.8f),
+    /** 照射目标点（相对锚点；POINT 忽略）。 */
+    val target: VfxVec3 = VfxVec3(0f, 0.9f, 0f),
+    /** 聚光内/外锥半角（度）。 */
+    val coneInnerDeg: Float = 7f,
+    val coneOuterDeg: Float = 13f,
+    /** 距离衰减半径（米）。 */
+    val rangeMeters: Float = 14f,
+    /** 是否渲染可见光束锥 + 地面光斑（POINT 默认无束）。 */
+    val beamVisible: Boolean = true,
+    /**
+     * 是否挂真 Filament 灯（照亮 PBR 场景/地板）。false = 纯光束+地面光斑+
+     * MToon 推送（角色响应不依赖真灯）。真灯是前向渲染逐片元成本（真机
+     * 实测每灯 ≈−10fps@K20Pro 全屏 home.glb），多灯编队须限量。
+     */
+    val realLight: Boolean = true,
+    /** 光束长度（米；0 = 自动 = position→target 距离）。 */
+    val beamLengthMeters: Float = 0f,
+    /** 扫摆角速度（°/秒，绕锚点竖轴；0 = 固定）。 */
+    val sweepSpeedDegPerSec: Float = 0f,
+    /**
+     * 扫摆幅度（度；0 = 连续整圆旋转，>0 = 在 ±幅度内正弦摆动——
+     * 整圆会把灯甩到相机背后/墙内，舞台样片用摆动模式）。
+     */
+    val sweepAmplitudeDeg: Float = 0f,
+    /** 扫摆初始相位（度）。 */
+    val sweepPhaseDeg: Float = 0f,
+    /** 强度闪烁幅度（0~1；0.5 = ±50% 锯齿闪烁）。 */
+    val flickerStrength: Float = 0f,
+    /** 闪烁频率（Hz 量级）。 */
+    val flickerFrequency: Float = 8f,
+)
 
 /**
  * 特效规格：一次播放的完整参数表。
@@ -147,7 +244,7 @@ data class VfxSpec(
     val startColor: VfxColor = VfxColor.WHITE,
     /** 逐粒子随机取色表（confetti 彩色纸屑；null = 恒用 [startColor]）。 */
     val palette: List<VfxColor>? = null,
-    /** 自转角速度域（度/秒，绕屏幕轴；0 = 不转）。 */
+    /** 自转角速度域（度/秒，绕屏幕轴；仅 BILLBOARD 生效；0 = 不转）。 */
     val spinMin: Float = 0f,
     val spinMax: Float = 0f,
     /** >0 = 按速度方向拉伸粒子（雨丝；拉伸倍率）。 */
@@ -161,6 +258,21 @@ data class VfxSpec(
     val defaultBone: String? = null,
     /** 英文显示名（presets.json 的 nameEn；null = 回落 [label]）。 */
     val labelEn: String? = null,
+    /** 渲染模式（默认 Billboard；近景薄片粒子用 CROSS 获得空间翻滚）。 */
+    val renderMode: VfxRenderMode = VfxRenderMode.BILLBOARD,
+    /** 三维翻滚角速度域（度/秒/轴，逐粒子逐轴随机正负；仅 CROSS 生效）。 */
+    val tumbleMin: Float = 0f,
+    val tumbleMax: Float = 0f,
+    /** 环境风场（null = 无风；带风特效共享全局风时钟，阵风同相）。 */
+    val wind: WindParams? = null,
+    /**
+     * 复合层（画质升级：一个预设 = 多个子发射器，如 火焰=火苗+辉光+火星+
+     * 烟+照明灯）。非空时本 spec 其余发射参数被忽略，逐层实例化；共享锚点
+     * 与生命周期（全部层播完才自停，stop 一次全停）。
+     */
+    val layers: List<VfxSpec>? = null,
+    /** 舞台灯组（非空时 VfxManager 建灯架：真灯 + 可见光束 + 地面光斑）。 */
+    val lights: List<StageLightParams> = emptyList(),
 )
 
 /** 特效锚点（P1 集齐世界点 + 骨骼锚定，docs/vfx-feasibility.md §4.8）。 */

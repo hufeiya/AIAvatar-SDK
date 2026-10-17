@@ -34,56 +34,91 @@ class VfxCatalogTest {
     }
 
     @Test
-    fun `sidecar 解析出 8 配方且 id 齐全`() {
+    fun `sidecar 解析出 10 配方且 id 齐全`() {
         val (presets, errors) = parseWithErrors(sidecarText())
-        assertEquals("解析诊断: $errors", 8, presets.size)
+        assertEquals("解析诊断: $errors", 10, presets.size)
         assertEquals(
-            setOf("spark_burst", "snow", "ring_pulse", "rain", "fire", "confetti", "petals", "lightstick_spark"),
+            setOf(
+                "spark_burst", "snow", "ring_pulse", "rain", "fire", "confetti",
+                "petals", "lightstick_spark", "stage_lights", "spotlight",
+            ),
             presets.map { it.id }.toSet(),
         )
     }
 
     @Test
-    fun `贴图引用全部落在 assets 树内（坑25 对照目录树）`() {
+    fun `贴图引用全部落在 assets 树内（坑25 对照目录树，含复合层）`() {
         val presets = VfxCatalog.parse(sidecarText())
         val onDisk = File("src/main/assets/vfx/textures").listFiles()!!.map { it.name }.toSet()
+        val referenced = mutableSetOf<String>()
         for (p in presets) {
-            val tex = p.texture as? com.neethu.corelib.vfx.VfxTexture.Asset
-            assertNotNull("preset ${p.id} 应引用 assets 贴图", tex)
-            val rel = tex!!.path.removePrefix("vfx/")
-            assertTrue("贴图存在: ${tex.path}", assetFile("vfx/$rel").isFile)
-            assertTrue("贴图在生成器清单内: $rel", File(rel).name in onDisk)
+            val all = listOf(p) + p.layers.orEmpty()
+            for (spec in all) {
+                val tex = spec.texture as? com.neethu.corelib.vfx.VfxTexture.Asset
+                assertNotNull("preset ${spec.id} 应引用 assets 贴图", tex)
+                val rel = tex!!.path.removePrefix("vfx/")
+                assertTrue("贴图存在: ${tex.path}", assetFile("vfx/$rel").isFile)
+                referenced += File(rel).name
+            }
         }
-        assertEquals("生成器产出的贴图全部被引用", 6, onDisk.size)
+        assertEquals("生成器产出的贴图全部被引用（含旧 6 张中的存活者 + 3 张新贴图）", onDisk, referenced)
     }
 
     @Test
-    fun `配方语义字段映射正确`() {
+    fun `配方语义字段映射正确（画质升级版）`() {
         val byId = VfxCatalog.parse(sidecarText()).associateBy { it.id }
+
+        // fire：复合层（火苗/辉光/火星/烟）+ 闪烁点灯；火苗层 8×8 flipbook
         val fire = byId.getValue("fire")
         assertEquals(VfxBlending.ADDITIVE, fire.blending)
-        assertEquals(EmitterShape.CONE, fire.emitter.shape)
-        assertEquals(0.25f, fire.emitter.radialFraction)
-        assertEquals(4, fire.flipbook!!.columns)
-        assertEquals(4, fire.flipbook!!.rows)
+        assertEquals(4, fire.layers!!.size)
+        assertEquals(1, fire.lights.size)
+        assertEquals(com.neethu.corelib.vfx.StageLightType.POINT, fire.lights[0].type)
+        assertTrue(fire.lights[0].flickerStrength > 0f)
+        val flame = fire.layers.orEmpty().first { it.id == "fire_flame" }
+        assertEquals(EmitterShape.CONE, flame.emitter.shape)
+        assertEquals(0.3f, flame.emitter.radialFraction)
+        assertEquals(8, flame.flipbook!!.columns)
+        assertEquals(8, flame.flipbook!!.rows)
+        assertEquals(64, flame.flipbook!!.totalFrames)
 
+        // rain：落地碰撞行为
         val rain = byId.getValue("rain")
         assertEquals(VfxBlending.TRANSPARENT, rain.blending)
         assertEquals(Overflow.RECYCLE_OLDEST, rain.overflow)
         assertEquals(7f, rain.stretchByVelocity)
+        val ground = rain.behaviors.filterIsInstance<BehaviorParams.GroundCollision>()
+        assertEquals(1, ground.size)
+        assertEquals(0f, ground[0].groundY)
 
+        // snow：复合层（远/近），近景 CROSS 翻滚 + 双层风场
+        val snow = byId.getValue("snow")
+        assertEquals(2, snow.layers!!.size)
+        val near = snow.layers.orEmpty().first { it.id == "snow_near" }
+        assertEquals(com.neethu.corelib.vfx.VfxRenderMode.CROSS, near.renderMode)
+        assertTrue(near.tumbleMax > 0f)
+        assertNotNull(snow.layers.orEmpty()[0].wind)
+        assertNotNull(near.wind)
+
+        // petals：CROSS + 风场 + 落地
+        val petals = byId.getValue("petals")
+        assertEquals(com.neethu.corelib.vfx.VfxRenderMode.CROSS, petals.renderMode)
+        assertNotNull(petals.wind)
+        assertTrue(petals.behaviors.any { it is BehaviorParams.GroundCollision })
+
+        // confetti：湍流已改加速度量纲（帧率无关），palette/spin 保留
         val confetti = byId.getValue("confetti")
         assertEquals(6, confetti.palette!!.size)
         assertTrue(confetti.spinMax != 0f)
+        assertTrue(confetti.behaviors.filterIsInstance<BehaviorParams.Turbulence>()[0].strength > 1f)
 
-        val spark = byId.getValue("lightstick_spark")
-        assertEquals("rightHand", spark.defaultBone)
-
-        val snow = byId.getValue("snow")
-        assertEquals(2, snow.behaviors.filterIsInstance<BehaviorParams.Sway>().size)
-
-        val petals = byId.getValue("petals")
-        assertTrue(petals.behaviors.any { it is BehaviorParams.Turbulence })
+        // 舞台灯组：3 束扫摆 SPOT / 单束追光
+        val stage = byId.getValue("stage_lights")
+        assertEquals(3, stage.lights.size)
+        assertTrue(stage.lights.all { it.type == com.neethu.corelib.vfx.StageLightType.SPOT })
+        assertTrue(stage.lights[0].sweepSpeedDegPerSec != 0f)
+        val spot = byId.getValue("spotlight")
+        assertEquals(1, spot.lights.size)
     }
 
     @Test
@@ -131,7 +166,7 @@ class VfxCatalogTest {
     }
 
     @Test
-    fun `内置常量表与 sidecar 同源（8 配方防漂移）`() {
+    fun `内置常量表与 sidecar 同源（10 配方防漂移）`() {
         assertEquals(
             "内置 VfxPresets 应与 sidecar 配方集一致（drift = 两侧都改）",
             VfxCatalog.parse(sidecarText()).map { it.id }.toSet(),
