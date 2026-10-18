@@ -29,7 +29,11 @@ class BailianTtsAdapterTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        adapter = BailianTtsAdapter(apiKey = "sk-bl", endpoint = server.url("/api/v1/tts").toString())
+        adapter = BailianTtsAdapter(
+            apiKey = "sk-bl",
+            endpoint = server.url("/api/v1/tts").toString(),
+            throttleBackoffMs = 1, // 真实退避 1s/2s，测试用 1ms/2ms
+        )
     }
 
     @After
@@ -107,6 +111,46 @@ class BailianTtsAdapterTest {
         assertTrue(e.message!!.contains("InvalidParameter"))
     }
 
+    // ── 429 限流：串行 + 退避重试（真机病理：并发 4 句撞 Throttling.RateQuota）──
+
+    @Test
+    fun `throttled generation retries with backoff and succeeds`() = runBlocking {
+        // 真机病理形态：Throttling.RateQuota JSON
+        val throttleBody = """{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded"}"""
+        server.enqueue(MockResponse().setResponseCode(429).setBody(throttleBody))
+        server.enqueue(MockResponse().setResponseCode(429).setBody(throttleBody))
+        val wav = placeholderSizedWav(24_000, ShortArray(2_400) { (it % 327).toShort() })
+        val audioUrl = server.url("/fake/oss/audio.wav").toString()
+        server.enqueue(
+            MockResponse().setResponseCode(200)
+                .setBody("""{"output":{"audio":{"data":"","url":"$audioUrl"}}}"""),
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(wav)))
+
+        val result = adapter.synthesize("你好", TtsConfig(model = "qwen3-tts-flash", voice = "Cherry"))
+        assertEquals(TtsAudioFormat.RAW_PCM_16LE, result.format)
+        // 首发 + 两次退避重试都在生成端点，成功后下载一次
+        assertEquals(4, server.requestCount)
+        assertEquals("/api/v1/tts", server.takeRequest().path)
+        assertEquals("/api/v1/tts", server.takeRequest().path)
+        assertEquals("/api/v1/tts", server.takeRequest().path)
+        assertEquals("/fake/oss/audio.wav", server.takeRequest().path)
+    }
+
+    @Test
+    fun `persistent throttling surfaces 429 after retries`() {
+        val throttleBody = """{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded"}"""
+        repeat(BailianTtsAdapter.THROTTLE_RETRIES + 1) {
+            server.enqueue(MockResponse().setResponseCode(429).setBody(throttleBody))
+        }
+        val e = assertThrows(IOException::class.java) {
+            runBlocking { adapter.synthesize("你好", TtsConfig(model = "qwen3-tts-flash", voice = "Cherry")) }
+        }
+        assertTrue(e.message!!.contains("HTTP 429"))
+        assertTrue(e.message!!.contains("Throttling.RateQuota"))
+        assertEquals(BailianTtsAdapter.THROTTLE_RETRIES + 1, server.requestCount)
+    }
+
     @Test
     fun `non-wav download fails with a clear error`() = runBlocking {
         val audioUrl = server.url("/fake/oss/audio.wav").toString()
@@ -130,6 +174,26 @@ class BailianTtsAdapterTest {
     }
 
     // ── 纯函数：WAV 宽式解析 + 重采样 ────────────────────────────────────────
+    @Test
+    fun `aliyun http download url is upgraded to https without touching other hosts`() {
+        // 真机病理：OSS 链是 http://，targetSdk≥28 默认禁明文流量，必须升 https
+        assertEquals(
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/prod/a.wav?Signature=x%3D",
+            BailianTtsAdapter.httpsForAliyun(
+                "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/prod/a.wav?Signature=x%3D",
+            ),
+        )
+        // 本地注入端点（MockWebServer）不动
+        assertEquals(
+            "http://localhost:8080/fake/oss/audio.wav",
+            BailianTtsAdapter.httpsForAliyun("http://localhost:8080/fake/oss/audio.wav"),
+        )
+        // 已经是 https 的不重复处理
+        assertEquals(
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/a.wav",
+            BailianTtsAdapter.httpsForAliyun("https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/a.wav"),
+        )
+    }
     @Test
     fun `wav reader tolerates placeholder chunk sizes and downmixes stereo`() {
         val mono = placeholderSizedWav(16_000, shortArrayOf(100, -100, 200, -200))
