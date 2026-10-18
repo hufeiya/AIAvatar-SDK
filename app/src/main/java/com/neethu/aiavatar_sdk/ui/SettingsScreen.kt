@@ -125,12 +125,21 @@ internal data class DropdownOption(val value: String, val label: String)
 internal fun providerOptions(s: com.neethu.aiavatar_sdk.i18n.Strings): List<DropdownOption> =
     AiProvider.entries.map { DropdownOption(it.name, s.provider(it)) }
 
+/**
+ * TTS 服务商下拉的选项 = 全部服务商去掉 DeepSeek——官方无语音合成端点
+ * （/audio/speech 实测 404），选它只会被 ttsEngineResolved 整体改道 Edge-TTS，
+ * 不给这个必被改写的选项。
+ */
+internal fun ttsProviderOptions(s: com.neethu.aiavatar_sdk.i18n.Strings): List<DropdownOption> =
+    providerOptions(s).filter { it.value != AiProvider.DEEPSEEK.name }
+
 /** 写指定服务商的 API Key（其余服务商的 key 原样保留）。 */
 private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): AiChatPrefs =
     when (provider) {
         AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcano = key)
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
+        AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
     }
 
 /** 写语音合成服务的 API Key（火山写豆包语音那把，与大模型 key 互不通用）。 */
@@ -139,6 +148,8 @@ private fun withTtsApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String)
         AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcanoTts = key)
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
+        // DeepSeek 不出现在 TTS 服务商下拉（无 TTS 端点），此臂仅为穷尽占位
+        AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
     }
 
 /**
@@ -408,16 +419,24 @@ internal fun SettingsScreen(
                             ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
 
                             // ── 语音合成（TTS）─────────────────────────────
-                            // 下文 ASR 区块也引用（硅基流动 Key 显隐判定），提在引擎分支外
+                            // 下文 ASR 区块也引用（硅基流动 Key 显隐判定），提在引擎分支外。
+                            // 引擎下拉显示/分支判定都认 ttsEngineResolved（DeepSeek 无
+                            // TTS 端点，OpenAI 兼容选它时实际生效的是 Edge，见
+                            // AiChatPrefs 同名属性=SDK ChatConfig 同款规则）
                             val ttsProvider = aiPrefs.ttsProviderResolved
+                            val ttsEngineResolved = aiPrefs.ttsEngineResolved
                             SettingsDropdownRow(
                                 title = s.ttsEngineTitle,
                                 options = TtsEngine.entries.map { DropdownOption(it.name, s.ttsEngine(it)) },
-                                selectedValue = aiPrefs.ttsEngine.name,
+                                selectedValue = ttsEngineResolved.name,
                             ) { value ->
                                 onAiPrefsChange(aiPrefs.copy(ttsEngine = TtsEngine.valueOf(value)))
                             }
-                            if (aiPrefs.ttsEngine == TtsEngine.EDGE) {
+                            if (ttsEngineResolved != aiPrefs.ttsEngine) {
+                                // 存储引擎被 DeepSeek 回落改写（显示 Edge 实际生效）
+                                SettingsGroupLabel(s.deepseekTtsFallbackHint)
+                            }
+                            if (ttsEngineResolved == TtsEngine.EDGE) {
                                 // Edge-TTS（任务 6）：免费无 Key，服务商/Key/模型全旁路
                                 SettingsGroupLabel(s.edgeTtsHint)
                                 SettingsDropdownRow(
@@ -439,7 +458,7 @@ internal fun SettingsScreen(
                             if (!aiPrefs.ttsSameProvider) {
                                 SettingsDropdownRow(
                                     title = s.ttsProviderTitle,
-                                    options = providerOptions(s),
+                                    options = ttsProviderOptions(s),
                                     selectedValue = ttsProvider.name,
                                 ) { value ->
                                     onAiPrefsChange(aiPrefs.copy(ttsProvider = AiProvider.valueOf(value)))
@@ -470,11 +489,14 @@ internal fun SettingsScreen(
 
                             // ── 语音识别（ASR）─────────────────────────────
                             // ASR 跟随大模型服务商（硅基流动/OpenRouter 同构端点），
-                            // 火山回落硅基流动——硅基流动 Key 在上面没露过面
+                            // 火山/DeepSeek 回落硅基流动——硅基流动 Key 在上面没露过面
                             // （LLM 不走硅基流动、TTS 也不走硅基流动）时单独填一份
                             val asrProvider = asrProviderFor(aiPrefs.provider)
                             SettingsGroupLabel(
-                                s.asrGroupLabel(asrProvider, aiPrefs.provider == AiProvider.VOLCANO)
+                                s.asrGroupLabel(
+                                    asrProvider,
+                                    if (asrProvider != aiPrefs.provider) aiPrefs.provider else null,
+                                )
                             )
                             if (asrProvider == AiProvider.SILICONFLOW &&
                                 aiPrefs.provider != AiProvider.SILICONFLOW &&

@@ -235,6 +235,41 @@ class AIAvatarSdkTest {
     }
 
     @Test
+    fun `deepseek without a tts endpoint falls back to the edge engine`() {
+        // DeepSeek 官方无 TTS（/audio/speech 实测 404）：OpenAI 兼容引擎选到它
+        // （同商跟随）→ ttsEngineResolved 整体改道 Edge，无 TTS Key 也就绪，
+        // 模型/音色全按 Edge 解析（占位模型 + 目录默认音色）
+        val ds = AIAvatarSdk.ChatConfig(provider = ChatProvider.DEEPSEEK, apiKey = "sk-ds")
+        assertEquals(TtsEngine.EDGE, ds.ttsEngineResolved)
+        assertTrue(ds.ttsReady)
+        assertTrue(ds.isConfigured)
+        assertEquals(AIAvatarSdk.ChatConfig.EDGE_TTS_MODEL, ds.resolvedTtsModel)
+        assertEquals("zh-CN-XiaoxiaoNeural", ds.resolvedVoice)
+
+        // 显式把 DeepSeek 指为 TTS 服务商：同样改道 Edge（异商也不需要 TTS Key）
+        val mixed = AIAvatarSdk.ChatConfig(
+            provider = ChatProvider.SILICONFLOW,
+            apiKey = "sk-1",
+            ttsProvider = ChatProvider.DEEPSEEK,
+        )
+        assertEquals(TtsEngine.EDGE, mixed.ttsEngineResolved)
+        assertTrue(mixed.isConfigured)
+
+        // 引擎显式选 Edge 原样保持；非 DeepSeek 的 OpenAI 兼容不受影响
+        assertEquals(TtsEngine.EDGE, ds.copy(ttsEngine = TtsEngine.EDGE).ttsEngineResolved)
+        assertEquals(
+            TtsEngine.OPENAI_COMPATIBLE,
+            mixed.copy(ttsProvider = ChatProvider.SILICONFLOW).ttsEngineResolved,
+        )
+
+        // 装配产物也是 Edge 形态（mp3 / Edge 占位模型），不是打向 404 端点的适配器
+        val sdk = newSdk()
+        val session = sdk.configure(ds)!!
+        assertEquals(AIAvatarSdk.ChatConfig.EDGE_TTS_MODEL, session.ttsConfig!!.model)
+        assertEquals("mp3", session.ttsConfig!!.responseFormat)
+    }
+
+    @Test
     fun `persona joins the preamble and participates in identity`() {
         // 纯函数：空 = null（默认前言）；非空 = 默认前言 + persona 同条
         assertNull(personaPreamble(com.neethu.corelib.Lang.ZH, " "))

@@ -173,6 +173,22 @@ class AIAvatarSdk(
         val ttsProviderResolved: ChatProvider
             get() = ttsProvider ?: provider
 
+        /**
+         * 实际生效的 TTS 引擎：DeepSeek 官方无语音合成端点（/audio/speech 实测
+         * 404），OpenAI 兼容引擎选到它（同商跟随或显式指定）时整体回落
+         * Edge-TTS——免费无 Key，模型/音色/Key 全按 Edge 解析（免费先例见
+         * [TtsEngine.EDGE]）。引擎解析单一出口：ttsReady/resolvedTtsModel/
+         * resolvedVoice/装配全部认这个值。
+         */
+        val ttsEngineResolved: TtsEngine
+            get() = if (ttsEngine == TtsEngine.OPENAI_COMPATIBLE &&
+                ttsProviderResolved == ChatProvider.DEEPSEEK
+            ) {
+                TtsEngine.EDGE
+            } else {
+                ttsEngine
+            }
+
         /** TTS 实际请求端点：显式 TTS 服务商用其端点，否则跟随大模型端点。 */
         val ttsBaseUrl: String
             get() = if (ttsProvider != null) ttsProvider.baseUrl else llmBaseUrl
@@ -194,7 +210,7 @@ class AIAvatarSdk(
         /** TTS 解析后的模型名（Edge 引擎用占位值——端点不校验 model）。 */
         val resolvedTtsModel: String
             get() = when {
-                ttsEngine == TtsEngine.EDGE -> EDGE_TTS_MODEL
+                ttsEngineResolved == TtsEngine.EDGE -> EDGE_TTS_MODEL
                 ttsProvider != null -> resolveTtsModel(ttsProvider, ttsModel)
                 isCustomEndpoint -> ttsModel.trim()
                 else -> resolveTtsModel(provider, ttsModel)
@@ -203,7 +219,7 @@ class AIAvatarSdk(
         /** TTS 解析后的音色（校验 + 默认；自定义端点透传）。 */
         val resolvedVoice: String
             get() = when {
-                ttsEngine == TtsEngine.EDGE -> resolveEdgeVoice(voice, lang)
+                ttsEngineResolved == TtsEngine.EDGE -> resolveEdgeVoice(voice, lang)
                 ttsProvider != null -> resolveVoice(ttsProvider, voice)
                 isCustomEndpoint -> voice.trim()
                 else -> resolveVoice(provider, voice)
@@ -211,7 +227,7 @@ class AIAvatarSdk(
 
         /** TTS 侧就绪：Edge 免费；OpenAI 兼容需要 Key + 非空模型名。 */
         val ttsReady: Boolean
-            get() = when (ttsEngine) {
+            get() = when (ttsEngineResolved) {
                 TtsEngine.EDGE -> true
                 TtsEngine.OPENAI_COMPATIBLE ->
                     ttsKeyResolved.isNotBlank() && resolvedTtsModel.isNotBlank()
@@ -296,7 +312,7 @@ class AIAvatarSdk(
         }
 
         val llm = OpenAiCompatibleLlmAdapter(config.llmBaseUrl, config.apiKey)
-        val tts = when (config.ttsEngine) {
+        val tts = when (config.ttsEngineResolved) {
             // Edge-TTS：微软朗读接口免费无 Key；输出恒 MP3 24kHz，
             // orchestrator 的 PcmDecoder MediaCodec 路径直接可解
             TtsEngine.EDGE -> EdgeTtsAdapter(texts = edgeTtsTexts(config.lang))
@@ -311,6 +327,10 @@ class AIAvatarSdk(
                 // OpenRouter 同一 OpenAI 兼容 schema，适配器直接复用
                 ChatProvider.OPENROUTER ->
                     OpenAiCompatibleTtsAdapter(config.ttsBaseUrl, config.ttsKeyResolved)
+                // DeepSeek 无 TTS 端点，ttsEngineResolved 已把选它的请求归入上方
+                // EDGE 分支；此臂编译期兜底（枚举穷尽所需），运行期不可达
+                ChatProvider.DEEPSEEK ->
+                    EdgeTtsAdapter(texts = edgeTtsTexts(config.lang))
             }
         }
         val session = AvatarSession(
@@ -345,7 +365,7 @@ class AIAvatarSdk(
             // 服务商假设，不带额外参数
             extraBody = if (config.isCustomEndpoint) null else llmExtraBody(config.provider, config.resolvedLlmModel),
         )
-        session.ttsConfig = when (config.ttsEngine) {
+        session.ttsConfig = when (config.ttsEngineResolved) {
             TtsEngine.EDGE ->
                 // mp3 容器自带采样率（24kHz），无需指定；voice 不在目录即落默认
                 TtsConfig(
@@ -360,6 +380,14 @@ class AIAvatarSdk(
                 ChatProvider.OPENROUTER ->
                     TtsConfig(
                         model = config.resolvedTtsModel,
+                        voice = config.resolvedVoice,
+                        responseFormat = "mp3",
+                    )
+                // DeepSeek 无 TTS 端点：ttsEngineResolved 已把选它的请求归入上方
+                // EDGE 分支；此臂编译期兜底，运行期不可达
+                ChatProvider.DEEPSEEK ->
+                    TtsConfig(
+                        model = ChatConfig.EDGE_TTS_MODEL,
                         voice = config.resolvedVoice,
                         responseFormat = "mp3",
                     )

@@ -46,10 +46,16 @@ class Strings(val lang: Lang) {
         TtsEngine.EDGE -> zh("Edge-TTS（免费无 Key）", "Edge-TTS (free, no key)")
     }
 
+    /** DeepSeek 无 TTS 端点的回落说明（存储引擎与实际生效引擎不一致时显示）。 */
+    val deepseekTtsFallbackHint: String get() =
+        zh("DeepSeek 官方无语音合成端点：OpenAI 兼容引擎下自动改走 Edge-TTS（免费无 Key）",
+            "DeepSeek's official API has no TTS endpoint: the OpenAI-compatible engine automatically falls back to Edge-TTS (free, no key)")
+
     fun provider(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> zh("硅基流动", "SiliconFlow")
         AiProvider.VOLCANO -> zh("火山引擎", "Volcano Engine")
         AiProvider.OPENROUTER -> "OpenRouter"
+        AiProvider.DEEPSEEK -> "DeepSeek"
     }
 
     /** 服务商 API Key 字段标签（大模型侧）。 */
@@ -57,6 +63,7 @@ class Strings(val lang: Lang) {
         AiProvider.SILICONFLOW -> zh("硅基流动 API Key", "SiliconFlow API key")
         AiProvider.VOLCANO -> zh("火山方舟 API Key（大模型用）", "Volcano Ark API key (for LLM)")
         AiProvider.OPENROUTER -> "OpenRouter API key"
+        AiProvider.DEEPSEEK -> "DeepSeek API Key"
     }
 
     /** 服务商 API Key 字段标签（语音合成侧；火山是另一把豆包语音 key）。 */
@@ -64,6 +71,8 @@ class Strings(val lang: Lang) {
         AiProvider.SILICONFLOW -> zh("硅基流动 API Key（语音合成用）", "SiliconFlow API key (for TTS)")
         AiProvider.VOLCANO -> zh("豆包语音 API Key（语音合成用）", "Douban Voice API key (for TTS)")
         AiProvider.OPENROUTER -> "OpenRouter API key (for TTS)"
+        // DeepSeek 无 TTS 端点：TTS 服务商下拉不出现它，此臂仅为穷尽占位
+        AiProvider.DEEPSEEK -> "DeepSeek API Key"
     }
 
     /** Key 输入框占位。 */
@@ -186,8 +195,8 @@ class Strings(val lang: Lang) {
         zh("先在 ⚙️ 设置里配置 AI 服务，再开视频模式",
             "Configure the AI service in ⚙️ Settings before entering video mode")
     fun videoNeedsVision(model: String): String =
-        zh("当前大模型「$model」不支持图片输入，视频模式需要多模态模型（⚙️ 设置里切换：硅基流动选 Qwen3.8-27B / Qwen3-VL，火山默认模型即可）",
-            "The current LLM \"$model\" cannot take images — video mode needs a multimodal model (switch in ⚙️ Settings: pick Qwen3.8-27B / Qwen3-VL on SiliconFlow, or any default Volcano model)")
+        zh("当前大模型「$model」不支持图片输入，视频模式需要多模态模型（⚙️ 设置里切换：硅基流动选 Qwen3.8-27B / Qwen3-VL，火山/DeepSeek 默认模型即可）",
+            "The current LLM \"$model\" cannot take images — video mode needs a multimodal model (switch in ⚙️ Settings: pick Qwen3.8-27B / Qwen3-VL on SiliconFlow, or any default Volcano/DeepSeek model)")
     val videoCameraNotRunning: String get() =
         zh("视频相机未启动——先进入视频模式 (set_mode video)",
             "Video camera not running — enter video mode first (set_mode video)")
@@ -263,9 +272,13 @@ class Strings(val lang: Lang) {
             "When checked, TTS uses the LLM provider above; uncheck to pick a separate TTS provider (and key, if needed)")
     val ttsProviderTitle: String get() = zh("TTS 服务商", "TTS provider")
     val ttsModelTitle: String get() = zh("TTS 模型", "TTS model")
-    fun asrGroupLabel(p: AiProvider, volcanoFallback: Boolean): String =
-        zh("语音输入（按住说话 · ASR 走${provider(p)}${if (volcanoFallback) "（火山回落）" else ""}）",
-            "Voice input (hold-to-talk · ASR via ${provider(p)}${if (volcanoFallback) ", falls back to SiliconFlow" else ""})")
+    /**
+     * ASR 区块说明：[p] 是实际生效的识别服务商，[fallbackFrom] 非空 = 大模型
+     * 服务商（火山/DeepSeek）无该形态 ASR 端点、回落而来，括号里注明出处。
+     */
+    fun asrGroupLabel(p: AiProvider, fallbackFrom: AiProvider? = null): String =
+        zh("语音输入（按住说话 · ASR 走${provider(p)}${if (fallbackFrom != null) "（${provider(fallbackFrom)} 回落）" else ""}）",
+            "Voice input (hold-to-talk · ASR via ${provider(p)}${if (fallbackFrom != null) ", falls back from ${provider(fallbackFrom)}" else ""})")
     val sfAsrKeyTitle: String get() = zh("硅基流动 API Key（语音识别与向量化用）", "SiliconFlow API key (for ASR & embeddings)")
     val recognitionEngineTitle: String get() = zh("识别引擎", "Recognition engine")
     val systemAsrAvailableHint: String get() =

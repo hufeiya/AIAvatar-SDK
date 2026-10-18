@@ -890,8 +890,10 @@ private fun parseProviderArg(arg: String?): AiProvider = when (arg?.lowercase())
     "siliconflow", "sf", "silicon" -> AiProvider.SILICONFLOW
     "volcano", "volc", "ark", "bytedance" -> AiProvider.VOLCANO
     "openrouter", "or", "openr" -> AiProvider.OPENROUTER
+    // DeepSeek 只有 chat；set_tts_provider 传它会被 ttsEngineResolved 改道 Edge
+    "deepseek", "ds" -> AiProvider.DEEPSEEK
     else -> throw IllegalArgumentException(
-        "expects siliconflow|volcano|openrouter, got '$arg'"
+        "expects siliconflow|volcano|openrouter|deepseek, got '$arg'"
     )
 }
 

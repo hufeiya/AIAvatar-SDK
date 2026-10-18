@@ -18,6 +18,7 @@ MAPPING=(
   "VOLCANO_ARK_API_KEY:ai_api_key_volcano"
   "VOLCANO_TTS_API_KEY:ai_api_key_volcano_tts"
   "OPENROUTER_API_KEY:ai_api_key_openrouter"
+  "DEEPSEEK_OFFICIAL_API_KEY:ai_api_key_deepseek"
 )
 
 mask() {

@@ -140,6 +140,35 @@ enum class ChatProvider(
         ),
         defaultVoice = "en_paul_neutral",
     ),
+    /**
+     * DeepSeek 官方 API（api.deepseek.com，OpenAI 兼容）：**只有 chat**——
+     * /audio/speech、/audio/transcriptions、/embeddings 实测全 404
+     * （2026-10-18 真 key 核验）。模型清单取自 /models 在册：`deepseek-flash`
+     * （DeepSeek-V4.1-Flash，1M 上下文，输入 text+image=真视觉，64px 红/蓝图
+     * 逐张实测描述正确）与 `deepseek-v4-pro`（纯文本，喂图明说看不到，排除出
+     * 视觉清单）。两模型默认开思考但走独立 `reasoning_content` 字段——适配器
+     * 只读 delta.content，不污染输出；简单问答全程 <1s，`effort` 参数三档实测
+     * 无感（不发，默认即可）。无自有 TTS/ASR：TTS 在 facade 回落 Edge-TTS
+     * （见 [AIAvatarSdk.ChatConfig.ttsEngineResolved]），ASR 回落硅基流动
+     * （见 [asrProviderFor]）。
+     */
+    DEEPSEEK(
+        baseUrl = "https://api.deepseek.com/v1",
+        llmModels = listOf(
+            "deepseek-flash",
+            "deepseek-v4-pro",
+        ),
+        visionLlmModels = listOf(
+            "deepseek-flash",
+        ),
+        // 官方无语音合成端点（实测 404）：清单留空，OpenAI 兼容引擎选到它时
+        // ttsEngineResolved 整体回落 Edge-TTS，模型/音色/Key 三行配置全部旁路
+        ttsModels = emptyList(),
+        defaultTtsModel = "",
+        voicePrefix = null,
+        voices = emptyList(),
+        defaultVoice = "",
+    ),
     ;
 
     /** 大模型默认模型（清单首位）。 */
@@ -264,17 +293,21 @@ fun llmExtraBody(provider: ChatProvider, model: String): JsonObject? {
 /**
  * 语音识别（ASR）实际生效的服务商：OpenRouter 的 /audio/transcriptions 与
  * 硅基流动同构（OpenAI 兼容 multipart），跟随大模型服务商共用那把 key；
- * 火山不提供该形态的 ASR 端点，回落硅基流动（既有行为：火山大模型用户
- * 需另填硅基流动 Key 做语音识别）。
+ * 火山与 DeepSeek 官方不提供该形态的 ASR 端点，回落硅基流动（既有行为：
+ * 这两家的大模型用户需另填硅基流动 Key 做语音识别，或改用系统识别引擎）。
  */
 fun asrProviderFor(llmProvider: ChatProvider): ChatProvider =
-    if (llmProvider == ChatProvider.VOLCANO) ChatProvider.SILICONFLOW else llmProvider
+    if (llmProvider == ChatProvider.VOLCANO || llmProvider == ChatProvider.DEEPSEEK) {
+        ChatProvider.SILICONFLOW
+    } else {
+        llmProvider
+    }
 
 /** ASR 模型的显式候选（按端点）；留空时的自动推断见 [resolveAsrModel]。 */
 fun asrExplicitAsrModels(provider: ChatProvider): List<String> = when (provider) {
     ChatProvider.SILICONFLOW -> listOf("Qwen/Qwen3-ASR-1.7B")
     ChatProvider.OPENROUTER -> listOf("openai/whisper-large-v3")
-    ChatProvider.VOLCANO -> emptyList()
+    ChatProvider.VOLCANO, ChatProvider.DEEPSEEK -> emptyList()
 }
 
 /**

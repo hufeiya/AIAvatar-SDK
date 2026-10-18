@@ -395,10 +395,11 @@ class OpenRouterProviderTest {
     }
 
     @Test
-    fun `asr provider follows llm provider except volcano falls back to siliconflow`() {
+    fun `asr provider follows llm provider except volcano and deepseek fall back`() {
         assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.SILICONFLOW))
         assertEquals(or, asrProviderFor(or))
         assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.VOLCANO))
+        assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.DEEPSEEK))
     }
 
     @Test
@@ -406,6 +407,7 @@ class OpenRouterProviderTest {
         assertEquals(listOf("Qwen/Qwen3-ASR-1.7B"), asrExplicitAsrModels(AiProvider.SILICONFLOW))
         assertEquals(listOf("openai/whisper-large-v3"), asrExplicitAsrModels(or))
         assertEquals(emptyList<String>(), asrExplicitAsrModels(AiProvider.VOLCANO))
+        assertEquals(emptyList<String>(), asrExplicitAsrModels(AiProvider.DEEPSEEK))
     }
 
     @Test
@@ -423,5 +425,88 @@ class OpenRouterProviderTest {
         assertEquals("OpenRouter API Key", or.llmKeyLabel)
         assertEquals("sk-or-v1-...", or.llmKeyHint)
         assertEquals("OpenRouter API Key（语音合成用）", or.ttsKeyLabel)
+    }
+}
+
+// ── DeepSeek 官方（第四服务商，2026-10-18；只有 chat，TTS/ASR 官方无端点）──
+
+class DeepSeekProviderTest {
+
+    private val ds = AiProvider.DEEPSEEK
+
+    @Test
+    fun `deepseek catalog is verified and locked`() {
+        assertEquals("DeepSeek", ds.label)
+        assertEquals("https://api.deepseek.com/v1", ds.baseUrl)
+        // /models 在册（2026-10-18 真 key 核验）：flash 输入含 image=真视觉
+        // （64px 红/蓝图逐张实测描述正确）；v4-pro 纯文本，喂图明说看不到
+        assertEquals(listOf("deepseek-flash", "deepseek-v4-pro"), ds.llmModels)
+        assertEquals("deepseek-flash", ds.defaultLlmModel)
+        assertEquals(listOf("deepseek-flash"), ds.visionLlmModels)
+        // 官方无 TTS（/audio/speech 实测 404）：清单为空，不留假模型——
+        // OpenAI 兼容引擎选它时由 ttsEngineResolved 整体改道 Edge-TTS
+        assertEquals(0, ds.ttsModels.size)
+        assertTrue(ds.voicePrefix == null)
+    }
+
+    @Test
+    fun `deepseek tts falls back to the edge engine and needs no tts key`() {
+        // 同商跟随：OpenAI 兼容引擎选 DeepSeek → 实际生效 Edge（免费无 Key）
+        val prefs = AiChatPrefs(provider = ds, apiKeyDeepseek = "sk-ds")
+        assertEquals(ds, prefs.ttsProviderResolved)
+        assertEquals(TtsEngine.EDGE, prefs.ttsEngineResolved)
+        assertTrue(prefs.ttsReady)
+        assertTrue(prefs.isConfigured)
+
+        // 显式 Edge 引擎原样保持；独立 TTS 服务商指到 DeepSeek 也被改道
+        assertEquals(TtsEngine.EDGE, prefs.copy(ttsEngine = TtsEngine.EDGE).ttsEngineResolved)
+        val independent = prefs.copy(ttsSameProvider = false, ttsProvider = ds)
+        assertEquals(TtsEngine.EDGE, independent.ttsEngineResolved)
+        assertTrue(independent.ttsReady)
+
+        // 非 DeepSeek 的 OpenAI 兼容路径不受影响
+        assertEquals(
+            TtsEngine.OPENAI_COMPATIBLE,
+            prefs.copy(provider = AiProvider.SILICONFLOW).ttsEngineResolved,
+        )
+    }
+
+    @Test
+    fun `deepseek asr falls back to siliconflow`() {
+        assertEquals(AiProvider.SILICONFLOW, asrProviderFor(ds))
+        assertEquals(0, asrExplicitAsrModels(ds).size)
+    }
+
+    @Test
+    fun `deepseek vision gating treats flash as the only visual model`() {
+        // 默认模型即视觉模型：视频模式开箱即用（同火山模式）
+        assertTrue(isVisionLlm(ds, ""))
+        assertTrue(isVisionLlm(ds, "deepseek-flash"))
+        assertFalse(isVisionLlm(ds, "deepseek-v4-pro"))
+        assertTrue(ds.visionLlmModels.all { it in ds.llmModels })
+    }
+
+    @Test
+    fun `deepseek key routing and migration inference`() {
+        val prefs = AiChatPrefs(provider = ds, apiKeyDeepseek = "sk-ds")
+        assertEquals("sk-ds", prefs.apiKeyFor(ds))
+        // 无 TTS 实际不读（引擎已改道 Edge），穷尽占位返回本商 key
+        assertEquals("sk-ds", prefs.apiKeyForTts())
+        assertEquals(ds, inferProviderFromBaseUrl("https://api.deepseek.com/v1"))
+        assertEquals(ds, inferProviderFromBaseUrl("https://api.deepseek.com"))
+    }
+
+    @Test
+    fun `deepseek gets no thinking params`() {
+        // 两模型默认开思考但走独立 reasoning_content 字段（适配器只读
+        // delta.content，不污染输出），effort 三档实测无感——不发任何额外参数
+        assertEquals(null, llmExtraBody(ds, "deepseek-flash"))
+        assertEquals(null, llmExtraBody(ds, "deepseek-v4-pro"))
+    }
+
+    @Test
+    fun `deepseek key field labels follow the service`() {
+        assertEquals("DeepSeek API Key", ds.llmKeyLabel)
+        assertEquals("sk-...", ds.llmKeyHint)
     }
 }

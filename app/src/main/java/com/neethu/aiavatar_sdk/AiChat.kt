@@ -16,13 +16,15 @@ import com.neethu.orchestrator.skill.SkillHost
 import kotlinx.coroutines.CoroutineScope
 
 /**
- * AI 对话配置（多服务商版：硅基流动/火山引擎/OpenRouter）。除 API Key 外全部
- * 下拉框选择，模型/音色留空即用服务商默认（解析正本在 SDK 目录
+ * AI 对话配置（多服务商版：硅基流动/火山引擎/OpenRouter/DeepSeek 官方）。除
+ * API Key 外全部下拉框选择，模型/音色留空即用服务商默认（解析正本在 SDK 目录
  * [ChatProvider]，见 [resolveLlmModel]/[resolveTtsModel]/[resolveVoice]）。
  *
  * Key 按服务分存（硅基流动与 OpenRouter 一把通用；**火山的语音与大模型是两把
  * key**：[apiKeyVolcano]=方舟 Ark 大模型，[apiKeyVolcanoTts]=豆包语音合成，实测
- * 互不通用）；TTS 可独立选服务商（[ttsSameProvider]=false 时用 [ttsProvider]）。
+ * 互不通用；DeepSeek 只有 chat 一把 key，TTS 自动回落 Edge 见
+ * [AiChatPrefs.ttsEngineResolved]）；TTS 可独立选服务商（[ttsSameProvider]=false
+ * 时用 [ttsProvider]）。
  */
 data class AiChatPrefs(
     val provider: AiProvider = AiProvider.SILICONFLOW,
@@ -34,6 +36,8 @@ data class AiChatPrefs(
     val apiKeyVolcanoTts: String = "",
     /** OpenRouter API Key——大模型/TTS/ASR 一把通用（面向海外用户）。 */
     val apiKeyOpenrouter: String = "",
+    /** DeepSeek 官方 API Key——只有 chat（TTS/ASR 官方无端点，见上）。 */
+    val apiKeyDeepseek: String = "",
     /** TTS 与大模型同服务商（默认勾选）。 */
     val ttsSameProvider: Boolean = true,
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
@@ -102,21 +106,38 @@ data class AiChatPrefs(
     val ttsProviderResolved: AiProvider
         get() = if (ttsSameProvider) provider else ttsProvider
 
-    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter）。 */
+    /**
+     * TTS 实际生效的引擎（与 SDK ChatConfig.ttsEngineResolved 同一规则，设置页
+     * 显示/分支判定认这个值，实际装配由 SDK 同款规则兜底）：DeepSeek 官方无
+     * 语音合成端点（/audio/speech 实测 404），OpenAI 兼容引擎选到它（同商跟随
+     * 或显式指定）时整体回落 Edge-TTS——免费无 Key，模型/音色/Key 全按 Edge 解析。
+     */
+    val ttsEngineResolved: TtsEngine
+        get() = if (ttsEngine == TtsEngine.OPENAI_COMPATIBLE &&
+            ttsProviderResolved == AiProvider.DEEPSEEK
+        ) {
+            TtsEngine.EDGE
+        } else {
+            ttsEngine
+        }
+
+    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter / DeepSeek 官方）。 */
     fun apiKeyFor(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcano
         AiProvider.OPENROUTER -> apiKeyOpenrouter
+        AiProvider.DEEPSEEK -> apiKeyDeepseek
     }
 
-    /** 语音合成服务的 API Key（硅基流动/OpenRouter 共用一份；火山语音用豆包语音那把）。 */
+    /** 语音合成服务的 API Key（硅基流动/OpenRouter 共用一份；火山语音用豆包语音那把；DeepSeek 无 TTS 走 Edge 不读 Key）。 */
     fun apiKeyForTts(): String = when (ttsProviderResolved) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcanoTts
         AiProvider.OPENROUTER -> apiKeyOpenrouter
+        AiProvider.DEEPSEEK -> apiKeyDeepseek
     }
 
-    /** TTS 侧的就绪条件：Edge-TTS 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
+    /** TTS 侧的就绪条件：Edge 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
     val ttsReady: Boolean
         get() = when (ttsEngine) {
             TtsEngine.EDGE -> true
@@ -161,6 +182,7 @@ private const val KEY_AI_API_KEY_SILICONFLOW = "ai_api_key_siliconflow"
 private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano" // 火山方舟（大模型）
 private const val KEY_AI_API_KEY_VOLCANO_TTS = "ai_api_key_volcano_tts" // 豆包语音（合成）
 private const val KEY_AI_API_KEY_OPENROUTER = "ai_api_key_openrouter"
+private const val KEY_AI_API_KEY_DEEPSEEK = "ai_api_key_deepseek"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
@@ -199,6 +221,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         apiKeyVolcano = volcArkKey,
         apiKeyVolcanoTts = getString(KEY_AI_API_KEY_VOLCANO_TTS, null) ?: volcTtsKey,
         apiKeyOpenrouter = getString(KEY_AI_API_KEY_OPENROUTER, "").orEmpty(),
+        apiKeyDeepseek = getString(KEY_AI_API_KEY_DEEPSEEK, "").orEmpty(),
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
@@ -224,6 +247,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_API_KEY_VOLCANO, p.apiKeyVolcano.trim())
         .putString(KEY_AI_API_KEY_VOLCANO_TTS, p.apiKeyVolcanoTts.trim())
         .putString(KEY_AI_API_KEY_OPENROUTER, p.apiKeyOpenrouter.trim())
+        .putString(KEY_AI_API_KEY_DEEPSEEK, p.apiKeyDeepseek.trim())
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())

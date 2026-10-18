@@ -44,6 +44,16 @@ class ChatProvidersTest {
         assertEquals(or.llmModels.toSet(), or.visionLlmModels.toSet())
         assertEquals("mistralai/voxtral-mini-tts-2603", or.defaultTtsModel)
         assertEquals("en_paul_neutral", or.defaultVoice)
+
+        val ds = ChatProvider.DEEPSEEK
+        // 2026-10-18 真 key 核验：/models 在册两模型；flash 输入含 image=真视觉
+        assertEquals("https://api.deepseek.com/v1", ds.baseUrl)
+        assertEquals(listOf("deepseek-flash", "deepseek-v4-pro"), ds.llmModels)
+        assertEquals("deepseek-flash", ds.defaultLlmModel)
+        assertEquals(listOf("deepseek-flash"), ds.visionLlmModels)
+        // 官方无 TTS（/audio/speech 404）：清单为空，选它时 ttsEngineResolved 回落 Edge
+        assertEquals(0, ds.ttsModels.size)
+        assertEquals("", ds.defaultTtsModel)
     }
 
     @Test
@@ -55,6 +65,9 @@ class ChatProvidersTest {
         )
         assertEquals("doubao-seed-2-0-mini-260428", resolveLlmModel(ChatProvider.VOLCANO, "  "))
         assertEquals("seed-tts-2.0", resolveTtsModel(ChatProvider.VOLCANO, ""))
+        assertEquals("deepseek-flash", resolveLlmModel(ChatProvider.DEEPSEEK, ""))
+        // TTS 清单为空 → 恒空（引擎已被 ttsEngineResolved 改道 Edge，不真请求）
+        assertEquals("", resolveTtsModel(ChatProvider.DEEPSEEK, "seed-tts-2.0"))
     }
 
     // ── 跨服务商防泄漏（真机实测切火山后 DeepSeek-V3 残留被原样发给 Ark）──
@@ -112,6 +125,10 @@ class ChatProvidersTest {
         // 关思考方言不跨服务商泄漏
         assertNull(llmExtraBody(ChatProvider.SILICONFLOW, "qwen/qwen3.7-flash"))
         assertNull(llmExtraBody(ChatProvider.VOLCANO, "Qwen/Qwen3.8-27B"))
+        // DeepSeek 默认开思考但走独立 reasoning_content（不污染 delta.content），
+        // effort 三档实测无感——不发任何额外参数
+        assertNull(llmExtraBody(ChatProvider.DEEPSEEK, "deepseek-flash"))
+        assertNull(llmExtraBody(ChatProvider.DEEPSEEK, "deepseek-v4-pro"))
     }
 
     @Test
@@ -122,16 +139,22 @@ class ChatProvidersTest {
         // 跨服务商残留值先归位再判定，不把残留值误判成清单内视觉模型
         assertTrue(isVisionLlm(ChatProvider.VOLCANO, "deepseek-ai/DeepSeek-V3"))
         assertFalse(isVisionLlm(ChatProvider.SILICONFLOW, "doubao-seed-2-0-mini-260428"))
+        // DeepSeek：flash 真视觉（红/蓝图实测），v4-pro 喂图明说看不到
+        assertTrue(isVisionLlm(ChatProvider.DEEPSEEK, ""))
+        assertTrue(isVisionLlm(ChatProvider.DEEPSEEK, "deepseek-flash"))
+        assertFalse(isVisionLlm(ChatProvider.DEEPSEEK, "deepseek-v4-pro"))
     }
 
     @Test
-    fun `asr provider follows llm except volcano falls back to siliconflow`() {
+    fun `asr provider follows llm except volcano and deepseek fall back to siliconflow`() {
         assertEquals(ChatProvider.SILICONFLOW, asrProviderFor(ChatProvider.SILICONFLOW))
         assertEquals(ChatProvider.OPENROUTER, asrProviderFor(ChatProvider.OPENROUTER))
         assertEquals(ChatProvider.SILICONFLOW, asrProviderFor(ChatProvider.VOLCANO))
+        assertEquals(ChatProvider.SILICONFLOW, asrProviderFor(ChatProvider.DEEPSEEK))
         assertEquals(listOf("Qwen/Qwen3-ASR-1.7B"), asrExplicitAsrModels(ChatProvider.SILICONFLOW))
         assertEquals(listOf("openai/whisper-large-v3"), asrExplicitAsrModels(ChatProvider.OPENROUTER))
         assertEquals(0, asrExplicitAsrModels(ChatProvider.VOLCANO).size)
+        assertEquals(0, asrExplicitAsrModels(ChatProvider.DEEPSEEK).size)
     }
 
     @Test

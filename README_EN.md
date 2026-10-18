@@ -33,7 +33,7 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 
 - **Fully client-side conversation pipeline**: streaming LLM → smart sentence splitting → concurrent TTS → sequential playback, with no self-hosted server
 - **Free voice out of the box**: Edge-TTS (no key) + built-in system ASR (no key) — voice chat works without entering a single API key
-- **Built-in provider directory**: switch among SiliconFlow / Volcano Engine / OpenRouter in one tap, or override with any OpenAI-compatible `baseUrl`
+- **Built-in provider directory**: switch among SiliconFlow / Volcano Engine / OpenRouter / DeepSeek in one tap, or override with any OpenAI-compatible `baseUrl`
 - **Multimodal inline tags**: `<emo:joy>` expressions, `<act:wave>` motions (334 VRMA animations built in), `<cam:closeup>` camera shots — all emitted by the LLM in a single stream
 - **Video-call mode**: camera gaze (look at the lens / follow your face), expression mirroring, and motion mimicry
 - **Import external VRM models**: pick a file and swap characters instantly; the expression catalog refreshes automatically and conversation contexts rotate per model
@@ -175,7 +175,7 @@ LaunchedEffect(state) {
 ```kotlin
 val chat = AIAvatarSdk(scope, controller, applicationContext)
 
-// Built-in directory of three providers (SiliconFlow / Volcano Engine / OpenRouter); empty model/voice = provider defaults
+// Built-in directory of four providers (SiliconFlow / Volcano Engine / OpenRouter / DeepSeek); empty model/voice = provider defaults
 chat.configure(AIAvatarSdk.ChatConfig(apiKey = "sk-...", ttsEngine = TtsEngine.EDGE))
 
 chat.send("What should we have for dinner tonight?")   // streaming LLM reply, spoken sentence by sentence
@@ -233,7 +233,7 @@ Lip sync, blinking, breathing, and expression arbitration are driven automatical
 
 **`AIAvatarSdk`** (high-level facade, orchestrator)
 `configure(ChatConfig, modelReady)` assembles/rebuilds the session · `send(text, images)` · `speak(text)` · `interrupt()` · `events / phase` (current session events and phase) · `setCharacterCard(card)` (auto-replayed across rebuilds) · `close()`.
-`ChatConfig` fields: `provider` (built-in directory: SILICONFLOW / VOLCANO / OPENROUTER) · `baseUrl` (custom endpoint override) · `apiKey` · `llmModel` (empty = default) · `ttsEngine` (EDGE free / OPENAI_COMPATIBLE) · `ttsProvider / ttsApiKey / ttsModel / voice` · `lang` · `contextId` (switch history segments).
+`ChatConfig` fields: `provider` (built-in directory: SILICONFLOW / VOLCANO / OPENROUTER / DEEPSEEK) · `baseUrl` (custom endpoint override) · `apiKey` · `llmModel` (empty = default) · `ttsEngine` (EDGE free / OPENAI_COMPATIBLE) · `ttsProvider / ttsApiKey / ttsModel / voice` · `lang` · `contextId` (switch history segments).
 
 **`AvatarSession`** (low-level session, orchestrator)
 `send(text, images)` one LLM turn · `speak(text)` speech-only playback (no LLM) · `interrupt()` · `startFaceDriving()` · `setCharacterCard(card)` · `events: SharedFlow<AvatarEvent>` · `phase: StateFlow<ConversationPhase>`

@@ -1,6 +1,6 @@
 ---
 name: push-api-keys
-description: 一键把仓库 secrets.properties 里的所有 API Key(硅基流动/火山方舟/火山豆包语音/OpenRouter)通过 adb 写入已连接设备上 demo 应用的 SharedPreferences。当用户想把 API key 推送/同步/配置到真机、给设备上的 app 设置密钥、提到 secrets.properties 和 adb/真机/设备时使用;应用未安装的设备自动跳过不做任何事。
+description: 一键把仓库 secrets.properties 里的所有 API Key(硅基流动/火山方舟/火山豆包语音/OpenRouter/DeepSeek 官方)通过 adb 写入已连接设备上 demo 应用的 SharedPreferences。当用户想把 API key 推送/同步/配置到真机、给设备上的 app 设置密钥、提到 secrets.properties 和 adb/真机/设备时使用;应用未安装的设备自动跳过不做任何事。
 ---
 
 # push-api-keys:secrets.properties → 设备 SharedPreferences
@@ -35,9 +35,11 @@ secrets.properties 键 → `demo_settings.xml` 里的 string 条目名。正本�
 | VOLCANO_ARK_API_KEY | ai_api_key_volcano |
 | VOLCANO_TTS_API_KEY | ai_api_key_volcano_tts |
 | OPENROUTER_API_KEY | ai_api_key_openrouter |
+| DEEPSEEK_OFFICIAL_API_KEY | ai_api_key_deepseek |
 
 - 火山有两把互不通用的 key:`VOLCANO_ARK_API_KEY` 是方舟大模型(chat),`VOLCANO_TTS_API_KEY` 是豆包语音控制台(TTS WebSocket 的 X-Api-Key)。
 - 硅基流动与 OpenRouter 的 key 各自同时用于其 LLM/TTS(OpenRouter 还含 ASR)。
+- DeepSeek 官方只有 chat(无 TTS/ASR 端点):`DEEPSEEK_OFFICIAL_API_KEY` 只喂大模型,语音合成自动走 Edge-TTS、识别回落硅基流动。
 
 ## 手动验证
 

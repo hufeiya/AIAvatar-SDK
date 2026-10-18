@@ -234,7 +234,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 
 | 功能 | 入口 | 实现 | 关键文件 |
 |---|---|---|---|
-| 流式对话（LLM） | 输入框 / `send_chat` | OpenAI 兼容 SSE；三家服务商目录（硅基流动/火山/OpenRouter）+ 自定义 baseUrl；关思考参数按模型方言分发 | `OpenAiCompatibleLlmAdapter`、`AiProviders`、`ChatProviders` |
+| 流式对话（LLM） | 输入框 / `send_chat` | OpenAI 兼容 SSE；四家服务商目录（硅基流动/火山/OpenRouter/DeepSeek）+ 自定义 baseUrl；关思考参数按模型方言分发 | `OpenAiCompatibleLlmAdapter`、`AiProviders`、`ChatProviders` |
 | 逐句 TTS 流水 | 自动 | 断句→并发合成（≤4）→严格有序播放 | `SentenceChunker`、`SpeechPipeline`、`AudioTrackPlaybackQueue` |
 | 免费语音合成 | 设置→TTS 引擎=Edge-TTS | WSS+Sec-MS-GEC，恒 MP3 24kHz | `EdgeTtsAdapter` |
 | 口型同步 | 自动 | 离线 MFCC viseme 时间线+VowelDriver 五元音平滑，AudioTrack 时钟采样 | `WlipsyncLipSyncProcessor`、`VowelDriver`、FaceDriver |
@@ -302,7 +302,7 @@ adb logcat -s FreeSpeech         # VAD 电平/门限
 |---|---|---|
 | 改提示词/协议 | `orchestrator/i18n/PromptTexts.kt`（Zh/En 同步改） | 改完跑 PromptTextsI18nTest；协议目录变了会自动重发 |
 | 加 LLM/TTS 模型或音色 | `orchestrator/facade/ChatProviders.kt`（SDK 目录）+ app `AiProviders.kt`（UI 壳） | 两处目录有测试锁（AiProvidersTest/OpenRouterProviderTest），同步改 |
-| 加服务商 | adapter 加适配器 + ChatProviders 加目录 + app AiProvider 枚举 + SettingsScreen | 参照 OpenRouter 的接入记录（handoff 文档 2026-10-05 条） |
+| 加服务商 | adapter 加适配器 + ChatProviders 加目录 + app AiProvider 枚举 + SettingsScreen | 参照 OpenRouter（handoff 2026-10-05 条）/ DeepSeek（2026-10-18 条，无 TTS/ASR 的服务商看 ttsEngineResolved 回落先例） |
 | 加内置动画 | assets/animations/<分类>/ 丢 .vrma | 目录扫描自动进协议块；中文名需登记 `LlmActionCatalog.CHINESE_NAME_TAGS`；技能专用动画放 11_/12_ 目录（不进 LLM 目录） |
 | 加技能 | orchestrator `skill/` 实现 AvatarSkill + app 注册 + DemoSkillHost 缝 | 判定端侧优先；激活词中英合并；参考 MimicSkill（最简） |
 | 换/调口型手感 | adapter `VowelDriver` 常量区 | 各常量有注释；别动 Dsp.kt（标定数据由它产出） |

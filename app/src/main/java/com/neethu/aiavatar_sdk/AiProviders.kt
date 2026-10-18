@@ -11,7 +11,8 @@ import com.neethu.orchestrator.facade.ChatProvider
  *
  * 设置页除 API Key 外的所有 AI 配置都是下拉框选择，杜绝手输模型名
  * （2026-10 多厂商：硅基流动 + 火山引擎 + OpenRouter〔面向海外用户，一把
- * key 通吃大模型/TTS/ASR〕）。
+ * key 通吃大模型/TTS/ASR〕+ DeepSeek 官方〔只有 chat，TTS 自动回落 Edge、
+ * ASR 回落硅基流动〕）。
  */
 enum class AiProvider(
     val label: String,
@@ -51,6 +52,17 @@ enum class AiProvider(
         llmKeyHint = "sk-or-v1-...",
         ttsKeyLabel = "OpenRouter API Key（语音合成用）",
         ttsKeyHint = "sk-or-v1-...",
+    ),
+    DEEPSEEK(
+        label = "DeepSeek",
+        sdk = ChatProvider.DEEPSEEK,
+        // 官方只有 chat（TTS/ASR 端点实测 404）：语音合成自动回落 Edge-TTS
+        // （免费无 Key，见 ChatConfig.ttsEngineResolved），云端识别回落硅基
+        // 流动（见 asrProviderFor）——下面 TTS 侧标签实际用不到，占位同大模型
+        llmKeyLabel = "DeepSeek API Key",
+        llmKeyHint = "sk-...",
+        ttsKeyLabel = "DeepSeek API Key",
+        ttsKeyHint = "sk-...",
     ),
     ;
 
@@ -100,6 +112,7 @@ fun resolveEdgeVoice(configured: String, lang: Lang = Lang.ZH): String =
 fun inferProviderFromBaseUrl(baseUrl: String): AiProvider = when {
     baseUrl.contains("volces.com", ignoreCase = true) -> AiProvider.VOLCANO
     baseUrl.contains("openrouter.ai", ignoreCase = true) -> AiProvider.OPENROUTER
+    baseUrl.contains("deepseek.com", ignoreCase = true) -> AiProvider.DEEPSEEK
     else -> AiProvider.SILICONFLOW
 }
 
@@ -139,12 +152,13 @@ fun resolveVoice(provider: AiProvider, configured: String): String =
 fun llmExtraBody(provider: AiProvider, model: String) =
     com.neethu.orchestrator.facade.llmExtraBody(provider.sdk, model)
 
-/** ASR 实际生效的服务商：火山缺 OpenAI 兼容 ASR 端点，回落硅基流动。 */
+/** ASR 实际生效的服务商：火山/DeepSeek 缺 OpenAI 兼容 ASR 端点，回落硅基流动。 */
 fun asrProviderFor(llmProvider: AiProvider): AiProvider =
     when (com.neethu.orchestrator.facade.asrProviderFor(llmProvider.sdk)) {
         ChatProvider.SILICONFLOW -> AiProvider.SILICONFLOW
         ChatProvider.VOLCANO -> AiProvider.VOLCANO
         ChatProvider.OPENROUTER -> AiProvider.OPENROUTER
+        ChatProvider.DEEPSEEK -> AiProvider.DEEPSEEK
     }
 
 /** ASR 模型下拉的显式候选（「自动」之外）；留空时按端点推断见 [resolveAsrModel]。 */
