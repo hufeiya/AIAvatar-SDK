@@ -90,8 +90,8 @@ Dependencies point downward only; the adapter layer knows nothing about renderin
 ```kotlin
 // your app/build.gradle.kts
 dependencies {
-    implementation("io.github.hufeiya:corelib:0.1.4")                 // rendering foundation
-    implementation("io.github.hufeiya:avatar-orchestrator:0.1.4")     // session orchestration (includes the AIAvatarSdk facade)
+    implementation("io.github.hufeiya:corelib:0.1.5")                 // rendering foundation
+    implementation("io.github.hufeiya:avatar-orchestrator:0.1.5")     // session orchestration (includes the AIAvatarSdk facade)
     // io.github.hufeiya:avatar-ai-adapter comes in automatically as a transitive dependency
 }
 ```
