@@ -23,6 +23,7 @@
     </queries>
 
     <application
+        android:largeHeap="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -57,6 +58,16 @@
             android:name=".multiavatar.MultiAvatarActivity"
             android:exported="true"
             android:label="Multi-Avatar Stage" />
+
+        <!-- 4v4 辩论赛（docs/debate-feasibility.md P0）；exported 供 adb
+             DEBATE_CONTROL 协议直达，singleTop 让 onNewIntent 收新命令 -->
+        <activity
+            android:name=".debate.DebateActivity"
+            android:exported="true"
+            android:label="Debate Stage"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
     </application>
 
 </manifest>

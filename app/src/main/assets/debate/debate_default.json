@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "matchId": "debate-demo-001",
+  "topic": "人工智能的发展是否更有利于人类创造力",
+  "sides": { "PRO": "更有利于人类创造力", "CON": "更不利于人类创造力" },
+  "scene": { "asset": "scene/home.glb", "layout": "layout_home_debate_v1" },
+  "rules": {
+    "template": "four_person_attack_v1",
+    "openingMs": 180000,
+    "crossRoundMs": 90000,
+    "questionMs": 10000,
+    "answerMs": 20000,
+    "crossSummaryMs": 90000,
+    "freeTeamMs": 240000,
+    "freeTurnMs": 30000,
+    "closingMs": 240000,
+    "freeFirstTeam": "PRO",
+    "hostSegmentMs": 30000
+  },
+  "speech": { "mode": "fixed", "generationTimeoutMs": 20000, "firstAudioTimeoutMs": 10000, "postureTimeoutMs": 3000 },
+  "camera": { "mode": "auto", "transitionMs": 350, "minHoldMs": 3000 },
+  "posture": { "default": "seated", "standWhenSpeaking": true, "micHand": "right" },
+  "participants": [
+    { "id": "HOST", "name": "主持人", "role": "host", "model": "asset:vrms/10.vrm", "personality": "中立、清晰、严格按裁定串场" },
+    { "id": "PRO1", "name": "正方一辩", "team": "PRO", "position": 1, "model": "asset:vrms/4705834820915235427.vrm", "personality": "理性、善于定义概念" },
+    { "id": "PRO2", "name": "正方二辩", "team": "PRO", "position": 2, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "敏锐、善于追问" },
+    { "id": "PRO3", "name": "正方三辩", "team": "PRO", "position": 3, "model": "asset:vrms/10.vrm", "personality": "幽默、重视例证" },
+    { "id": "PRO4", "name": "正方四辩", "team": "PRO", "position": 4, "model": "asset:vrms/4705834820915235427.vrm", "personality": "沉稳、善于归纳" },
+    { "id": "CON1", "name": "反方一辩", "team": "CON", "position": 1, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "严谨、重视边界条件" },
+    { "id": "CON2", "name": "反方二辩", "team": "CON", "position": 2, "model": "asset:vrms/10.vrm", "personality": "直接、善于拆解前提" },
+    { "id": "CON3", "name": "反方三辩", "team": "CON", "position": 3, "model": "asset:vrms/4705834820915235427.vrm", "personality": "务实、重视反例" },
+    { "id": "CON4", "name": "反方四辩", "team": "CON", "position": 4, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "克制、擅长价值比较" }
+  ]
+}

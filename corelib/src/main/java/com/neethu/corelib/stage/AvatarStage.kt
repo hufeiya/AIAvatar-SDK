@@ -152,17 +152,29 @@ class AvatarStage internal constructor(
         return handle
     }
 
+    /**
+     * 同源模型字节缓存（多实例复用同一 VRM 的关键：9 个演员共享 3 个模型时，
+     * 不加缓存 = 285MB 字节在途对撞，600MB 堆也会 OOM）。LRU 上限 4 源。
+     */
+    private val modelByteCache = object : LinkedHashMap<String, ByteArray>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean = size > 4
+    }
+
     private fun readModelBytes(spec: AvatarSpec): ByteArray {
-        val modelAssetPath = spec.modelAssetPath
-        if (modelAssetPath != null) {
+        val key = spec.modelAssetPath ?: spec.modelFilePath ?: "?"
+        synchronized(modelByteCache) { modelByteCache[key]?.let { return it } }
+        val bytes = if (spec.modelAssetPath != null) {
             val view = attachedView()
-            return view.context.assets.open(modelAssetPath).use { it.readBytes() }
+            view.context.assets.open(spec.modelAssetPath).use { it.readBytes() }
+        } else {
+            val file = java.io.File(
+                requireNotNull(spec.modelFilePath) { "AvatarSpec has no model path" }
+            )
+            if (!file.isFile) throw java.io.FileNotFoundException("model file not found: ${file.path}")
+            file.inputStream().use { it.readBytes() }
         }
-        val file = java.io.File(
-            requireNotNull(spec.modelFilePath) { "AvatarSpec has no model path" }
-        )
-        if (!file.isFile) throw java.io.FileNotFoundException("model file not found: ${file.path}")
-        return file.inputStream().use { it.readBytes() }
+        synchronized(modelByteCache) { modelByteCache[key] = bytes }
+        return bytes
     }
 
     private fun attachedView(): SurfaceView =
@@ -233,7 +245,29 @@ class AvatarStage internal constructor(
         impl?.setGroupShot(targets.map { it.runtime })
     }
 
+    /**
+     * 视锥拟合组像（辩论赛 P0a）：按目标边界点 + 实时纵横比计算距离，
+     * 单人 / 四人队伍 / 九人全景 / 混合坐站都由本路径取景（见 [GroupFrameMath]）。
+     */
+    fun setGroupShotFitted(targets: List<AvatarHandle>) {
+        impl?.setGroupShotFitted(targets.map { it.runtime })
+    }
+
     fun clearCameraShot() = impl?.clearCameraShot()
+
+    // ── 世界静态道具（辩论座椅等布置，docs/debate-feasibility.md §7.1）──
+
+    /** 加载静态 GLB 摆进世界；null = assets 读取或创建失败。 */
+    fun loadProp(spec: StagePropSpec): StageProp? =
+        impl?.loadProp(spec.assetPath, spec.x, spec.y, spec.z, spec.yawDeg, spec.scale)
+
+    fun removeProp(prop: StageProp) {
+        impl?.removeProp(prop)
+    }
+
+    fun removeAllProps() {
+        impl?.removeAllProps()
+    }
 
     fun getActiveCameraShot(): CameraShot? = impl?.getActiveCameraShot()
 

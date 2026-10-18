@@ -15,6 +15,7 @@ import com.google.android.filament.ToneMapper
 import com.google.android.filament.View
 import com.google.android.filament.android.UiHelper
 import com.google.android.filament.gltfio.AssetLoader
+import com.neethu.corelib.stage.StageProp
 import com.google.android.filament.gltfio.FilamentAsset
 import com.google.android.filament.gltfio.ResourceLoader
 import com.google.android.filament.gltfio.UbershaderProvider
@@ -308,6 +309,12 @@ internal class Stage(
 
     private var activeShot: CameraShot? = null
     private var shotTarget: AvatarRuntime? = null
+
+    /** GROUP_SHOT 是否走视锥拟合取景（false = 旧头距 × 常数路径）。 */
+    private var groupFitFraming = false
+
+    /** 世界静态道具（辩论座椅等布置；独立于场景 GLB 的第二资产通道）。 */
+    private val props = mutableListOf<StageProp>()
 
     /** GROUP_SHOT 的同框名单（null = 非 group 机位；空表 = 无演员可取景）。 */
     private var shotTargets: List<AvatarRuntime>? = null
@@ -928,15 +935,90 @@ internal class Stage(
 
     private fun populateSceneEntities() {
         sceneResourceLoader?.asyncUpdateLoad()
-        sceneAsset?.let { asset ->
-            var count: Int
-            do {
-                count = asset.popRenderables(readyRenderables)
-                if (count > 0) {
-                    scene.addEntities(readyRenderables.take(count).toIntArray())
-                }
-            } while (count > 0)
+        sceneAsset?.let { asset -> popRenderables(asset) }
+        synchronized(props) {
+            for (prop in props) {
+                if (prop.pending) popRenderables(prop.asset, onEmpty = { prop.pending = false })
+            }
         }
+    }
+
+    private fun popRenderables(asset: FilamentAsset, onEmpty: (() -> Unit)? = null) {
+        var count: Int
+        var any = false
+        do {
+            count = asset.popRenderables(readyRenderables)
+            if (count > 0) {
+                scene.addEntities(readyRenderables.take(count).toIntArray())
+                any = true
+            }
+        } while (count > 0)
+        if (!any) onEmpty?.invoke()
+    }
+
+    // ── 世界静态道具（辩论赛 P0a：座椅布置；复用场景加载器，见 docs/debate-feasibility.md §7.1）──
+
+    /**
+     * 加载一个静态 GLB 摆进世界（无骨骼动画，仅 root 变换）。随帧渐进进场
+     * （纹理未就绪时先隐藏，与场景/演员同策略）。null = 资产读取或创建失败。
+     */
+    fun loadProp(assetsPath: String, x: Float, y: Float, z: Float, yawDeg: Float = 0f, scale: Float = 1f): StageProp? {
+        if (sceneAssetLoader == null) {
+            val materialProvider = UbershaderProvider(engine)
+            sceneAssetLoader = AssetLoader(engine, materialProvider, EntityManager.get())
+        }
+        if (sceneResourceLoader == null) {
+            sceneResourceLoader = ResourceLoader(engine, true)
+        }
+        return try {
+            val buffer = java.nio.ByteBuffer.wrap(surfaceView.context.assets.open(assetsPath).use { it.readBytes() })
+            val asset = sceneAssetLoader?.createAsset(buffer) ?: run {
+                Log.e(TAG, "Failed to create prop asset: $assetsPath")
+                return null
+            }
+            // 顺序纪律（同 loadScene/演员 bind）：先挂异步加载再释放源数据——
+            // 反过来 = 后台加载线程读到已释放的 cgltf 数据 = SIGSEGV
+            sceneResourceLoader?.asyncBeginLoad(asset)
+            asset.releaseSourceData()
+            val tm = engine.transformManager
+            val inst = tm.getInstance(asset.root)
+            if (inst != 0) tm.setTransform(inst, propMatrix(x, y, z, yawDeg, scale))
+            asset.boundingBox.let { box ->
+                Log.i(TAG, "Prop bbox: center=(${box.center[0]},${box.center[1]},${box.center[2]}) half=(${box.halfExtent[0]},${box.halfExtent[1]},${box.halfExtent[2]})")
+            }
+            val prop = StageProp(asset)
+            synchronized(props) { props += prop }
+            Log.i(TAG, "Prop loaded: $assetsPath @($x,$y,$z) yaw=$yawDeg scale=$scale (${asset.entities.size} entities)")
+            prop
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load prop: $assetsPath", e)
+            null
+        }
+    }
+
+    fun removeProp(prop: StageProp) {
+        synchronized(props) { props.remove(prop) }
+        scene.removeEntities(prop.asset.entities)
+        sceneAssetLoader?.destroyAsset(prop.asset)
+        Log.i(TAG, "Prop removed")
+    }
+
+    fun removeAllProps() {
+        val snapshot = synchronized(props) { props.toList() }
+        for (prop in snapshot) removeProp(prop)
+    }
+
+    private fun propMatrix(x: Float, y: Float, z: Float, yawDeg: Float, scale: Float): FloatArray {
+        val yaw = toRadians(yawDeg)
+        val c = cos(yaw) * scale
+        val s = sin(yaw) * scale
+        // 列主序：绕 Y 旋转（与 applyScenePlacement 同约定）+ 均匀缩放 + 平移
+        return floatArrayOf(
+            c, 0f, -s, 0f,
+            0f, scale, 0f, 0f,
+            s, 0f, c, 0f,
+            x, y, z, 1f,
+        )
     }
 
     // ── 相机程序化控制（单虚拟人逐行移植）────────────────────────────────
@@ -1009,14 +1091,29 @@ internal class Stage(
      * 自参照固化的多目标版纪律）。少于 2 人在名单里时拒绝（那是特写的活）。
      */
     fun setGroupShot(targets: List<AvatarRuntime>) {
+        setGroupShotInternal(targets, fittedFraming = false)
+    }
+
+    /**
+     * 视锥拟合组像（辩论赛 P0a，docs/debate-feasibility.md §8）：目标边界点
+     * 投影 + 实时纵横比算距离，取代头距 × 常数——4v4 队伍与九人全景
+     * （头距超旧 span 上限、横屏宽视场）都由本路径取景。
+     */
+    fun setGroupShotFitted(targets: List<AvatarRuntime>) {
+        setGroupShotInternal(targets, fittedFraming = true)
+    }
+
+    private fun setGroupShotInternal(targets: List<AvatarRuntime>, fittedFraming: Boolean) {
         val cast = targets.filter { it.asset != null }
-        if (cast.size < 2) {
-            Log.w(TAG, "group shot needs ≥2 ready avatars (got ${cast.size})")
+        val minTargets = if (fittedFraming) 1 else 2
+        if (cast.size < minTargets) {
+            Log.w(TAG, "shot needs ≥$minTargets ready avatars (got ${cast.size})")
             return
         }
         activeShot = CameraShot.GROUP_SHOT
         shotTarget = null
         shotTargets = cast
+        groupFitFraming = fittedFraming
         shotSteering = true
         shotDeadlineNanos = 0L
         followYawPitch = null
@@ -1028,6 +1125,7 @@ internal class Stage(
         shotTargets = null
         shotSteering = false
         followYawPitch = null
+        groupFitFraming = false
     }
 
     fun getActiveCameraShot(): CameraShot? = activeShot
@@ -1037,6 +1135,46 @@ internal class Stage(
 
     private fun cancelShotTransition() {
         shotSteering = false
+    }
+
+    /** 旧路径：头均值 + 最远头距 × 3.2（双人/三人对谈档位）。 */
+    private fun legacyGroupFrame(): GroupShotMath.Frame? = GroupShotMath.frame(
+        shotTargets.orEmpty().mapNotNull { t ->
+            if (t.asset == null) null
+            else t.boneAnchor(t.headEntity, AvatarRuntime.STAGE_HEAD_FALLBACK_Y)
+        },
+    )
+
+    /**
+     * 拟合路径：每目标取 头/hips/双脚 世界锚点（缺语义骨按比例兜底），混合
+     * 坐站都覆盖；竖直 FOV 恒 33°，水平按实时纵横比展开。
+     */
+    private fun fittedGroupFrame(): GroupShotMath.Frame? {
+        val points = mutableListOf<FloatArray>()
+        val tmp = FloatArray(3)
+        for (t in shotTargets.orEmpty()) {
+            if (t.asset == null) continue
+            val head = t.boneAnchor(t.headEntity, AvatarRuntime.STAGE_HEAD_FALLBACK_Y)
+            points += head
+            if (shotTargets?.size == 1) {
+                // 单人播报取头胸范围：全身镜头会退到前排辩手身后，
+                // 让前景身体挡住后方主持人。头顶余量由拟合边距保证。
+                points += t.boneAnchor(t.chestEntity, AvatarRuntime.STAGE_CHEST_FALLBACK_Y)
+                continue
+            }
+            if (t.resolveBonePosition("hips", tmp)) points += tmp.clone() else points += floatArrayOf(head[0], head[1] - 0.5f, head[2])
+            if (t.resolveBonePosition("leftfoot", tmp)) points += tmp.clone()
+            if (t.resolveBonePosition("rightfoot", tmp)) points += tmp.clone()
+        }
+        val w = surfaceView.width.coerceAtLeast(1)
+        val h = surfaceView.height.coerceAtLeast(1)
+        return GroupFrameMath.frame(
+            points = points,
+            vFovDeg = MANIP_FOV_DEGREES,
+            aspect = w.toFloat() / h.toFloat(),
+            marginMeters = if (shotTargets?.size == 1) 0.25f else 0.4f,
+            minDistance = if (shotTargets?.size == 1) 1.2f else 2.5f,
+        )
     }
 
     /**
@@ -1068,13 +1206,9 @@ internal class Stage(
         val pose = if (group) {
             // yaw/pitch 固定常量（正前方微俯）：姿态只来自世界骨锚，不吃相机
             // 状态——坑 22 自参照固化在输入层面就不成立
-            GroupShotMath.frame(
-                shotTargets.orEmpty().mapNotNull { t ->
-                    if (t.asset == null) null
-                    else t.boneAnchor(t.headEntity, AvatarRuntime.STAGE_HEAD_FALLBACK_Y)
-                },
-            )?.let { frame ->
-                ShotPose(pivot = frame.pivot, distance = frame.distance, yaw = 0f, pitch = toRadians(8f))
+            val frame = if (groupFitFraming) fittedGroupFrame() else legacyGroupFrame()
+            frame?.let {
+                ShotPose(pivot = it.pivot, distance = it.distance, yaw = 0f, pitch = toRadians(8f))
             } ?: run { shotSteering = false; return }
         } else {
             shotPose(shot, target!!) ?: run { shotSteering = false; return }
@@ -1312,6 +1446,7 @@ internal class Stage(
         mtoonFactory = null
 
         removeScene()
+        removeAllProps()
         sceneResourceLoader?.destroy()
         sceneResourceLoader = null
         sceneAssetLoader?.destroy()

@@ -1,0 +1,391 @@
+{
+  "requestId": "qa-export-1479872425700",
+  "exportedAt": 1792328536025,
+  "config": {
+    "schemaVersion": 1,
+    "matchId": "debate-quick-001",
+    "topic": "人工智能的发展是否更有利于人类创造力",
+    "sides": {
+      "PRO": "更有利于人类创造力",
+      "CON": "更不利于人类创造力"
+    },
+    "scene": {
+      "asset": "scene\/home.glb",
+      "layout": "layout_home_debate_v1"
+    },
+    "rules": {
+      "template": "four_person_attack_v1",
+      "openingMs": 12000,
+      "crossRoundMs": 16000,
+      "questionMs": 5000,
+      "answerMs": 7000,
+      "crossSummaryMs": 10000,
+      "freeTeamMs": 24000,
+      "freeTurnMs": 8000,
+      "closingMs": 12000,
+      "freeFirstTeam": "PRO",
+      "hostSegmentMs": 8000
+    },
+    "speech": {
+      "mode": "fixed",
+      "generationTimeoutMs": 15000,
+      "firstAudioTimeoutMs": 8000,
+      "postureTimeoutMs": 4000,
+      "drainGraceMs": 600,
+      "failureRetries": 1
+    },
+    "camera": {
+      "mode": "auto",
+      "transitionMs": 350,
+      "minHoldMs": 3000
+    },
+    "posture": {
+      "default": "seated",
+      "standWhenSpeaking": true,
+      "micHand": "right"
+    },
+    "participants": [
+      {
+        "id": "HOST",
+        "name": "主持人",
+        "role": "host",
+        "model": "asset:vrms\/10.vrm",
+        "personality": "中立、清晰、严格按裁定串场",
+        "voice": ""
+      },
+      {
+        "id": "PRO1",
+        "name": "正方一辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 1,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "理性、善于定义概念",
+        "voice": ""
+      },
+      {
+        "id": "PRO2",
+        "name": "正方二辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 2,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "敏锐、善于追问",
+        "voice": ""
+      },
+      {
+        "id": "PRO3",
+        "name": "正方三辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 3,
+        "model": "asset:vrms\/10.vrm",
+        "personality": "幽默、重视例证",
+        "voice": ""
+      },
+      {
+        "id": "PRO4",
+        "name": "正方四辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 4,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "沉稳、善于归纳",
+        "voice": ""
+      },
+      {
+        "id": "CON1",
+        "name": "反方一辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 1,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "严谨、重视边界条件",
+        "voice": ""
+      },
+      {
+        "id": "CON2",
+        "name": "反方二辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 2,
+        "model": "asset:vrms\/10.vrm",
+        "personality": "直接、善于拆解前提",
+        "voice": ""
+      },
+      {
+        "id": "CON3",
+        "name": "反方三辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 3,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "务实、重视反例",
+        "voice": ""
+      },
+      {
+        "id": "CON4",
+        "name": "反方四辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 4,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "克制、擅长价值比较",
+        "voice": ""
+      }
+    ],
+    "scripts": {}
+  },
+  "transcript": [
+    {
+      "turnId": 1,
+      "phase": "HOST_OPENING",
+      "speaker": "HOST",
+      "kind": "HOST",
+      "status": "INTERRUPTED",
+      "endReason": "PAUSED",
+      "consumedMs": 0,
+      "text": "欢迎来到辩论赛现场。今天的辩题是「人工智能的发展是否更有利于人类创造力」。正方主张「更有利于人类创造力」，反方主张「更不利于人类创造力」。双方各有四位辩手，比赛马上开始。"
+    },
+    {
+      "turnId": 1,
+      "phase": "HOST_OPENING",
+      "speaker": "HOST",
+      "kind": "HOST",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "欢迎来到辩论赛现场。今天的辩题是「人工智能的发展是否更有利于人类创造力」。正方主张「更有利于人类创造力」，反方主张「更不利于人类创造力」。双方各有四位辩手，比赛马上开始。"
+    },
+    {
+      "turnId": 2,
+      "phase": "OPENING_STATEMENT",
+      "speaker": "PRO1",
+      "team": "PRO",
+      "kind": "STATEMENT",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 11299,
+      "text": "大家好，我是正方一辩。我方认为，人工智能的发展更有利于人类创造力。接下来我将从定义和标准两个层面展开论证。"
+    },
+    {
+      "turnId": 3,
+      "phase": "OPENING_STATEMENT",
+      "speaker": "CON1",
+      "team": "CON",
+      "kind": "STATEMENT",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 11081,
+      "text": "大家好，我是反方一辩。我方认为，人工智能的发展更不利于人类创造力。接下来我将从定义和标准两个层面展开论证。"
+    },
+    {
+      "turnId": 4,
+      "phase": "CROSS_EXAM",
+      "speaker": "PRO2",
+      "team": "PRO",
+      "kind": "CROSS_QUESTION",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 5000,
+      "text": "请对方辩友正面回答：关于「人工智能的发展是否更有利于人类创造力」，你方的判断标准是什么？"
+    },
+    {
+      "turnId": 5,
+      "phase": "CROSS_EXAM",
+      "speaker": "CON2",
+      "team": "CON",
+      "kind": "CROSS_ANSWER",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 7000,
+      "text": "我方认为这一关键分歧正好支持我方立场：人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 6,
+      "phase": "CROSS_EXAM",
+      "speaker": "CON2",
+      "team": "CON",
+      "kind": "CROSS_QUESTION",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 5000,
+      "text": "请对方辩友正面回答：关于「人工智能的发展是否更有利于人类创造力」，你方的判断标准是什么？"
+    },
+    {
+      "turnId": 7,
+      "phase": "CROSS_EXAM",
+      "speaker": "PRO2",
+      "team": "PRO",
+      "kind": "CROSS_ANSWER",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 7000,
+      "text": "我方认为这一关键分歧正好支持我方立场：人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 8,
+      "phase": "CROSS_EXAM",
+      "speaker": "PRO3",
+      "team": "PRO",
+      "kind": "CROSS_QUESTION",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 5000,
+      "text": "请对方辩友正面回答：关于「人工智能的发展是否更有利于人类创造力」，你方的判断标准是什么？"
+    },
+    {
+      "turnId": 9,
+      "phase": "CROSS_EXAM",
+      "speaker": "CON3",
+      "team": "CON",
+      "kind": "CROSS_ANSWER",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 7000,
+      "text": "我方认为这一关键分歧正好支持我方立场：人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 10,
+      "phase": "CROSS_EXAM",
+      "speaker": "CON3",
+      "team": "CON",
+      "kind": "CROSS_QUESTION",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 5000,
+      "text": "请对方辩友正面回答：关于「人工智能的发展是否更有利于人类创造力」，你方的判断标准是什么？"
+    },
+    {
+      "turnId": 11,
+      "phase": "CROSS_EXAM",
+      "speaker": "PRO3",
+      "team": "PRO",
+      "kind": "CROSS_ANSWER",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 7000,
+      "text": "我方认为这一关键分歧正好支持我方立场：人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 12,
+      "phase": "CROSS_SUMMARY",
+      "speaker": "PRO1",
+      "team": "PRO",
+      "kind": "STATEMENT",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 10000,
+      "text": "我是正方一辩。刚才的攻辩中，对方的回答恰恰暴露了他们立场的漏洞。我方重申：人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 13,
+      "phase": "CROSS_SUMMARY",
+      "speaker": "CON1",
+      "team": "CON",
+      "kind": "STATEMENT",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 10000,
+      "text": "我是反方一辩。刚才的攻辩中，对方的回答恰恰暴露了他们立场的漏洞。我方重申：人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 14,
+      "phase": "FREE_DEBATE",
+      "speaker": "PRO1",
+      "team": "PRO",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 15,
+      "phase": "FREE_DEBATE",
+      "speaker": "CON1",
+      "team": "CON",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 16,
+      "phase": "FREE_DEBATE",
+      "speaker": "PRO2",
+      "team": "PRO",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 17,
+      "phase": "FREE_DEBATE",
+      "speaker": "CON2",
+      "team": "CON",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 18,
+      "phase": "FREE_DEBATE",
+      "speaker": "PRO3",
+      "team": "PRO",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更有利于人类创造力。"
+    },
+    {
+      "turnId": 19,
+      "phase": "FREE_DEBATE",
+      "speaker": "CON3",
+      "team": "CON",
+      "kind": "FREE",
+      "status": "INTERRUPTED",
+      "endReason": "TIMEOUT",
+      "consumedMs": 8000,
+      "text": "补充一点：人工智能的发展是否更有利于人类创造力，请对方不要回避这个核心问题。我方坚持认为，人工智能的发展更不利于人类创造力。"
+    },
+    {
+      "turnId": 20,
+      "phase": "CLOSING",
+      "speaker": "CON4",
+      "team": "CON",
+      "kind": "STATEMENT",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 9790,
+      "text": "最后总结。今天整场比赛，我方始终证明了一件事：人工智能的发展更不利于人类创造力。谢谢大家。"
+    },
+    {
+      "turnId": 21,
+      "phase": "CLOSING",
+      "speaker": "PRO4",
+      "team": "PRO",
+      "kind": "STATEMENT",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 9980,
+      "text": "最后总结。今天整场比赛，我方始终证明了一件事：人工智能的发展更有利于人类创造力。谢谢大家。"
+    },
+    {
+      "turnId": 22,
+      "phase": "HOST_CLOSING",
+      "speaker": "HOST",
+      "kind": "HOST",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 4221,
+      "text": "感谢双方辩手的精彩表现，本场辩论到此结束。"
+    }
+  ]
+}
