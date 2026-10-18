@@ -290,6 +290,7 @@ class AvatarSessionTagsTest {
         val llm = SharedFlowLlm()
         val gestures = FakeGestureDriver()
         val session = newSession(llm, FakeTts(), RecordingQueue(), gestures)
+        session.actionCatalog = listOf(ActionEntry("wave", "Wave", assetPath = "wave.vrma"))
         session.llmConfig = LlmConfig("http://x", "key", "m")
         session.ttsConfig = TtsConfig(model = "tts", voice = "v")
 
@@ -410,6 +411,7 @@ class AvatarSessionTagsTest {
         val tts = FakeTts()
         val gestures = FakeGestureDriver()
         val session = newSession(llm, tts, RecordingQueue(), gestures)
+        session.actionCatalog = listOf(ActionEntry("wave", "Wave", assetPath = "wave.vrma"))
         session.llmConfig = LlmConfig("http://x", "key", "m")
         session.ttsConfig = TtsConfig(model = "tts", voice = "v")
         val events = mutableListOf<AvatarEvent>()
@@ -531,4 +533,119 @@ class AvatarSessionTagsTest {
         assertFalse(driver.play("backflip"))
         assertEquals(null, driver.currentTag)
     }
+    @Test
+    fun `real but unadvertised asset never reaches gesture driver`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val gestures = FakeGestureDriver(setOf("dance_50"))
+        val session = newSession(llm, tts, RecordingQueue(), gestures)
+        session.actionCatalog = (0..60).map { ActionEntry("dance_$it", "Dance $it", assetPath = "$it.vrma") }
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+        session.send("你好")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:dance_50>（低头）你好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertTrue(gestures.played.isEmpty())
+        assertEquals(listOf("你好。"), tts.synthesized)
+        assertEquals(com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.NOT_ALLOWED_THIS_TURN,
+            events.filterIsInstance<AvatarEvent.TagRejected>().single().reason)
+        assertTrue(events.filterIsInstance<AvatarEvent.UnknownTag>().isEmpty())
+        session.send("dance_50")
+        assertTrue(llm.requests.last().first().content.contains("dance_50"))
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:dance_50>好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertEquals(listOf("dance_50"), gestures.played)
+        session.send("再做一次")
+        assertTrue(llm.requests.last().first().content.contains("dance_50"))
+        session.interrupt("test finished")
+    }
+
+    @Test
+    fun `aliases execute exact asset and consecutive actions cannot preempt it`() = runTest {
+        val llm = SharedFlowLlm()
+        val gestures = FakeGestureDriver(setOf("aj_waving_gesture", "nodding_head_yes"))
+        val session = newSession(llm, FakeTts(), RecordingQueue(), gestures)
+        session.actionCatalog = listOf(
+            ActionEntry("aj_waving_gesture", "Wave", assetPath = "wave.vrma"),
+            ActionEntry("nodding_head_yes", "Nod", assetPath = "nod.vrma"),
+        )
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+        session.send("你好")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<cam:closeup><act:aj_waving_gesture>你好"))
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:nod>呀。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertEquals(listOf("aj_waving_gesture"), gestures.played)
+        assertEquals(2, events.filterIsInstance<AvatarEvent.TagAliasResolved>().size)
+        assertEquals("wave", events.filterIsInstance<AvatarEvent.ActionStarted>().single().tag)
+        assertEquals(com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.BUSY,
+            events.filterIsInstance<AvatarEvent.TagRejected>().single().reason)
+    }
+
+    @Test
+    fun `asset load failure is distinct from unknown name and catalog changes revoke execution`() = runTest {
+        val llm = SharedFlowLlm()
+        val session = newSession(llm, FakeTts(), RecordingQueue(), FakeGestureDriver(emptySet()))
+        session.actionCatalog = listOf(ActionEntry("wave", "Wave", assetPath = "missing.vrma"))
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+        session.send("你好")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:wave>你好"))
+        session.actionCatalog = emptyList()
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:wave>呀。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertEquals(listOf(
+            com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.RESOURCE_LOAD_FAILED,
+            com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.UNKNOWN_NAME,
+        ), events.filterIsInstance<AvatarEvent.TagRejected>().map { it.reason })
+        assertEquals(1, events.filterIsInstance<AvatarEvent.UnknownTag>().size)
+    }
+
+    @Test
+    fun `assets added during a stream wait until the next advertised request`() = runTest {
+        val llm = SharedFlowLlm()
+        val gestures = FakeGestureDriver(setOf("wave", "nod"))
+        val session = newSession(llm, FakeTts(), RecordingQueue(), gestures)
+        val wave = ActionEntry("wave", "Wave", assetPath = "wave.vrma")
+        val nod = ActionEntry("nod", "Nod", assetPath = "nod.vrma")
+        session.actionCatalog = listOf(wave)
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+        session.send("你好")
+        session.actionCatalog = listOf(wave, nod)
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:nod>你好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertTrue(gestures.played.isEmpty())
+        assertEquals(com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.NOT_ALLOWED_THIS_TURN,
+            events.filterIsInstance<AvatarEvent.TagRejected>().single().reason)
+        session.send("点头")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:nod>好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertEquals(listOf("nod"), gestures.played)
+    }
+
+    @Test
+    fun `mixed mood and blink preserve both onset and reset in their original positions`() {
+        val happy = EmotionCue("happy", 0.6f)
+        val on = EmotionCue("blinkLeft", 1f)
+        val off = EmotionCue("blinkLeft", 0f)
+        assertEquals(happy to listOf(on, off), AvatarSession.splitEmotionRun(listOf(happy, on, off)))
+        assertEquals(on to listOf(off, happy), AvatarSession.splitEmotionRun(listOf(on, off, happy)))
+        assertEquals(happy to listOf(on, off), AvatarSession.splitEmotionRun(listOf(EmotionCue("sad", .5f), happy, on, off)))
+    }
+
 }

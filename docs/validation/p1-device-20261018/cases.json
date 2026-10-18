@@ -1,0 +1,602 @@
+[
+  {
+    "id": "F001",
+    "prompt": "请跳一小段街舞，镜头拉远看清全身。只说四个字，不调用任何工具，不拍照。",
+    "expected": "hip_hop|bboy",
+    "video": true
+  },
+  {
+    "id": "F002",
+    "prompt": "请表演闪身步。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "dodge_step",
+    "video": true
+  },
+  {
+    "id": "F003",
+    "prompt": "镜头给面部特写，请开心地眨一下左眼然后恢复。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "blink",
+    "video": true
+  },
+  {
+    "id": "F004",
+    "prompt": "镜头拉远，请向我挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": true
+  },
+  {
+    "id": "F005",
+    "prompt": "请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": true
+  },
+  {
+    "id": "F006",
+    "prompt": "请轻轻鞠躬。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "bow",
+    "video": true
+  },
+  {
+    "id": "F007",
+    "prompt": "请坐到地板上。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "sitting_on_the_floor",
+    "video": true
+  },
+  {
+    "id": "F008",
+    "prompt": "请表演弹钢琴。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "piano",
+    "video": false
+  },
+  {
+    "id": "F009",
+    "prompt": "请变成猫飞到月球上，做不到就简短直说。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F010",
+    "prompt": "请原样说：5小于3（开玩笑的）。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F011",
+    "prompt": "请敬礼。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "salute",
+    "video": false
+  },
+  {
+    "id": "F012",
+    "prompt": "请飞吻。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "blow_kiss",
+    "video": false
+  },
+  {
+    "id": "F013",
+    "prompt": "请表示感谢。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "thank",
+    "video": false
+  },
+  {
+    "id": "F014",
+    "prompt": "请摇头表示不同意。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "shake_head",
+    "video": false
+  },
+  {
+    "id": "F015",
+    "prompt": "请耸肩。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "shrug",
+    "video": false
+  },
+  {
+    "id": "F016",
+    "prompt": "请做个提问手势。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "ask",
+    "video": false
+  },
+  {
+    "id": "F017",
+    "prompt": "请做个说悄悄话的手势。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "whisper",
+    "video": false
+  },
+  {
+    "id": "F018",
+    "prompt": "请做个思考动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "think",
+    "video": false
+  },
+  {
+    "id": "F019",
+    "prompt": "请做个害羞的身体动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "bashful",
+    "video": false
+  },
+  {
+    "id": "F020",
+    "prompt": "请庆祝胜利。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "celebrate",
+    "video": false
+  },
+  {
+    "id": "F021",
+    "prompt": "请举拳加油。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "fist_pump",
+    "video": false
+  },
+  {
+    "id": "F022",
+    "prompt": "请做个嘟嘴的身体动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "pout",
+    "video": false
+  },
+  {
+    "id": "F023",
+    "prompt": "请向右看。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "look_right",
+    "video": false
+  },
+  {
+    "id": "F024",
+    "prompt": "请紧张地四处看看。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "look_around",
+    "video": false
+  },
+  {
+    "id": "F025",
+    "prompt": "请伸展双臂。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "stretch_arms",
+    "video": false
+  },
+  {
+    "id": "F026",
+    "prompt": "请活动脖子。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "stretch_neck",
+    "video": false
+  },
+  {
+    "id": "F027",
+    "prompt": "请原地跳一下。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "jump",
+    "video": false
+  },
+  {
+    "id": "F028",
+    "prompt": "请用手指向前方。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "point",
+    "video": false
+  },
+  {
+    "id": "F029",
+    "prompt": "请做个拍背动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "pat_back",
+    "video": false
+  },
+  {
+    "id": "F030",
+    "prompt": "请做个擦汗动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wipe_sweat",
+    "video": false
+  },
+  {
+    "id": "F031",
+    "prompt": "请跳一段伦巴舞。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "rumba",
+    "video": false
+  },
+  {
+    "id": "F032",
+    "prompt": "请跳一段桑巴舞。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "samba",
+    "video": false
+  },
+  {
+    "id": "F033",
+    "prompt": "请跳一段萨尔萨舞。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "salsa",
+    "video": false
+  },
+  {
+    "id": "F034",
+    "prompt": "请弹吉他。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "guitar",
+    "video": false
+  },
+  {
+    "id": "F035",
+    "prompt": "请演奏小提琴。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "violin",
+    "video": false
+  },
+  {
+    "id": "F036",
+    "prompt": "请做个棒球挥棒动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "baseball",
+    "video": false
+  },
+  {
+    "id": "F037",
+    "prompt": "请做个踢球动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "kick",
+    "video": false
+  },
+  {
+    "id": "F038",
+    "prompt": "请从坐姿起身。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "standing|stand",
+    "video": false
+  },
+  {
+    "id": "F039",
+    "prompt": "请做个鼓掌动作。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "clap",
+    "video": false
+  },
+  {
+    "id": "F040",
+    "prompt": "请盘腿坐下。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "sitting|seated",
+    "video": false
+  },
+  {
+    "id": "F041",
+    "prompt": "请跳一小段舞。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "dance|dancing|hip_hop|bboy",
+    "video": false
+  },
+  {
+    "id": "F042",
+    "prompt": "请表演浪子踢球。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "ball_kick",
+    "video": false
+  },
+  {
+    "id": "F043",
+    "prompt": "请把镜头切到面部特写。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F044",
+    "prompt": "请把镜头切到面部微距。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F045",
+    "prompt": "请把镜头切到中景半身。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F046",
+    "prompt": "请把镜头切到全身。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F047",
+    "prompt": "请把镜头切到远景。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F048",
+    "prompt": "请把镜头切到侧景。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F049",
+    "prompt": "请用开心的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F050",
+    "prompt": "请用难过的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F051",
+    "prompt": "请用生气的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F052",
+    "prompt": "请用惊讶的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F053",
+    "prompt": "请用思考的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F054",
+    "prompt": "请用放松的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F055",
+    "prompt": "请用得意的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F056",
+    "prompt": "请用害羞的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F057",
+    "prompt": "请用担心的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F058",
+    "prompt": "请用困惑的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F059",
+    "prompt": "请用困倦的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F060",
+    "prompt": "请用坚定的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F061",
+    "prompt": "请用平静的表情说你好。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F062",
+    "prompt": "请变成一条龙，做不到就简短直说。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F063",
+    "prompt": "请展示不存在的动作teleport_to_mars，做不到就简短直说。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F064",
+    "prompt": "请说“版本号是1.2（真的）”。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F065",
+    "prompt": "请使用兼容写法<cam:closeup>切到特写。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F066",
+    "prompt": "请复述代码示例<mood:happy>，按系统协议处理。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F067",
+    "prompt": "请原样说“（低头）你好”。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F068",
+    "prompt": "请只眨一下右眼然后恢复。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": null,
+    "video": false
+  },
+  {
+    "id": "F069",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F070",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F071",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F072",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F073",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F074",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F075",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F076",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F077",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F078",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F079",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F080",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F081",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F082",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F083",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F084",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F085",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F086",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F087",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F088",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F089",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F090",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F091",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F092",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F093",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F094",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F095",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F096",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  },
+  {
+    "id": "F097",
+    "prompt": "这轮请挥手。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "wave",
+    "video": false
+  },
+  {
+    "id": "F098",
+    "prompt": "请跳一段萨尔萨舞。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "salsa",
+    "video": false
+  },
+  {
+    "id": "F099",
+    "prompt": "请再做一次刚才的舞蹈。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "salsa",
+    "video": false
+  },
+  {
+    "id": "F100",
+    "prompt": "这轮请轻轻点头。只说两个到八个字，不调用任何工具，不拍照。",
+    "expected": "nod",
+    "video": false
+  }
+]

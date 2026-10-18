@@ -1198,6 +1198,10 @@ private fun DemoScreen(
                         shotLabel = ev.shot.label(uiState.lang)
                         chatLog("CameraChanged ${ev.shot.name}")
                     }
+                    is AvatarEvent.TagRejected ->
+                        chatLog("TagRejected[${ev.kind}] ${ev.raw} reason=${ev.reason}")
+                    is AvatarEvent.TagAliasResolved ->
+                        chatLog("TagAliasResolved[${ev.kind}] ${ev.raw} -> ${ev.canonical}")
                     is AvatarEvent.UnknownTag -> {
                         // 词表外标签被过滤（不进 TTS）：面板灰字显示模型原文，
                         // 定位"模型实际写了什么、该不该收进别名表"全靠它

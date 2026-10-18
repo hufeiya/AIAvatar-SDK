@@ -40,6 +40,9 @@ sealed interface TagCue {
      */
     data class Move(val name: String, val raw: String = "") : TagCue
 
+    /** Malformed, oversized or unknown-namespace control text; never executable. */
+    data class InvalidControl(val raw: String) : TagCue
+
     /**
      * A native tool call the model emitted as *text* instead of through the
      * tool-call channel — `<move_to sofa>`, `<move_to anchor="desk">`,

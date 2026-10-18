@@ -8,6 +8,8 @@ import com.neethu.aiadapter.api.TtsAdapter
 import com.neethu.aiadapter.api.EmotionCue
 import com.neethu.aiadapter.api.TagCue
 import com.neethu.aiadapter.api.TagExtractor
+import com.neethu.orchestrator.tag.ActionCandidateSelector
+import com.neethu.orchestrator.tag.TagCapabilityRegistry
 import com.neethu.aiadapter.emotion.InlineTagExtractor
 import com.neethu.aiadapter.lipsync.WlipsyncLipSyncProcessor
 import com.neethu.aiadapter.model.ChatMessage
@@ -20,7 +22,6 @@ import com.neethu.aiadapter.model.ToolCallRequest
 import com.neethu.aiadapter.model.ToolSpec
 import com.neethu.aiadapter.openai.isToolRelatedError
 import com.neethu.corelib.AvatarActor
-import com.neethu.corelib.CameraShot
 import com.neethu.corelib.Lang
 import com.neethu.orchestrator.agent.AgentToolCatalog
 import com.neethu.orchestrator.agent.ToolExecutor
@@ -152,8 +153,8 @@ class AvatarSession(
         /**
          * 提示词语言（多语言支持）：身份前言/协议块/视角行全部随之切换。
          * 默认 [Lang.ZH] 保持既有行为；集成方按应用语言显式传入（demo 见
-         * AiChatController.ensure）。语言变化 = 重建会话（上下文不变，身份块
-         * 按「未送达」自动重发一轮，协议块以新语言重钉）。
+         * AiChatController.ensure）。语言变化 = 重建会话（上下文不变，每轮身份块
+         * 与协议块使用新语言）。
          */
         val lang: Lang = Lang.ZH,
         /**
@@ -162,18 +163,12 @@ class AvatarSession(
          */
         val assembler: SystemPromptAssembler = SystemPromptAssembler(promptTextsOf(lang)),
         /**
-         * 每轮请求都携带的身份/任务/表达纪律前言（用户需求：模型要清楚自己是
-         * 虚拟人、只说口语台词、持续遵循首轮提供的多模态协议）。人设全文与
-         * 协议目录（全量表情/动作/镜头词表）**只随上下文第一轮发送**——之后
-         * 历史里留着模型自己发的标签做自我示范；目录指纹变化（重载模型/换
-         * 动作来源）或上一轮没送达（失败/被打断）时下一轮重发完整身份块。
-         * 前言与人设/协议合并为**一条** system 消息（部分服务商拒绝多条
-         * system，A.1 第 34 条）。null = 用 [lang] 对应的默认前言
-         * （见 PromptTexts）；置空字符串可关闭前言。
+         * 每轮携带的身份/任务/表达纪律前言，与当前人设和完整协议合为单条
+         * system。null 使用当前语言默认文案；空字符串关闭前言。
          */
         val identityPreamble: String? = null,
         /**
-         * 是否在首轮注入多模态协议块（全量表情/动作/镜头目录）；关闭时身份
+         * 是否在每轮注入多模态协议块（全量表情/动作/镜头目录）；关闭时身份
          * 前言里的「协议遵循」段一并省略。
          */
         val protocolInstructions: Boolean = true,
@@ -300,14 +295,15 @@ class AvatarSession(
         }
 
     /**
-     * The gesture catalog advertised to the LLM in the protocol block and
-     * playable by `<act:…>` tags. Empty catalog = no action section in the
-     * prompt and action cues are silently dropped.
+     * Full animation asset catalog. The registry exposes a small semantic vocabulary
+     * plus per-turn candidates; manual/skill playback retains the full catalog.
+     * Unknown or unadvertised actions are rejected with observable reasons.
      */
     var actionCatalog: List<ActionEntry> = emptyList()
         set(value) {
-            field = value
-            gestureDriver?.setCatalog(value)
+            field = value.toList()
+            gestureDriver?.setCatalog(field)
+            if (turnJob?.isActive != true) selectedActions = null
         }
 
     /**
@@ -394,23 +390,9 @@ class AvatarSession(
     private val replyBuffer = StringBuilder()
     /** 标签剥离后的正文（与 [replyBuffer] 同步累积，LlmPrompt 日志的"解析后"一路）。 */
     private val cleanBuffer = StringBuilder()
-    /**
-     * 钉住的协议块文本（内容不变就逐轮复用同一份，不逐轮重拼）；目录变化时
-     * 原地重钉并打日志。**钉住 ≠ 发送**——发不发由身份块的送达状态决定
-     * （见 [buildRequestMessages]）。
-     */
+    /** 本地复用的协议文本；每个无状态请求仍须携带全文。 */
     private var pinnedProtocol: String? = null
-    /**
-     * 本实例最近一次**成功送达**的完整身份块（前言+人设+协议）文本；null =
-     * 还没有任何一回合把身份块送到模型手里。发送与否的判据见
-     * [buildRequestMessages]：上下文首轮（store 为空）或身份块指纹相对上次
-     * **成功送达**有变化时重发，其余轮次 system 只带前言。判据读的是「成功
-     * 送达」而非「拼进了请求」——回合失败/被打断时不提交，下一轮自动重发
-     * （用户需求：第一次没发送成功，人设/协议下一次不能省略）。会话重建后
-     * 新实例从 null 起步，首轮必然重发一次——刻意的自愈：换 VRM 模型（表情
-     * 目录变化）等重建不轮换上下文，靠它保证模型手里的目录永远新鲜。
-     */
-    private var identitySentBlock: String? = null
+    private var pinnedCapabilityVersion: String? = null
     /** 每轮请求恒带的前言（身份/任务/纪律 + 协议遵循提醒），实例内逐字节稳定。 */
     private val texts: PromptTexts = promptTextsOf(options.lang)
     private val missionText: String =
@@ -579,6 +561,10 @@ class AvatarSession(
     /** Clear dialog history (a fresh conversation). */
     fun clearHistory() {
         store.clear()
+        previousAction = null
+        turnPreviousAction = null
+        candidateInput = ""
+        selectedActions = null
     }
 
     /**
@@ -659,8 +645,6 @@ class AvatarSession(
         }
         turnJob = scope.launch {
             _phase.value = ConversationPhase.THINKING
-            // 上下文首轮判定必须在 appendUser 之前采样（append 后历史永不为空）
-            val contextFirstTurn = store.messages().isEmpty()
             extractor.reset()
             chunker.reset()
             replyBuffer.setLength(0)
@@ -668,6 +652,7 @@ class AvatarSession(
             pendingEmotions.clear()
             emotionsBySequence.clear()
             pipeline.beginTurn()
+            prepareCapabilities(text)
             store.appendUser(text)
             // 首句延迟三段法（grep InfoStreamDectect）：REQUEST→首个 TextDelta 的
             // ttfb + SentenceQueued→SentenceStarted 的 TTS 合成，都在本行/事件流里
@@ -680,13 +665,12 @@ class AvatarSession(
                 // user 前缀槽，与视角行/技能行同缝——逐轮变化、不进 store、
                 // 不碰钉住协议块。
                 val memoryLine = memoryCoordinator?.lineFor(text)
-                val built = buildRequestMessages(images, contextFirstTurn, memoryLine)
+                val messages = buildRequestMessages(images, memoryLine).toMutableList()
                 // 工具循环（docs/agent-feasibility.md §4.5）：文本增量照旧走既有
                 // 断句/TTS/口型流水（跨轮句序号连续，语音无感）；模型请求工具时
                 // 在「流结束」与「回合完成」之间插入「执行→结果回灌→再请求」，
                 // 最多 agentMaxToolRounds 轮。工具消息只活在当前回合的请求里，
                 // 回合结束 store 仍只存 user+assistant 全量 raw 文本。
-                val messages = built.messages.toMutableList()
                 var round = 0
                 var emptyRetries = 0
                 while (true) {
@@ -731,11 +715,6 @@ class AvatarSession(
                         }
                     }
                     usage = finish.usage
-                    // LLM 流成功走完 = 人设/协议确实送达了模型 → 才标记「已发送」。
-                    // 失败/被打断走不到这里，下一轮自动重发完整身份块（用户需求：
-                    // 第一次没发送成功，人设/协议下一次不能省略）。只按首轮提交
-                    // （身份块只随首轮请求携带；工具轮失败不影响已送达的事实）。
-                    if (round == 0) built.identityBlock?.let { identitySentBlock = it }
                     var toolCalls = finish.toolCalls
                     // 悬空衔接句补救（Qwen3.8 关思考实测 ~50% 只说「让我看看……」不发
                     // 调用，docs/agent-provider-matrix.md）：用 tool_choice=required
@@ -788,10 +767,10 @@ class AvatarSession(
                     }
                     emit(AvatarEvent.ToolCallsIssued(toolCalls.map { it.name }))
                     lastToolCalls = toolCalls.map { it.name }
-                    // assistant 投影用 raw 文本片段（含标签）——与 store 回放形态一致。
+                    // 原始回复仅用于审计；回灌模型前按当前能力规范化标签。
                     messages += ChatMessage(
                         ChatRole.ASSISTANT,
-                        replyBuffer.substring(roundTextStart),
+                        projectAssistantHistory(replyBuffer.substring(roundTextStart)),
                         toolCalls = toolCalls,
                     )
                     logChunked(
@@ -818,6 +797,7 @@ class AvatarSession(
                 val streamMs = SystemClock.elapsedRealtime() - turnStartMs
                 // Drain the extractor tail, then any chunker remainder.
                 val tail = extractor.flush()
+                dispatchCues(tail.cues)
                 cleanBuffer.append(tail.cleanText)
                 if (tail.cleanText.isNotEmpty()) {
                     chunker.feed(tail.cleanText).forEach { submitSentence(it, ttsCfg) }
@@ -896,6 +876,7 @@ class AvatarSession(
             return
         }
         val job = scope.launch {
+            prepareCapabilities(text)
             extractor.reset()
             chunker.reset()
             pendingEmotions.clear()
@@ -1070,96 +1051,89 @@ class AvatarSession(
      * 面板/日志定位模型实际写了什么。
      */
     private fun dispatchCues(cues: List<TagCue>) {
-        for (cue in cues) when (cue) {
-            is TagCue.Emotion -> {
-                // Canonical emotions win (combo defs); other names resolve to the
-                // model's actual morph casing (extractor lowercases everything,
-                // morph names are case-sensitive — blinkLeft ≠ blinkleft, §7.10).
-                val fd = faceDriver
-                val canonical = EmotionAliases.resolve(cue.name)
-                val isCanonical = fd != null && canonical in fd.knownEmotionNames
-                val direct = fd?.resolveExpression(cue.name)
-                // 别名兜底排在 canonical/morph 之后只补空缺：模型原生 morph 名
-                // （如 smile）优先于表，表值都是 canonical 名不会遮蔽组合表情。
-                val alias = if (!isCanonical && direct == null) {
-                    EmotionAliases.resolveEmotion(cue.name)
-                } else {
-                    null
+        val registry = capabilityRegistry()
+        for (rawCue in cues) {
+            val resolution = registry.resolve(rawCue)
+            val cue = resolution.cue
+            if (cue == null) {
+                val reason = resolution.reason ?: TagCapabilityRegistry.Reason.UNKNOWN_NAME
+                rejectTag(rawCue, reason)
+                if (reason == TagCapabilityRegistry.Reason.UNKNOWN_NAME || reason == TagCapabilityRegistry.Reason.MALFORMED) {
+                    reportUnknownTag(tagKind(rawCue), tagRaw(rawCue))
                 }
-                if (fd == null || isCanonical || direct != null || alias != null) {
-                    pendingEmotions += EmotionCue(
-                        when {
-                            alias != null -> alias
-                            fd == null || isCanonical -> canonical
-                            else -> direct!!
-                        },
-                        cue.intensity,
-                    )
-                } else {
-                    reportUnknownTag("emo", cue.raw)
-                }
+                continue
             }
-            is TagCue.Action -> {
-                val entry = actionCatalog.firstOrNull { it.tag == cue.name }
-                if (gestureDriver?.play(cue.name) == true) {
-                    emit(AvatarEvent.ActionStarted(cue.name, entry?.label ?: cue.name))
-                } else {
-                    // 动作槽里的情绪词跨类改写（<act:laugh> → happy）：仅当目录
-                    // 里没这个名字——目录命中但播放失败是资产加载问题，
-                    // GestureDriver 已 Log.w，不算未识别。act 标签无强度，按 1.0。
-                    val emotion = if (entry == null) EmotionAliases.resolveEmotion(cue.name) else null
-                    if (emotion != null) {
-                        pendingEmotions += EmotionCue(emotion, 1f)
-                    } else if (entry == null) {
-                        reportUnknownTag("act", cue.raw)
+            if (resolution.aliased) {
+                emit(AvatarEvent.TagAliasResolved(tagKind(rawCue), tagRaw(rawCue), registry.canonicalTag(rawCue).orEmpty()))
+            }
+            when (cue) {
+                is TagCue.Emotion -> {
+                    if (faceDriver == null) rejectTag(rawCue, if (options.enableFaceDriving) TagCapabilityRegistry.Reason.UNAVAILABLE else TagCapabilityRegistry.Reason.DISABLED)
+                    else pendingEmotions += EmotionCue(cue.name, cue.intensity)
+                }
+                is TagCue.Action -> {
+                    if (actionStartedThisTurn || skills.bodyOccupied) {
+                        rejectTag(rawCue, TagCapabilityRegistry.Reason.BUSY)
+                        continue
+                    }
+                    val entry = registry.actions.getValue(cue.name)
+                    if (gestureDriver?.play(entry.tag) == true) {
+                        actionStartedThisTurn = true
+                        previousAction = entry.tag
+                        emit(AvatarEvent.ActionStarted(cue.name, entry.label))
+                    } else rejectTag(rawCue, TagCapabilityRegistry.Reason.RESOURCE_LOAD_FAILED)
+                }
+                is TagCue.Camera -> {
+                    val shot = TagCapabilityRegistry.cameraShots.getValue(cue.name)
+                    if (controller == null) rejectTag(rawCue, TagCapabilityRegistry.Reason.UNAVAILABLE)
+                    else {
+                        controller.setCameraShot(shot)
+                        emit(AvatarEvent.CameraChanged(shot))
                     }
                 }
+                is TagCue.Move -> {
+                    val driver = locomotionDriver
+                    val anchor = driver?.find(cue.name)
+                    if (driver == null || anchor == null) rejectTag(rawCue, TagCapabilityRegistry.Reason.UNAVAILABLE)
+                    else when (driver.walkTo(anchor)) {
+                        LocomotionDriver.Outcome.STARTED -> emit(AvatarEvent.WalkStarted(anchor.name, anchor.x, anchor.z))
+                        LocomotionDriver.Outcome.ALREADY_WALKING, LocomotionDriver.Outcome.MIMIC_ACTIVE ->
+                            rejectTag(rawCue, TagCapabilityRegistry.Reason.BUSY)
+                        LocomotionDriver.Outcome.LOAD_FAILED -> rejectTag(rawCue, TagCapabilityRegistry.Reason.RESOURCE_LOAD_FAILED)
+                        else -> rejectTag(rawCue, TagCapabilityRegistry.Reason.UNAVAILABLE)
+                    }
+                }
+                else -> Unit
             }
-            is TagCue.Camera -> dispatchCamera(cue)
-            is TagCue.Move -> dispatchMove(cue)
-            is TagCue.ToolCallText -> reportUnknownTag("tool", cue.raw)
         }
     }
 
-    /** 未识别标签：过滤（不进 TTS）+ Log.w + 事件，三路兜底里负责"可见"。 */
+    private fun tagKind(cue: TagCue): String = when (cue) {
+        is TagCue.Emotion -> "emo"
+        is TagCue.Action -> "act"
+        is TagCue.Camera -> "cam"
+        is TagCue.Move -> "move"
+        is TagCue.ToolCallText -> "tool"
+        is TagCue.InvalidControl -> "protocol"
+    }
+
+    private fun tagRaw(cue: TagCue): String = when (cue) {
+        is TagCue.Emotion -> cue.raw
+        is TagCue.Action -> cue.raw
+        is TagCue.Camera -> cue.raw
+        is TagCue.Move -> cue.raw
+        is TagCue.ToolCallText -> cue.raw
+        is TagCue.InvalidControl -> cue.raw
+    }
+
+    private fun rejectTag(cue: TagCue, reason: TagCapabilityRegistry.Reason) {
+        Log.w("AvatarSession", "${STREAM_PREFIX}tag rejected: ${tagRaw(cue)} reason=$reason")
+        emit(AvatarEvent.TagRejected(tagKind(cue), tagRaw(cue), reason))
+    }
+
     private fun reportUnknownTag(kind: String, raw: String) {
         Log.w("AvatarSession", "${STREAM_PREFIX}unknown $kind tag filtered (not spoken): $raw")
         emit(AvatarEvent.UnknownTag(kind, raw))
-    }
-
-    private fun dispatchCamera(cue: TagCue.Camera) {
-        if (!options.enableLlmCamera) return
-        val shot = CAMERA_SHOTS[cue.name]
-        if (shot == null) {
-            reportUnknownTag("cam", cue.raw)
-            return
-        }
-        controller?.setCameraShot(shot)
-        emit(AvatarEvent.CameraChanged(shot))
-    }
-
-    /**
-     * `<move:锚点>`（自由走动 P1，docs/locomotion-feasibility.md §7.3）：异步
-     * 语义——起步即返回，LLM 继续说话，TTS 流水不断（"边走边说"）。未知名走
-     * UnknownTag 上报（过滤不朗读，层 2 兜底复用）；锚点对但执行缝拒绝
-     * （没加载模型/场景、步态未配、mimic 占用）只打日志——名字是对的，不该
-     * 混进"未识别标签"；走动中收到新指令被驱动器防抖忽略（坑 9）。
-     */
-    private fun dispatchMove(cue: TagCue.Move) {
-        val driver = locomotionDriver ?: return
-        val anchor = driver.find(cue.name)
-        if (anchor == null) {
-            reportUnknownTag("move", cue.raw)
-            return
-        }
-        when (val outcome = driver.walkTo(anchor)) {
-            LocomotionDriver.Outcome.STARTED ->
-                emit(AvatarEvent.WalkStarted(anchor.name, anchor.x, anchor.z))
-            LocomotionDriver.Outcome.ALREADY_WALKING ->
-                Log.i("AvatarSession", "${STREAM_PREFIX}move ignored (already walking): ${cue.raw}")
-            else ->
-                Log.w("AvatarSession", "${STREAM_PREFIX}move '${cue.name}' rejected: $outcome")
-        }
     }
 
     private fun submitSentence(sentence: String, ttsCfg: TtsConfig) {
@@ -1186,7 +1160,7 @@ class AvatarSession(
      * 开播时应用一句话的表情 cue 序列。全部同名（协议教的眨眼/开合模式
      * `<emo:x:1>` 紧跟 `<emo:x:0>`）→ 首个立即应用（hold 覆盖整句），后续
      * 按 [EMOTION_STEP_MS] 步进补发（不重置归零计时）；混有不同名 → 句尾
-     * 情绪生效（同一句内互相矛盾的情绪只有最后一个能落地）。返回 t=0 应用
+     * 独立情绪只保留最后一个，但同名开始/复位序列始终按顺序保留。返回 t=0 应用
      * 的 cue（供发 EmotionChanged 事件），无 cue/无驱动器返回 null。
      */
     private fun applyEmotionCues(
@@ -1202,6 +1176,7 @@ class AvatarSession(
             scope.launch(Dispatchers.Main.immediate) {
                 delay(EMOTION_STEP_MS * (index + 1))
                 fd.applyEmotion(cue, -1)
+                emit(AvatarEvent.EmotionChanged(cue))
             }
         }
         return first
@@ -1221,42 +1196,71 @@ class AvatarSession(
         else texts.viewLineFree
     }
 
-    /** 一次组好的请求：消息序列 + 本轮携带的完整身份块文本（null=没有身份内容）。 */
-    private data class BuiltRequest(val messages: List<ChatMessage>, val identityBlock: String?)
+    /** Revalidate old tags against today's model, catalog and capability switches. */
+    private fun projectAssistantHistory(text: String): String {
+        val registry = capabilityRegistry()
+        return InlineTagHistoryProjector.project(text, registry::canonicalTag)
+    }
+
+    private var actionStartedThisTurn = false
+    private var candidateInput = ""
+    private var previousAction: String? = null
+    private var turnPreviousAction: String? = null
+
+    private fun prepareCapabilities(input: String) {
+        actionStartedThisTurn = false
+        candidateInput = input
+        // Only successfully executed actions can seed repeat; raw audit history is not authorization.
+        turnPreviousAction = previousAction
+        selectedActions = ActionCandidateSelector.select(actionCatalog, input, turnPreviousAction)
+    }
+
+    private var selectedActions: ActionCandidateSelector.Selection? = null
+
+    private fun liveActionSelection(): ActionCandidateSelector.Selection {
+        val advertised = selectedActions ?: ActionCandidateSelector.select(actionCatalog, candidateInput, turnPreviousAction)
+        // Freeze additions until the next request, but revoke removed/replaced assets immediately.
+        return ActionCandidateSelector.Selection(
+            advertised.common.filterValues { it in actionCatalog },
+            advertised.candidates.filterValues { it in actionCatalog },
+        )
+    }
+
+    /** Rebuild from live assets so a removed model/anchor cannot survive in a cached allowlist. */
+    private fun capabilityRegistry(): TagCapabilityRegistry = TagCapabilityRegistry(
+        emotions = texts.emotionNames.map { it.substringBefore('(') }.toSet(),
+        directExpressions = faceDriver?.availableExpressions?.filter { it.isNotBlank() }?.sorted().orEmpty(),
+        selection = liveActionSelection(),
+        allActions = actionCatalog,
+        cameras = if (options.enableLlmCamera && controller != null) texts.cameraTags.filter { it.first in TagCapabilityRegistry.cameraShots } else emptyList(),
+        moves = (locomotionDriver?.anchors ?: locomotionAnchors).map { it.name to it.labelFor(options.lang) },
+        gesturesEnabled = options.enableLlmGestures,
+        gesturesAvailable = gestureDriver != null,
+        cameraEnabled = options.enableLlmCamera,
+        cameraAvailable = controller != null,
+        movesEnabled = options.enableLlmMove,
+        movesAvailable = locomotionDriver != null,
+    )
 
     private fun buildRequestMessages(
         turnImages: List<String>,
-        contextFirstTurn: Boolean,
         memoryLine: String? = null,
-    ): BuiltRequest {
+    ): List<ChatMessage> {
         val list = mutableListOf<ChatMessage>()
-        // system 结构（单条——部分服务商对多条 system 直接 400，A.1 第 34 条）：
-        //   完整形态（上下文首轮，或上次没送达/指纹变化后的重发轮）：
-        //     [前言：身份/任务/台词纪律+协议遵循][人设全文][协议目录全文]
-        //   精简形态（其余轮次）：只有前言。
-        // 人设与协议目录只随首轮发送（用户需求：不变的内容不逐轮重发）——之后
-        // 历史里保留着模型自己发的标签（自我示范）；目录指纹或人设相对上次
-        // **成功送达**的文本有变化时重发。精简形态逐字节稳定，服务商前缀缓存
-        // 从第二轮起全程命中；首轮与重发轮和精简轮不共享 system 前缀，属一次
-        // 性成本。
+        // Chat Completions 无状态：每次请求都带当前完整身份、目录和工具说明。
+        // 保持单条 system 及稳定前缀，动态信息挂在末尾 user 副本上。
         val history = store.messages()
         val persona = systemPrompt.trim()
         val protocol = pinnedProtocolText()
-        val identityBlock = listOf(missionText, persona, protocol.orEmpty())
+        val systemText = listOf(missionText, persona, protocol.orEmpty())
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
-            .ifEmpty { null }
-        val includeIdentity = identityBlock != null &&
-            (contextFirstTurn || identityBlock != identitySentBlock)
-        val systemText = when {
-            includeIdentity -> identityBlock.orEmpty()
-            missionText.isNotEmpty() -> missionText
-            else -> ""
-        }
         if (systemText.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, systemText)
         // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两段
         // 都不进 store，天然不受 recentTurnLimit 影响。
-        list += options.recentTurnLimit?.let { history.takeLast(it) } ?: history
+        list += (options.recentTurnLimit?.let { history.takeLast(it) } ?: history).map {
+            if (it.role == ChatRole.ASSISTANT) it.copy(content = projectAssistantHistory(it.content)) else it
+        }
         // 视角行 + 记忆参考块 + 技能指令行 + 圆桌发言权行 + 本轮抓拍（视频模式）：
         // 都挂到刚 append 的末尾 user 消息上——请求里带，store 里的历史始终只有
         // 干净文字（见 send 的注释）。技能指令与视角行/记忆块同级：逐轮变化、
@@ -1280,15 +1284,9 @@ class AvatarSession(
         // 硅基流动 enable_thinking，见 AiProviders.llmExtraBody）
         val eb = llmConfig?.extraBody
         val thinkingOff = eb?.containsKey("thinking") == true || eb?.containsKey("enable_thinking") == true
-        // sys=full（前言+人设+协议整块）| brief（只带前言）；人设/协议列实际
-        // 发送情况——排查"模型不知道自己人设/不会用标签"先看这两个字段
-        val sysLog = if (includeIdentity) "full" else "brief"
-        val personaLog = if (includeIdentity) "${persona.length}ch" else "omitted"
-        val protocolLog = when {
-            includeIdentity && protocol != null -> "${protocol.length}ch"
-            includeIdentity -> "off"
-            else -> "omitted"
-        }
+        val sysLog = if (systemText.isNotEmpty()) "full" else "off"
+        val personaLog = "${persona.length}ch"
+        val protocolLog = protocol?.let { "${it.length}ch" } ?: "off"
         Log.i(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
@@ -1301,14 +1299,8 @@ class AvatarSession(
         list.lastOrNull()
             ?.takeIf { it.role == ChatRole.USER }
             ?.let { Log.i(PROMPT_TAG, "${STREAM_PREFIX}REQUEST user: ${it.content}${if (it.images.isEmpty()) "" else " (+${it.images.size} image)"}") }
-        // 完整 system 消息逐字节落日志（分段绕 logcat 单条上限）：full 轮=前言+
-        // 人设+协议目录整块，brief 轮=只有前言。配合 REQUEST user 行，每轮请求
-        // 模型实际收到什么全部可审计——排查"模型不知道人设/不遵循协议/念旁白"
-        // 直接读这两段，不用再拼凑 persona/protocol 各自的分段转储
+        // 完整请求日志用于核对当轮模型实际收到的目录。
         if (systemText.isNotEmpty()) logChunked(PROMPT_TAG, "REQUEST system", systemText)
-        // 观测点：请求形态与三段可用清单规模（排查"模型不用标签"时先看这行；
-        // sys=brief=本上下文非首轮且身份块已成功送达过，模型靠历史里的标签
-        // 自我示范；首轮与重发轮必为 full）
         Log.i(
             "AvatarSession",
             "${STREAM_PREFIX}prompt: sys=$sysLog persona=$personaLog protocol=$protocolLog, " +
@@ -1316,15 +1308,13 @@ class AvatarSession(
                 "directExpr=${currentDirectExpressions().size}, history=${history.size} " +
                 "sent=${trimmedSent(history)} images=${turnImages.size}",
         )
-        return BuiltRequest(list, if (includeIdentity) identityBlock else null)
+        return list
     }
 
     /**
-     * 协议块（全量表情/动作/镜头目录）文本的钉住层：内容只取决于当前加载的
-     * 模型与开关，与轮次无关，逐轮重拼纯属浪费——缓存上次组装的文本，内容
-     * 没变就复用同一份；目录变了（重载模型/镜头开关切换）就原地重钉并打日志。
-     * **钉住 ≠ 发送**：是否随请求带上由 [buildRequestMessages] 按「上下文首轮
-     * 或指纹相对上次发送有变化」决定（用户需求：目录不变就不必每轮都发）。
+     * 协议文本缓存：常用能力和工具说明保持稳定前缀，本轮候选追加在末尾。
+     * 目录、资产映射或候选变化时更新版本日志；内容相同时复用缓存文本。
+     * 本地缓存只负责文本复用，不代表服务端记住了目录；每次请求都发送全文。
      * LLM 模型切换的「新开上下文」由集成方轮换上下文 id 实现（demo 见
      * MainActivity）。
      *
@@ -1332,11 +1322,13 @@ class AvatarSession(
      */
     private fun pinnedProtocolText(): String? {
         val full = composeProtocolText() ?: return null
-        if (full != pinnedProtocol) {
+        val version = capabilityRegistry().version
+        if (full != pinnedProtocol || version != pinnedCapabilityVersion) {
             pinnedProtocol = full
+            pinnedCapabilityVersion = version
             Log.i(
                 "AvatarSession",
-                "$STREAM_PREFIX protocol pinned: ${full.length} chars, " +
+                "$STREAM_PREFIX protocol pinned: ${full.length} chars, capabilities=$version, " +
                     "cameras=${currentCameraTags().size}, " +
                     "actions=${currentActionGroups().sumOf { it.second.size }}, " +
                     "directExpr=${currentDirectExpressions().size}" +
@@ -1344,7 +1336,7 @@ class AvatarSession(
                     (if (options.agentToolsEnabled && !tools.isEmpty()) ", tools=${tools.list().size}" else ""),
             )
         }
-        return full
+        return pinnedProtocol
     }
 
     /**
@@ -1355,14 +1347,20 @@ class AvatarSession(
      */
     private fun composeProtocolText(): String? {
         if (!options.protocolInstructions) return null
+        val registry = capabilityRegistry()
         val block = options.assembler.multimodalProtocolBlock(
             cameras = currentCameraTags(),
-            actionGroups = currentActionGroups(),
+            actionGroups = if (registry.gesturesEnabled && registry.gesturesAvailable) registry.selection.common.entries.groupBy { it.value.category }
+                .map { (category, entries) -> category to entries.map { it.key } } else emptyList(),
             directExpressions = currentDirectExpressions(),
             moves = currentMoveTags(),
+            allowedEmotionNames = texts.emotionNames.filter { it.substringBefore('(') in registry.emotions },
         )
         val toolset = toolsetBlockText()
-        return listOfNotNull(block.takeIf { it.isNotBlank() }, toolset)
+        val candidates = registry.selection.candidates.keys.takeIf { registry.gesturesEnabled && registry.gesturesAvailable && it.isNotEmpty() }?.let {
+            texts.actionCandidates(it.toList())
+        }
+        return listOfNotNull(block.takeIf { it.isNotBlank() }, toolset, candidates)
             .joinToString("\n\n")
             .ifBlank { null }
     }
@@ -1392,41 +1390,19 @@ class AvatarSession(
         else -> " tok: prompt=${usage.promptTokens} cached=${usage.cachedTokens ?: -1} completion=${usage.completionTokens}"
     }
 
-    /**
-     * 多模态协议块全文——上下文第一轮请求里那条 system 消息的协议段（后续
-     * 轮次省略不发送，见 [pinnedProtocolText]；发送时与人设拼接为一条
-     * system）。设置页的「协议提示词」只读展示走这里，保证 UI 看到的就是
-     * 上下文开始时模型收到的。
-     */
-    fun protocolBlock(): String {
-        // 与钉住层同源（composeProtocolText）：设置页看到的 = 上下文开始时模型
-        // 收到的（含工具使用说明段）。
-        return composeProtocolText().orEmpty()
+    /** 设置页与每轮请求共用当前完整协议（含工具说明）。 */
+    fun protocolBlock(): String = composeProtocolText().orEmpty()
+
+    private fun currentCameraTags(): List<Pair<String, String>> = capabilityRegistry().cameras
+
+    private fun currentMoveTags(): List<Pair<String, String>> = capabilityRegistry().let {
+        if (it.movesEnabled && it.movesAvailable) it.moves else emptyList()
     }
 
-    private fun currentCameraTags(): List<Pair<String, String>> =
-        if (options.enableLlmCamera && controller != null) texts.cameraTags
-        else emptyList()
+    private fun currentActionGroups(): List<Pair<String, List<String>>> = capabilityRegistry().actions.entries
+        .groupBy { it.value.category }.map { (category, entries) -> category to entries.map { it.key } }
 
-    /**
-     * 移动词表（`<move:锚点>`，锚点名 → 本地化显示名）：锚点表非空且开关开启
-     * 才进协议块（headless/未注入锚点的会话永远不宣传走不动的能力）。
-     */
-    private fun currentMoveTags(): List<Pair<String, String>> {
-        val driver = locomotionDriver ?: return emptyList()
-        if (driver.anchors.isEmpty()) return emptyList()
-        return driver.anchors.map { it.name to it.labelFor(options.lang) }
-    }
-
-    // 分类名保持原始值；协议块内部按语言本地化（PromptTexts.actionCategory）。
-    // groupBy 保持目录的遭遇序（buildLlmActionCatalog 已按对话价值排好）
-    private fun currentActionGroups(): List<Pair<String, List<String>>> =
-        if (gestureDriver != null) actionCatalog.groupBy { it.category }
-            .map { (category, entries) -> category to entries.map { it.tag } }
-        else emptyList()
-
-    private fun currentDirectExpressions(): List<String> =
-        faceDriver?.availableExpressions?.filter { it.isNotBlank() }?.sorted() ?: emptyList()
+    private fun currentDirectExpressions(): List<String> = capabilityRegistry().directExpressions
 
     private fun emit(event: AvatarEvent) {
         _events.tryEmit(event)
@@ -1474,10 +1450,7 @@ class AvatarSession(
             get() = com.neethu.orchestrator.i18n.PromptTextsZh.identityPreamble
 
         /**
-         * 协议遵循提醒（protocolInstructions=true 时拼在前言末尾；用户需求 5：
-         * 目录词表只在首轮发送，之后每轮提醒模型继续遵循、只用历史里出现过的
-         * 标签名——防止看不到词表后改用括号动作或胡编标签名）。兼容引用，
-         * 正本见 PromptTexts。
+         * 协议遵循提醒：以本次请求的允许清单为准。兼容引用，正本见 PromptTexts。
          */
         val PROTOCOL_REMINDER: String
             get() = com.neethu.orchestrator.i18n.PromptTextsZh.protocolReminder
@@ -1488,30 +1461,22 @@ class AvatarSession(
         /** 同名表情序列（眨眼模式）补发步长：闭→开的间隔≈一次眨眼。 */
         private const val EMOTION_STEP_MS = 200L
 
-        /**
-         * 纯函数拆分一句话的表情 cue 序列（单测锁定分支）：全部同名（协议教
-         * 的眨眼/开合模式）→（首个, 其余按步进补发）；混有不同名或单条 →
-         * （句尾情绪, 无补发）。
-         */
+        /** Keep explicit same-name runs (e.g. blink on/reset), plus the last standalone mood. */
         internal fun splitEmotionRun(cues: List<EmotionCue>): Pair<EmotionCue, List<EmotionCue>> {
-            val firstName = cues.first().name
-            return if (cues.size == 1 || cues.any { it.name != firstName }) {
-                cues.last() to emptyList()
-            } else {
-                cues.first() to cues.drop(1)
+            require(cues.isNotEmpty())
+            val keep = mutableSetOf<Int>()
+            var lastStandalone: Int? = null
+            var start = 0
+            while (start < cues.size) {
+                var end = start + 1
+                while (end < cues.size && cues[end].name == cues[start].name) end++
+                if (end - start > 1) keep.addAll(start until end) else lastStandalone = start
+                start = end
             }
+            lastStandalone?.let { keep += it }
+            val sequence = keep.sorted().map { cues[it] }
+            return sequence.first() to sequence.drop(1)
         }
 
-        /** `<cam:…>` tag → preset shot (tag values are the enum names lowercased). */
-    private val CAMERA_SHOTS: Map<String, CameraShot> = mapOf(
-        "close_up" to CameraShot.CLOSE_UP,
-        "macro" to CameraShot.MACRO,
-        "medium_shot" to CameraShot.MEDIUM_SHOT,
-        "full_shot" to CameraShot.FULL_SHOT,
-        "long_shot" to CameraShot.LONG_SHOT,
-        "over_shoulder" to CameraShot.OVER_SHOULDER,
-        "follow" to CameraShot.FOLLOW,
-        "group" to CameraShot.GROUP_SHOT,
-    )
     }
 }

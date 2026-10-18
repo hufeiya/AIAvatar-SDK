@@ -24,6 +24,14 @@ class PromptTextsI18nTest {
     // ── PromptTexts：EN 全成员无中文 ──────────────────────────────────────────
 
     @Test
+    fun `both reminders authorize only the current request vocabulary`() {
+        assertTrue(PromptTextsZh.protocolReminder.contains("本次请求允许清单"))
+        assertTrue(PromptTextsEn.protocolReminder.contains("this request's allowed lists"))
+        assertTrue(!PromptTextsZh.protocolReminder.contains("历史回复中出现过"))
+        assertTrue(!PromptTextsEn.protocolReminder.contains("already appeared"))
+    }
+
+    @Test
     fun `en identity preamble and protocol reminder have no chinese`() {
         val en = PromptTextsEn
         assertNoCjk("identityPreamble", en.identityPreamble)
@@ -234,4 +242,10 @@ class PromptTextsI18nTest {
         assertEquals(LookHereTextsZh, LookHereTexts.of(Lang.ZH))
         assertEquals(LookHereTextsEn, LookHereTexts.of(Lang.EN))
     }
+    @Test
+    fun `per turn candidate suffix follows session language`() {
+        assertNoCjk("actionCandidates", PromptTextsEn.actionCandidates(listOf("dance", "sit")))
+        assertTrue(PromptTextsZh.actionCandidates(listOf("dance")).contains("本轮额外允许动作"))
+    }
+
 }

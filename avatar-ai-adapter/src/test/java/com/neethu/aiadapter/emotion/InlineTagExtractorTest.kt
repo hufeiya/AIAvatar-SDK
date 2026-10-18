@@ -230,7 +230,7 @@ class InlineTagExtractorTest {
         assertEquals("普通文本", fed.cleanText)
         val result = ex.flush()
         assertEquals("", result.cleanText)
-        assertEquals(0, result.cues.size)
+        assertEquals(listOf(TagCue.InvalidControl("<emo:hap")), result.cues)
         // next feed starts fresh
         assertEquals("abc", ex.feed("abc").cleanText)
     }
@@ -323,7 +323,7 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val r = ex.feed("<move:window→carpet>好")
         assertEquals("好", r.cleanText)
-        assertEquals(listOf(TagCue.Move("window→carpet", "<move:window→carpet>")), r.cues)
+        assertEquals(listOf(TagCue.InvalidControl("<move:window→carpet>")), r.cues)
     }
 
     @Test
@@ -331,9 +331,7 @@ class InlineTagExtractorTest {
         val ex = InlineTagExtractor()
         val r = ex.feed("<emo:happy+sad>嗯")
         assertEquals("嗯", r.cleanText)
-        val cue = r.cues.single() as TagCue.Emotion
-        assertEquals("happy+sad", cue.name)
-        assertEquals("<emo:happy+sad>", cue.raw)
+        assertEquals(listOf(TagCue.InvalidControl("<emo:happy+sad>")), r.cues)
     }
 
     @Test
@@ -351,4 +349,84 @@ class InlineTagExtractorTest {
         val r = ex.feed(long)
         assertEquals(long, r.cleanText)
     }
+    @Test
+    fun `malformed and unknown controls never leak for any split`() {
+        val cases = listOf(
+            "<mood:happy>", "<act:>", "<emo:happy:bad>",
+            "<act:" + "x".repeat(90) + ">",
+            "<|emotion:" + "x".repeat(90) + "|>",
+            "<move_to anchor=\"" + "x".repeat(90) + "\">",
+        )
+        for (control in cases) {
+            val input = "前$control 后<emo:happy>你好，5 < 3（真的）"
+            for (split in 0..input.length) {
+                val ex = InlineTagExtractor()
+                val a = ex.feed(input.take(split))
+                val b = ex.feed(input.drop(split))
+                val c = ex.flush()
+                assertEquals("split=$split input=$input", "前 后你好，5 < 3（真的）", a.cleanText + b.cleanText + c.cleanText)
+                assertEquals(1, (a.cues + b.cues + c.cues).count { it is TagCue.Emotion && it.name == "happy" })
+            }
+        }
+    }
+
+    @Test
+    fun `oversize discard recovers at newline new tag and reset`() {
+        for (boundary in listOf("\n", "<emo:happy>")) {
+            val ex = InlineTagExtractor()
+            val input = "<act:" + "x".repeat(100) + boundary + "你好"
+            val text = input.map { ex.feed(it.toString()).cleanText }.joinToString("") + ex.flush().cleanText
+            assertEquals(if (boundary == "\n") "\n你好" else "你好", text)
+        }
+        val ex = InlineTagExtractor()
+        ex.feed("<act:" + "x".repeat(100))
+        ex.reset()
+        assertEquals("新回合", ex.feed("新回合").cleanText)
+    }
+
+    @Test
+    fun `truncated controls dropped and ordinary bracket text preserved at every split`() {
+        for ((input, expected) in listOf(
+            "你好<mood:happy" to "你好", "你好<act:" to "你好",
+            "你好<em" to "你好", "5 < 3" to "5 < 3",
+            "<b>你好</b>（真的）" to "<b>你好</b>（真的）",
+        )) {
+            for (split in 0..input.length) {
+                val ex = InlineTagExtractor()
+                val text = ex.feed(input.take(split)).cleanText + ex.feed(input.drop(split)).cleanText + ex.flush().cleanText
+                assertEquals("split=$split input=$input", expected, text)
+            }
+        }
+    }
+
+    @Test
+    fun `finite stage directions disappear across every split while spoken parentheses survive`() {
+        val input = "（低头）你好*挥手*（真的）(nods)5 < 3"
+        for (split in 0..input.length) {
+            val ex = InlineTagExtractor()
+            assertEquals("split=$split", "你好（真的）5 < 3",
+                ex.feed(input.take(split)).cleanText + ex.feed(input.drop(split)).cleanText + ex.flush().cleanText)
+        }
+    }
+
+    @Test
+    fun `stage direction prefix flushes as prose and reset clears it`() {
+        val ex = InlineTagExtractor()
+        assertEquals("你好", ex.feed("你好（低").cleanText)
+        assertEquals("（低", ex.flush().cleanText)
+        ex.feed("*wav")
+        ex.reset()
+        assertEquals("新回合", ex.feed("新回合").cleanText)
+        assertEquals("", ex.flush().cleanText)
+    }
+
+    @Test
+    fun `malformed arguments produce only non executable protocol errors`() {
+        for (text in listOf("<emo:happy:bad>", "<act:>", "<act:wave:0.5:extra>", "<move:window→carpet>")) {
+            val result = InlineTagExtractor().feed(text + "你好")
+            assertEquals("你好", result.cleanText)
+            assertEquals(listOf(TagCue.InvalidControl(text)), result.cues)
+        }
+    }
+
 }

@@ -226,3 +226,9 @@ MainActivity（触发 `onNewIntent`），不会重建界面。
   （`GestureDetector`）驱动真实触摸时所用的同一组 Manipulator API，因此行为
   与手指操作一致；其中缩放比例按 GestureDetector 的 pinch 系数（0.1/像素）换算。
 - 人物移动：直接对模型根节点变换的平移列做增量，与拖拽模式同一代码路径。
+
+## 行内标签可靠性排查
+
+每次 Chat Completions 请求均携带单条完整 system（前言、人设、当前能力目录和工具说明），不再用后续轮省略词表的方式节省 token。`LlmPrompt` 的 `REQUEST` 应显示 `sys=full`，协议开启时 `protocol` 显示字符数；缓存是否命中以 RESPONSE 的 `cached` tokens 为准。
+
+原始 RESPONSE / Room 历史保留用于审计；实际回放给模型的 assistant 副本会规范化有限表情别名，移除未知、畸形及当前能力已关闭或移除的标签，工具续答也使用同一规则。`UnknownTag[protocol]` 表示畸形、超长或未知命名空间的控制串被隔离，不会进入 TTS。超长未闭合控制串在 `>`、换行或新 `<` 处恢复；普通比较式与括号对白保留。真机复现与评测边界见 [inline-tag-reliability.md](inline-tag-reliability.md)。

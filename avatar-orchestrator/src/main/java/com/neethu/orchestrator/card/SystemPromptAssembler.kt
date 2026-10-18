@@ -14,9 +14,8 @@ import com.neethu.orchestrator.i18n.promptTextsOf
  * integrators via the card object.
  *
  * The multimodal protocol block ([multimodalProtocolBlock]) is injected
- * separately by AvatarSession as its own system message — assembled once per
- * conversation context and reused verbatim across turns (the catalog only
- * depends on the loaded model, not the turn). assemble() intentionally does
+ * by AvatarSession into the single system message on every request. Common
+ * capabilities form a stable prefix; per-turn candidates follow tool instructions. assemble() intentionally does
  * NOT include it (the old emotion block was double-appended for card users),
  * so the protocol always reflects the live session configuration.
  *
@@ -65,6 +64,7 @@ class SystemPromptAssembler(
         actionGroups: List<Pair<String, List<String>>> = emptyList(),
         directExpressions: List<String> = emptyList(),
         moves: List<Pair<String, String>> = emptyList(),
+        allowedEmotionNames: List<String> = emotionNames,
     ): String {
         // 示例名必须是本模型真实支持的——旧版硬编码 blink_l 在 ARKit 命名的模型上
         // 不存在，模型照抄后被表达式门控静默丢弃（真机踩过）。
@@ -77,6 +77,7 @@ class SystemPromptAssembler(
             directExpressions = directExpressions,
             winkName = winkName,
             moves = moves,
+            allowedEmotionNames = allowedEmotionNames,
         )
     }
 

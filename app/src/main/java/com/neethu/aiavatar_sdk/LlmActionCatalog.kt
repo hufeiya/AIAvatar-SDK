@@ -13,7 +13,8 @@ const val KEY_IDLE_ANIMATION = "ai_idle_animation"
  * ~330 个）自动生成目录；tag = 文件名转小写下划线并去重，分类名取第一级
  * 子文件夹；外置库文件追加在后。全中文名等转不出 tag 的文件跳过——除非在
  * [CHINESE_NAME_TAGS] 里登记了英文别名。
- * 协议块按分类分组列出——模型只见过真实存在的 tag，未知名客户端静默丢弃。
+ * 完整资产目录交给 TagCapabilityRegistry：协议仅公布常用语义动作和本轮候选，
+ * 手动播放保留全部资产；未知名或超出候选范围的标签由客户端拒绝并上报。
  */
 fun sanitizeActionTag(name: String): String =
     name.lowercase()

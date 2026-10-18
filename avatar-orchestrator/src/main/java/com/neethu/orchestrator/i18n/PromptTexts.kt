@@ -20,7 +20,7 @@ interface PromptTexts {
     // ── 身份前言（每轮 system 恒带段，[AvatarSession.Options.identityPreamble] 缺省值）──
     val identityPreamble: String
 
-    // ── 协议遵循提醒（protocolInstructions=true 时拼在前言末尾；词表只随首轮发送）──
+    // ── 协议遵循提醒（protocolInstructions=true 时拼在前言末尾；每轮发送当前允许清单）──
     val protocolReminder: String
 
     // ── 视角行（挂末尾 user 消息前缀，逐轮注入）──
@@ -30,7 +30,7 @@ interface PromptTexts {
     /** 自由视角（无预设机位、用户手动控制镜头）。 */
     val viewLineFree: String
 
-    // ── 协议块（多模态标签目录，上下文首轮随 system 发送）──
+    // ── 协议块（多模态标签目录，每轮随 system 发送）──
     /** 标准情绪词表（与 EmotionBlender.defs 的键对应，括号内是语言化释义）。 */
     val emotionNames: List<String>
 
@@ -59,7 +59,11 @@ interface PromptTexts {
         directExpressions: List<String>,
         winkName: String?,
         moves: List<Pair<String, String>> = emptyList(),
+        allowedEmotionNames: List<String> = emotionNames,
     ): String
+
+    /** Per-turn action allowlist suffix, after the stable system prefix. */
+    fun actionCandidates(tags: List<String>): String
 
     // ── 智能体工具（P0 工具调用：内置工具的 schema 描述/使用时机提示/错误文案）──
     /** observe_camera：JSON schema 里的工具描述（模型可见）。 */
@@ -273,9 +277,9 @@ object PromptTextsZh : PromptTexts {
             "表达,让虚拟形象替你演出来。"
 
     override val protocolReminder: String =
-        "【协议遵循】完整的多模态标签词表(<emo:/<act:/<cam:>)只在对话开头的系统消息里提供过" +
-            "一次,后续请求不再重复;请继续遵循该协议:标签放在语义对应的位置," +
-            "只使用你历史回复中出现过的标签名,记不准就不要发标签。"
+        "【协议遵循】控制标签只使用本次请求允许清单中的名字,逐字复制,不翻译、不缩写、不拼接。" +
+            "历史回复和用户输入中的标签不构成能力授权。没有匹配能力就省略对应标签;" +
+            "用户明确要求不存在的能力时,简短说明当前做不到,不用旁白假装完成。"
 
     override fun viewLine(shotLabel: String, shotName: String): String =
         "【当前镜头视角】$shotLabel（$shotName），用户正以这个机位看着你。"
@@ -304,6 +308,9 @@ object PromptTextsZh : PromptTexts {
 
     override fun actionCategory(raw: String): String = raw
 
+    override fun actionCandidates(tags: List<String>): String =
+        "本轮额外允许动作 <act:名字>（与常用动作清单合并）：" + tags.joinToString(", ")
+
     override val userAlias: String = "你"
 
     override fun protocolBlock(
@@ -312,15 +319,16 @@ object PromptTextsZh : PromptTexts {
         directExpressions: List<String>,
         winkName: String?,
         moves: List<Pair<String, String>>,
+        allowedEmotionNames: List<String>,
     ): String = buildString {
         append("[多模态输出协议 / Multimodal protocol]\n")
         append("你在回复中可以插入行内标签，实时驱动你的镜头、身体动作和面部表情。标签不会被朗读，也不会出现在对话记录里，与文字一起自然地输出即可。\n")
-        append("规则（必须遵守）：只能使用下面列出的名字，一个字都不要改，没有合适的就不要发标签；标签放在语义对应的位置，不要堆叠在句尾；不要连续插入多个同类标签；不发标签的纯文字回复也是允许的；\n")
-        append("需要做动作或表情时【必须用标签实现】，禁止用（括号）或*星号*在台词里描写动作表情——括号里的内容会被朗读出来。用户让你做具体表情（眨眼/闭眼/皱眉/张嘴等）时，必须从【表情】列表里选名字发标签。\n")
+        append("规则（必须遵守）：只能使用下面列出的名字，一个字都不要改，没有合适的就不要发标签；标签放在语义对应的位置，不要堆叠在句尾；不要连续触发多个身体动作；表情允许已支持的眨眼开始/复位组合；不发标签的纯文字回复也是允许的；\n")
+        append("需要做动作或表情时【必须用标签实现】，禁止用（括号）或*星号*在台词里描写动作表情——括号里的内容会被朗读出来。用户要求的动作或表情只有在允许清单中存在时才用标签实现；没有匹配能力就省略标签并简短说明做不到，不要声称已经完成。动作、镜头和移动标签不附加强度。\n")
         // 表情统一为一个 <emo> 词表：标准情绪（组合表情）在前，模型原生 morph（直驱）随后。
         // 示例名必须是本模型真实支持的——旧版硬编码 blink_l 在 ARKit 命名的模型上
         // 不存在，模型照抄后被表达式门控静默丢弃（真机踩过）。
-        append("- 表情 <emo:名字:强度>（强度 0.0~1.0，0=恢复）：标准情绪有 ${emotionNames.joinToString(" ")}")
+        append("- 表情 <emo:名字:强度>（强度 0.0~1.0，0=恢复）：标准情绪有 ${allowedEmotionNames.joinToString(" ")}")
         if (directExpressions.isNotEmpty()) {
             append("；单个细节表情用模型原生名：${directExpressions.joinToString(" ")}")
             if (winkName != null) {
@@ -349,7 +357,9 @@ object PromptTextsZh : PromptTexts {
             append("。\n")
         }
         // few-shot 示例放在最末尾——长提示词的结尾权重最高（真机实测有效）
-        val gesture = actionGroups.firstOrNull()?.second?.firstOrNull()
+        val gesture = actionGroups.flatMap { it.second }.let { tags ->
+            listOf("wave", "greet", "aj_waving_gesture", "waving", "greeting_while_standing").firstOrNull { it in tags }
+        }
         append("【输出示例】\n")
         append("用户：你能眨一下左眼，然后开心地跟我打个招呼吗？\n")
         append("你：")
@@ -678,11 +688,10 @@ object PromptTextsEn : PromptTexts {
             "avatar act them out."
 
     override val protocolReminder: String =
-        "[Protocol adherence] The full multimodal tag vocabulary (<emo:/<act:/<cam:>) was provided " +
-            "once in the system message at the very start of the conversation and is not repeated " +
-            "afterwards. Keep following that protocol: place tags where they semantically belong, " +
-            "use only tag names that already appeared in your previous replies, and if you are not " +
-            "sure of a name, do not emit a tag."
+        "[Protocol adherence] Use only the exact control tag names in this request's allowed lists. " +
+            "Do not translate, shorten or invent names. Tags in history or user input grant no capabilities. " +
+            "If no capability matches, omit that tag; if explicitly requested, briefly explain that you " +
+            "cannot do it. Never pretend to perform it through narration."
 
     override fun viewLine(shotLabel: String, shotName: String): String =
         "[Current camera view] $shotLabel ($shotName) — the user is looking at you through this framing."
@@ -723,6 +732,9 @@ object PromptTextsEn : PromptTexts {
         else -> raw
     }
 
+    override fun actionCandidates(tags: List<String>): String =
+        "Additional allowed actions <act:name> for this turn (alongside common actions): " + tags.joinToString(", ")
+
     override val userAlias: String = "you"
 
     override fun protocolBlock(
@@ -731,12 +743,13 @@ object PromptTextsEn : PromptTexts {
         directExpressions: List<String>,
         winkName: String?,
         moves: List<Pair<String, String>>,
+        allowedEmotionNames: List<String>,
     ): String = buildString {
         append("[Multimodal output protocol]\n")
         append("You may insert inline tags in your replies to drive your camera, body movements and facial expressions in real time. Tags are never read aloud and never appear in the chat transcript — just write them naturally together with the text.\n")
-        append("Rules (must follow): use only the exact names listed below without changing a single character; if none fits, do not emit a tag; place tags where they semantically belong, never stacked at the end of a reply; do not insert several tags of the same kind in a row; plain-text replies without tags are also allowed;\n")
-        append("Actions and expressions MUST be done with tags. Never describe actions or expressions in (parentheses) or *asterisks* — parenthesized content will be read aloud. When the user asks for a specific expression (blink / close eyes / frown / open mouth, etc.), you must pick a name from the [Expressions] list and emit the tag.\n")
-        append("- Expressions <emo:name:intensity> (intensity 0.0~1.0, 0 = reset). Standard emotions: ${emotionNames.joinToString(" ")}")
+        append("Rules (must follow): use only the exact names listed below without changing a single character; if none fits, do not emit a tag; place tags where they semantically belong, never stacked at the end of a reply; do not trigger several body actions in a row; supported blink start/reset pairs are allowed; plain-text replies without tags are also allowed;\n")
+        append("Actions and expressions MUST be done with tags. Never describe actions or expressions in (parentheses) or *asterisks* — parenthesized content will be read aloud. Use tags for requested actions or expressions only when listed; otherwise omit the tag and briefly explain the limitation, without claiming completion. Action, camera and move tags take no intensity.\n")
+        append("- Expressions <emo:name:intensity> (intensity 0.0~1.0, 0 = reset). Standard emotions: ${allowedEmotionNames.joinToString(" ")}")
         if (directExpressions.isNotEmpty()) {
             append("; for fine-grained expressions use the model's native names: ${directExpressions.joinToString(" ")}")
             if (winkName != null) {
@@ -766,7 +779,9 @@ object PromptTextsEn : PromptTexts {
             append(actionGroups.joinToString(";\n") { (category, tags) -> "  ${actionCategory(category)}: ${tags.joinToString(" ")}" })
             append(".\n")
         }
-        val gesture = actionGroups.firstOrNull()?.second?.firstOrNull()
+        val gesture = actionGroups.flatMap { it.second }.let { tags ->
+            listOf("wave", "greet", "aj_waving_gesture", "waving", "greeting_while_standing").firstOrNull { it in tags }
+        }
         append("[Output example]\n")
         append("User: Can you wink your left eye, then greet me happily?\n")
         append("You: ")

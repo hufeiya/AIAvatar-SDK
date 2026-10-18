@@ -115,6 +115,8 @@ class RpsSkill(
     /** 待裁判的一拳（观测/测试用，只读）。 */
     val pendingThrow: PendingThrow? get() = pending
 
+    override val occupiesBody: Boolean get() = isActive
+
     override val isActive: Boolean get() = state != State.IDLE
 
     // ── 事件缝 ────────────────────────────────────────────────────────────

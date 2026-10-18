@@ -22,6 +22,9 @@ interface AvatarSkill {
     /** 当前是否处于激活态（激活态才有 turnDirective、才参与回合事件）。 */
     val isActive: Boolean
 
+    /** Reserves the body animation lane while active; inline gestures yield with BUSY. */
+    val occupiesBody: Boolean get() = false
+
     /** 激活态下每轮注入请求的指令行；null = 本轮不注入。 */
     fun turnDirective(ctx: SkillContext): String? = null
 

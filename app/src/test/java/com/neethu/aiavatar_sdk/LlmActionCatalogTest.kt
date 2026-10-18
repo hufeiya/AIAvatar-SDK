@@ -78,4 +78,22 @@ class LlmActionCatalogTest {
         assertEquals(1, entries.size)
         assertEquals("Dodge Step", entries[0].label)
     }
+    @Test
+    fun `built in semantic vocabulary maps only to shipped exact asset identities`() {
+        val root = java.io.File("src/main/assets/animations")
+        val paths = root.walkTopDown().filter { it.isFile && it.extension == "vrma" }
+            .map { it.relativeTo(root).invariantSeparatorsPath }.toList()
+        assertTrue("Animation assets must be available for integration validation", paths.isNotEmpty())
+        val catalog = buildLlmActionCatalog(paths)
+        val selector = com.neethu.orchestrator.tag.ActionCandidateSelector
+        val selected = selector.select(catalog, "请跳舞")
+        assertEquals(24, selected.common.size)
+        assertTrue(selected.candidates.size <= 12)
+        assertTrue(selected.actions.size < catalog.size / 2)
+        for ((name, asset) in selected.common) {
+            assertEquals(selector.semanticActions.getValue(name), asset.tag)
+            assertTrue(java.io.File("src/main/assets", asset.assetPath!!).isFile)
+        }
+    }
+
 }

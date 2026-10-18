@@ -35,6 +35,16 @@ sealed interface AvatarEvent {
      */
     data class UnknownTag(val kind: String, val raw: String) : AvatarEvent
 
+    /** Validation/execution failure, distinct from an unknown generated name. */
+    data class TagRejected(
+        val kind: String,
+        val raw: String,
+        val reason: com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason,
+    ) : AvatarEvent
+
+    /** Finite compatibility mapping; counted separately from canonical generation. */
+    data class TagAliasResolved(val kind: String, val raw: String, val canonical: String) : AvatarEvent
+
     /** The current turn finished to the end (LLM + TTS + playback all drained). */
     data class TurnCompleted(val interrupted: Boolean) : AvatarEvent
 

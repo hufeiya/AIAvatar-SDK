@@ -33,12 +33,14 @@ import com.neethu.aiadapter.api.TagExtractor
  * Incremental semantics inherited from its predecessor
  * [MarkerEmotionExtractor]: a tag split across deltas is buffered until
  * complete; an unterminated '<' tail holds text back instead of leaking
- * fragments into speech; a '<' never closed within the cap drains as plain
- * text so pathological input cannot wedge the stream.
+ * fragments into speech. Oversized control candidates are discarded until
+ * '>', a newline or a new '<'; ordinary comparisons remain plain text.
  */
 class InlineTagExtractor : TagExtractor {
 
     private val buffer = StringBuilder()
+    private var discardingControl = false
+    private val stageDirections = StageDirectionFilter()
 
     /** Tag name = Unicode letters/underscore lead + letters/digits/underscore (CJK included). */
     private val tagName = """[\p{L}_][\p{L}\p{N}_]*"""
@@ -64,14 +66,6 @@ class InlineTagExtractor : TagExtractor {
         RegexOption.IGNORE_CASE,
     )
 
-    // Lenient fallbacks: any `<ns:…>` up to 40 chars in a known namespace.
-    // Catches invented shapes like `<move:window→carpet>` (P1 真机踩过) — the
-    // name lands downstream as unknown → filtered + reported, never spoken.
-    private val lenientTagNames = listOf("emo", "act", "cam", "move")
-    private val lenientTags = lenientTagNames.associateWith { ns ->
-        Regex("""<\s*$ns\s*:\s*([^>]{1,40})\s*>""", RegexOption.IGNORE_CASE)
-    }
-
     // Text-form tool calls: `<move_to sofa>`, `<move_to anchor="desk">`,
     // `<stop_moving>` — snake_case name (underscore required, so prose like
     // "<see this>" can never match) with optional free-form args. Extracted
@@ -82,80 +76,70 @@ class InlineTagExtractor : TagExtractor {
     )
 
     override fun feed(delta: String): ExtractionResult {
-        buffer.append(delta)
         val cues = ArrayList<TagCue>()
         val clean = StringBuilder()
-
-        var cursor = 0
-        while (cursor < buffer.length) {
-            val open = buffer.indexOf('<', cursor)
-            if (open < 0) {
-                clean.append(buffer, cursor, buffer.length)
-                cursor = buffer.length
-                break
-            }
-            clean.append(buffer, cursor, open)
-
-            val close = buffer.indexOf('>', open)
-            if (close < 0) {
-                // Possibly an incomplete tag at the tail — hold everything
-                // from the last '<' onward. Cap the holdback so pathological
-                // input (a bare '<' never followed by '>') still drains.
-                if (buffer.length - open > MAX_PENDING_TAG_LENGTH) {
-                    clean.append(buffer, open, buffer.length)
-                    cursor = buffer.length
-                } else {
-                    cursor = open
+        // Consume characters identically for every chunk partition, including the cap.
+        for (char in delta) {
+            if (discardingControl) {
+                when (char) {
+                    '>' -> discardingControl = false
+                    '\n', '\r' -> { discardingControl = false; clean.append(char) }
+                    '<' -> { discardingControl = false; buffer.append(char) }
                 }
-                break
+                continue
             }
-
-            val segment = buffer.substring(open, close + 1)
-            val cue = matchTag(segment)
-            if (cue != null) {
-                cues += cue
-                cursor = close + 1
-            } else {
-                // Not one of our tags. If another '<' starts inside this
-                // segment (a stray "a < b" right before a real tag), pass
-                // through only up to it and re-evaluate from there — the tag
-                // after it must still be extracted, not swallowed verbatim.
-                val nextOpen = buffer.indexOf('<', open + 1)
-                if (nextOpen in (open + 1)..close) {
-                    clean.append(buffer, open, nextOpen)
-                    cursor = nextOpen
-                } else {
-                    clean.append(segment)
-                    cursor = close + 1
-                }
+            if (buffer.isEmpty()) {
+                if (char == '<') buffer.append(char) else clean.append(char)
+                continue
+            }
+            if (char == '<' || char == '\n' || char == '\r') {
+                // A fresh tag or line boundary recovers from a missing closing bracket.
+                if (isControlPrefix(buffer.toString())) cues += TagCue.InvalidControl(buffer.toString())
+                else clean.append(buffer)
+                buffer.setLength(0)
+                if (char == '<') buffer.append(char) else clean.append(char)
+                continue
+            }
+            buffer.append(char)
+            if (buffer.length > MAX_PENDING_TAG_LENGTH) {
+                if (isControlPrefix(buffer.toString())) {
+                    cues += TagCue.InvalidControl(buffer.toString())
+                    discardingControl = char != '>'
+                } else clean.append(buffer)
+                buffer.setLength(0)
+            } else if (char == '>') {
+                val segment = buffer.toString()
+                val cue = matchTag(segment)
+                if (cue != null) cues += cue
+                else if (CONTROL_CANDIDATE.containsMatchIn(segment)) cues += TagCue.InvalidControl(segment)
+                else clean.append(segment)
+                buffer.setLength(0)
             }
         }
-
-        val tail = buffer.substring(cursor.coerceAtMost(buffer.length))
-        val resultText = clean.toString()
-        buffer.setLength(0)
-        buffer.append(tail)
-        return ExtractionResult(resultText, cues)
+        return ExtractionResult(stageDirections.feed(clean.toString()), cues)
     }
 
     override fun flush(): ExtractionResult {
-        // A trailing incomplete tag is dropped; everything else is speech.
-        // Only tails that actually look like a tag prefix are dropped — a
-        // plain '<' (e.g. "5 < 3") is speech, not a tag.
-        val open = buffer.lastIndexOf('<')
-        if (open >= 0 && !buffer.substring(open).contains('>')) {
-            val tail = buffer.substring(open)
-            if (tail.startsWith("<|") || TAG_PREFIX.containsMatchIn(tail)) {
-                buffer.setLength(open)
-            }
-        }
-        val text = buffer.toString()
-        buffer.setLength(0)
-        return ExtractionResult(text, emptyList())
+        val tail = buffer.toString()
+        val control = isControlPrefix(tail)
+        val clean = stageDirections.feed(if (control) "" else tail) + stageDirections.flush()
+        reset()
+        return ExtractionResult(clean, if (control) listOf(TagCue.InvalidControl(tail)) else emptyList())
     }
 
     override fun reset() {
         buffer.setLength(0)
+        discardingControl = false
+        stageDirections.reset()
+    }
+
+    private fun isControlPrefix(text: String): Boolean {
+        if (CONTROL_CANDIDATE.containsMatchIn(text)) return true
+        val prefix = text.removePrefix("<").trim().lowercase()
+        return prefix.isNotEmpty() && (
+            listOf("emo", "act", "cam", "move", "|emotion").any { it.startsWith(prefix) } ||
+                TAG_PREFIX.containsMatchIn(text) || TOOL_PREFIX.containsMatchIn(text)
+            )
     }
 
     private fun matchTag(segment: String): TagCue? {
@@ -169,19 +153,6 @@ class InlineTagExtractor : TagExtractor {
         actionTag.matchEntire(segment)?.let { return TagCue.Action(it.groupValues[1].lowercase(), segment) }
         cameraTag.matchEntire(segment)?.let { return TagCue.Camera(it.groupValues[1].lowercase(), segment) }
         moveTag.matchEntire(segment)?.let { return TagCue.Move(it.groupValues[1].lowercase(), segment) }
-        // 宽容回退：命名空间对但名字/形状离谱（<move:window→carpet>）——下游按
-        // 未知名过滤+上报，绝不回语音。强度段语义随 junk 名一起丢弃。
-        for (ns in lenientTagNames) {
-            lenientTags.getValue(ns).matchEntire(segment)?.let {
-                val name = it.groupValues[1].lowercase()
-                return when (ns) {
-                    "emo" -> TagCue.Emotion(name, raw = segment)
-                    "act" -> TagCue.Action(name, segment)
-                    "cam" -> TagCue.Camera(name, segment)
-                    else -> TagCue.Move(name, segment)
-                }
-            }
-        }
         // 文本形态工具调用（<move_to sofa> / <stop_moving>）：抑制+上报，不执行
         pseudoToolTag.matchEntire(segment)?.let {
             if ('_' in it.groupValues[1]) return TagCue.ToolCallText(segment)
@@ -193,6 +164,8 @@ class InlineTagExtractor : TagExtractor {
 
     companion object {
         private const val MAX_PENDING_TAG_LENGTH = 64
+        private val CONTROL_CANDIDATE = Regex("""^<\s*(?:\|\s*)?[\p{L}_][\p{L}\p{N}_]*\s*:""")
+        private val TOOL_PREFIX = Regex("""^<\s*[a-z][a-z_]*_[a-z_]*(?:\s|$)""", RegexOption.IGNORE_CASE)
 
         /**
          * Prefix of a possibly-incomplete tag at flush time. `(:|_|$)` accepts

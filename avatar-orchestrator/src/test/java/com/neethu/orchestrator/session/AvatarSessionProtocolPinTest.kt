@@ -34,19 +34,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-/**
- * system 提示词的发送策略（用户需求 5 条，2026-10-05）：
- *  1. **前言每轮恒带**（身份与任务=3D 虚拟人/台词纪律=只说口语、动作表情用标签/
- *     协议遵循提醒），实例内逐字节稳定；
- *  2. **人设全文+协议目录（完整身份块）只随上下文第一轮发送**——之后历史里
- *     留着模型自己发的标签做自我示范；
- *  3. **没送达不算发送**：LLM 流失败/被打断的回合不提交「已发送」标记，
- *     下一轮自动重发完整身份块；
- *  4. 人设或目录指纹变化（重载模型/换动作来源）→ 重发；会话重建后新实例首轮
- *     必重发（自愈：换 VRM 模型不轮换上下文）；clearHistory/切上下文=新首轮。
- * 协议必须与人设/前言合并为**单条** system——实测硅基流动对多条 system 直接
- * 400（"System message must be at the beginning"，A.1 第 34 条）。
- */
+/** Every stateless request carries one complete system; history is a sanitized copy. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AvatarSessionProtocolPinTest {
 
@@ -64,6 +52,7 @@ class AvatarSessionProtocolPinTest {
         val requests = mutableListOf<List<ChatMessage>>()
         /** 置 true 后下一轮流直接报错（模拟网络失败/400），用于锁「失败不提交送达」。 */
         var failNext = false
+        var reply = "好的。"
 
         override fun streamChat(messages: List<ChatMessage>, config: LlmConfig): Flow<LlmStreamEvent> {
             requests += messages
@@ -71,7 +60,7 @@ class AvatarSessionProtocolPinTest {
                 failNext = false
                 flowOf(LlmStreamEvent.Error(RuntimeException("simulated network failure")))
             } else {
-                flowOf(LlmStreamEvent.TextDelta("好的。"))
+                flowOf(LlmStreamEvent.TextDelta(reply))
             }
         }
     }
@@ -106,14 +95,17 @@ class AvatarSessionProtocolPinTest {
 
     private lateinit var llm: RecordingLlm
 
-    private fun newSession(store: InMemoryConversationStore = InMemoryConversationStore()): AvatarSession {
+    private fun newSession(
+        store: InMemoryConversationStore = InMemoryConversationStore(),
+        options: AvatarSession.Options = AvatarSession.Options(protocolInstructions = true),
+    ): AvatarSession {
         llm = RecordingLlm()
         return AvatarSession(
             scope = CoroutineScope(UnconfinedTestDispatcher()),
             llm = llm,
             tts = SilentTts(),
             controller = AvatarController(),
-            AvatarSession.Options(protocolInstructions = true),
+            options,
             playbackQueue = RecordingQueue(),
             lipSyncProcessor = null,
             gestureDriver = GestureDriver(AvatarController()),
@@ -159,54 +151,77 @@ class AvatarSessionProtocolPinTest {
     }
 
     @Test
-    fun `later turns carry only the preamble`() = runTest {
-        val session = newSession()
+    fun `all thirty turns keep complete stable system after history trimming`() = runTest {
+        val session = newSession(options = AvatarSession.Options(recentTurnLimit = 3))
         session.systemPrompt = "你是测试人设。"
-        session.actionCatalog = listOf(ActionEntry("wave", "挥手问候", assetPath = "animations/wave.vrma"))
-        session.sendAndAwait("一")
-        session.sendAndAwait("二")
-        session.sendAndAwait("三")
-
-        assertEquals(3, llm.requests.size)
-        assertTrue(hasPersona(llm.requests[0], "你是测试人设。"))
-        // 后续轮：人设与协议都省略，只剩前言（身份/任务/纪律+协议遵循提醒）。
-        // 注意断言用目录专属串（"基础动作: wave"/"[多模态输出协议"）而不是
-        // "<act:"——协议遵循提醒文本里合法地包含标签家族写法 <emo:/<act:/<cam:
-        for (i in 1..2) {
-            val system = singleSystemOf(llm.requests[i])
-            assertTrue(system.content.startsWith("【身份与任务】"))
-            assertFalse("persona must not repeat every turn", system.content.contains("你是测试人设。"))
-            assertFalse("catalog must not repeat every turn", system.content.contains("基础动作: wave"))
-            assertFalse(system.content.contains("[多模态输出协议"))
-            assertTrue("protocol adherence reminder must stay", system.content.contains("【协议遵循】"))
+        session.actionCatalog = listOf(
+            ActionEntry("wave", "挥手", assetPath = "animations/wave.vrma"),
+            ActionEntry("nod", "点头", assetPath = "animations/nod.vrma"),
+        )
+        repeat(30) { session.sendAndAwait("第${it + 1}轮") }
+        val initial = singleSystemOf(llm.requests.first())
+        for (req in llm.requests) {
+            assertEquals(initial, singleSystemOf(req))
+            assertEquals(ChatRole.SYSTEM, req.first().role)
+            assertTrue(req.first().content.contains("基础动作: wave nod"))
+            assertTrue(req.first().content.contains("你是测试人设。"))
+            assertTrue(req.size <= 4)
         }
-        // 前言逐字节稳定（前缀缓存命中的前提）
-        assertEquals(singleSystemOf(llm.requests[1]), singleSystemOf(llm.requests[2]))
     }
 
     @Test
-    fun `failed identity turn does not commit delivery - next turn resends full identity`() = runTest {
+    fun `history is canonicalized against current capabilities without changing raw store`() = runTest {
+        val store = InMemoryConversationStore()
+        val session = newSession(store)
+        session.actionCatalog = listOf(ActionEntry("wave", "挥手", assetPath = "wave.vrma"))
+        val raw = "<cam:full_body><act:aj_bowing_head>好<act:wave>呀<emo:喜悦:0.8>！" +
+            "<emo:unicorn><act:><mood:happy><move:missing>5 < 3（真的）"
+        llm.reply = raw
+        session.sendAndAwait("一")
+        llm.reply = "好的。"
+        session.sendAndAwait("二")
+        val projected = llm.requests.last().first { it.role == ChatRole.ASSISTANT }.content
+        assertEquals("好<act:wave>呀<emo:happy:0.8>！5 < 3（真的）", projected)
+        assertEquals(raw, store.messages().first { it.role == ChatRole.ASSISTANT }.content)
+        // Catalog and camera switches affect old tags immediately.
+        session.actionCatalog = emptyList()
+        session.sendAndAwait("三")
+        assertFalse(llm.requests.last().first { it.role == ChatRole.ASSISTANT }.content.contains("<act:"))
+    }
+
+    @Test
+    fun `disabled camera and gesture tags are removed from old history`() = runTest {
+        val store = InMemoryConversationStore()
+        store.appendAssistant("<cam:full_shot><act:wave><emo:happy>你好")
+        val session = newSession(store, AvatarSession.Options(enableLlmCamera = false, enableLlmGestures = false))
+        session.actionCatalog = listOf(ActionEntry("wave", "挥手", assetPath = "wave.vrma"))
+        session.sendAndAwait("一")
+        assertEquals("<emo:happy:1.0>你好", llm.requests.single().first { it.role == ChatRole.ASSISTANT }.content)
+    }
+
+    @Test
+    fun `failed request does not remove identity from later requests`() = runTest {
         val session = newSession()
         session.systemPrompt = "你是测试人设。"
 
-        // 首轮（携带完整身份块）失败：流中途报错，人设/协议没算送达
+        // 首轮网络失败，后续请求仍须完整
         llm.failNext = true
         session.sendAndAwait("一")
-        assertTrue(hasPersona(llm.requests[0], "你是测试人设。")) // 请求里带了，但没算数
+        assertTrue(hasPersona(llm.requests[0], "你是测试人设。")) // 请求里仍有完整人设
 
-        // 下一轮必须重发（用户需求：第一次没发送成功，人设/协议下一次不能省略）
+        // 下一轮同样携带完整协议
         session.sendAndAwait("二")
         assertTrue(hasPersona(llm.requests[1], "你是测试人设。"))
         assertTrue(hasProtocol(llm.requests[1]))
 
-        // 重发成功后才恢复正常省略
+        // 后续仍须携带完整身份块
         session.sendAndAwait("三")
-        assertFalse(hasPersona(llm.requests[2], "你是测试人设。"))
-        assertFalse(hasProtocol(llm.requests[2]))
+        assertTrue(hasPersona(llm.requests[2], "你是测试人设。"))
+        assertTrue(hasProtocol(llm.requests[2]))
     }
 
     @Test
-    fun `interrupted turn does not commit delivery - next turn resends full identity`() = runTest {
+    fun `interrupted request does not remove identity from later requests`() = runTest {
         val hangLlm = HangFirstLlm()
         val session = AvatarSession(
             scope = CoroutineScope(UnconfinedTestDispatcher()),
@@ -224,21 +239,21 @@ class AvatarSessionProtocolPinTest {
         }
         session.systemPrompt = "你是测试人设。"
 
-        // 第一轮：请求在途时被用户打断（barge-in）——流没走完，不提交送达
+        // 第一轮请求在途时被用户打断
         session.send("一")
         session.interrupt()
         // 第二轮正常完成：必须重发完整身份块
         session.sendAndAwait("二")
         assertTrue(hasPersona(hangLlm.requests[1], "你是测试人设。"))
         assertTrue(hasProtocol(hangLlm.requests[1]))
-        // 第三轮：重发已成功提交 → 恢复精简（只带前言）
+        // 第三轮同样携带完整身份块
         session.sendAndAwait("三")
-        assertFalse(hasPersona(hangLlm.requests[2], "你是测试人设。"))
-        assertFalse(hasProtocol(hangLlm.requests[2]))
+        assertTrue(hasPersona(hangLlm.requests[2], "你是测试人设。"))
+        assertTrue(hasProtocol(hangLlm.requests[2]))
     }
 
     @Test
-    fun `catalog change resends the full identity once and keeps history`() = runTest {
+    fun `catalog change updates full system and keeps history`() = runTest {
         val session = newSession()
         session.systemPrompt = "人设。"
         session.actionCatalog = listOf(ActionEntry("wave", "挥手问候", assetPath = "animations/wave.vrma"))
@@ -246,13 +261,13 @@ class AvatarSessionProtocolPinTest {
 
         session.actionCatalog = listOf(ActionEntry("dance", "跳舞", assetPath = "animations/dance.vrma"))
         session.sendAndAwait("二")
-        // 第二轮本该精简——但目录变了，完整身份块（人设+新目录）必须重发
+        // 目录变化应立即反映在下一请求的完整身份块中
         val system = singleSystemOf(llm.requests.last())
         assertTrue(system.content.contains("[多模态输出协议"))
         assertTrue(system.content.contains("dance"))
         assertFalse("stale catalog must be replaced", system.content.contains("wave"))
         assertTrue(system.content.contains("人设。"))
-        // 历史不受重发影响：turn1 的 user/assistant 原样在；末尾 user 带视角行
+        // 保留历史对白；末尾 user 带视角行
         val nonSystem = llm.requests.last().filter { it.role != ChatRole.SYSTEM }.map { it.content }
         assertEquals(3, nonSystem.size)
         assertEquals(listOf("一", "好的。"), nonSystem.take(2))
@@ -260,14 +275,14 @@ class AvatarSessionProtocolPinTest {
     }
 
     @Test
-    fun `session rebuild resends the full identity once to self-heal catalog drift`() = runTest {
+    fun `session rebuild carries current identity with existing history`() = runTest {
         val store = InMemoryConversationStore()
         val firstInstance = newSession(store)
         val firstLlm = llm // newSession 每次都换新的 RecordingLlm
         firstInstance.systemPrompt = "你是测试人设。"
         firstInstance.sendAndAwait("一")
         firstInstance.sendAndAwait("二")
-        assertFalse(hasPersona(firstLlm.requests[1], "你是测试人设。"))
+        assertTrue(hasPersona(firstLlm.requests[1], "你是测试人设。"))
         // 会话重建（换 VRM 模型/改设置都会重建，且不轮换上下文）：同一份历史，
         // 新实例首轮重发完整身份块——换模型后的新表情目录靠它到达模型
         val secondInstance = newSession(store)
@@ -286,7 +301,7 @@ class AvatarSessionProtocolPinTest {
         session.systemPrompt = "人设。"
         session.sendAndAwait("一")
         session.sendAndAwait("二")
-        assertFalse(hasProtocol(llm.requests[1]))
+        assertTrue(hasProtocol(llm.requests[1]))
         // 换卡/清历史 = 新上下文：store 空，下一轮重新带上完整身份块
         session.clearHistory()
         session.sendAndAwait("新开始")

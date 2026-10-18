@@ -1,0 +1,21 @@
+{
+  "turns": 100,
+  "completed": 100,
+  "expected_action_or_blink": 72,
+  "matched": 48,
+  "raw_controls": 112,
+  "raw_illegal": 0,
+  "aliases": 0,
+  "control_leaks": 0,
+  "tts_failed": 3,
+  "tts_queued": 60,
+  "speechless_turns": 43,
+  "tool_turns": 1,
+  "rejections": {
+    "BUSY": 1
+  },
+  "ttfb_p50_ms": 1427,
+  "ttfb_p95_ms": 2488,
+  "first_speech_p50_ms": 1387,
+  "first_speech_p95_ms": 2216
+}

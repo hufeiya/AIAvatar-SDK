@@ -137,6 +137,32 @@ class AvatarSessionAgentTest {
     // ── 循环主干 ─────────────────────────────────────────────────────────────
 
     @Test
+    fun `tool continuation retains system and normalizes assistant tags without rewriting audit`() = runTest {
+        val llm = ScriptedLlm()
+        val store = InMemoryConversationStore()
+        val session = newSession(llm, store = store)
+        session.systemPrompt = "测试人设"
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "t", voice = "v")
+        session.tools.register(toolSpec) { ToolResult("结果") }
+        val raw = "<cam:full_body><act:aj_bowing_head><emo:喜悦:0.8>查询中。"
+        llm.scripts += listOf(llm.text(raw), llm.finish(toolCall("c")))
+        llm.scripts += listOf(llm.text("查到了。"), llm.finish())
+        session.sendAndAwait("查一下")
+        assertEquals(2, llm.requests.size)
+        val first = llm.requests[0].first.first()
+        val continuation = llm.requests[1].first
+        assertEquals(first, continuation.first())
+        assertEquals(ChatRole.SYSTEM, first.role)
+        assertTrue(first.content.contains("测试人设"))
+        assertTrue(first.content.contains("[多模态输出协议"))
+        val assistant = continuation.single { it.role == ChatRole.ASSISTANT }
+        assertEquals("<emo:happy:0.8>查询中。", assistant.content)
+        assertEquals("c", assistant.toolCalls.single().id)
+        assertEquals(raw + "查到了。", store.messages().last().content)
+    }
+
+    @Test
     fun `tool round continues the turn and feeds results back in protocol shape`() = runTest {
         val llm = ScriptedLlm()
         val store = InMemoryConversationStore()

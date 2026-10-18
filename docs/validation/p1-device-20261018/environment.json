@@ -1,0 +1,18 @@
+{
+  "device": "Redmi K20 Pro",
+  "androidPackage": "com.neethu.aiavatar_sdk",
+  "versionName": "1.2",
+  "versionCode": 3,
+  "baseCommit": "9f20483",
+  "apkSha256": "c0ac3fdffa622169715f83294cdc2714b028b4280f7e8457dae4a02200a174cd",
+  "llm": "bailian/qwen3.8-flash",
+  "thinking": "off",
+  "tts": "bailian/qwen3-tts-flash",
+  "voice": "Cherry",
+  "memory": false,
+  "tools": 12,
+  "personaCharacters": 0,
+  "model": "FreeTestCharacterAsuna_1024.vrm",
+  "scene": "home.glb",
+  "timezone": "Asia/Shanghai"
+}

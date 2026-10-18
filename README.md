@@ -16,7 +16,7 @@
 |---|---|
 | 渲染 | Filament 1.68（PBR 写实 + MToon 卡通，按模型材质自动切换）、VRM / GLB 模型、弹簧骨骼物理、IBL 环境光、程序化运镜 |
 | 对话编排 | LLM 流式 → 智能断句 → 并发 TTS → 顺序播放 → 口型 / 表情全端侧驱动 |
-| 多模态行内标签 | `<emo:joy>` 表情、`<act:wave>` 动作（VRMA）、`<cam:closeup>` 运镜，LLM 直出 |
+| 多模态行内标签 | `<emo:happy>` 表情、`<act:aj_waving_gesture>` 动作（VRMA）、`<cam:close_up>` 运镜，LLM 直出 |
 | 语音 | TTS：Edge-TTS（**免费无 Key**）/ OpenAI 兼容 / 火山引擎；LLM：任意 OpenAI 兼容端点 |
 | 其他 | SillyTavern 人物卡、多语言（zh / en）、可选技能框架（猜拳 / 看这边 / 模仿我） |
 
@@ -25,7 +25,7 @@
 | 弹簧骨骼 | 拟人微动作 | 52 表情 |
 |:---:|:---:|:---:|
 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0e0f838b-524c-41eb-adff-7aa9f356ea2d" /><br>**弹簧骨骼物理**<br>头发 / 衣物 / 饰品随动作实时摆动，拖拽身体、呼吸起伏都会联动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**拟人微动作**<br>呼吸（说话时加快）、眼球 saccade 微动、注视镜头、自然眨眼、口型同步——全部端侧驱动 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52 表情驱动**<br>ARKit 52 blendshapes + VRM 预设情绪，LLM 行内 `<emo:>` 直出，缺失 morph 自动降级 |
-| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**程序化运镜**<br>LLM 行内 `<cam:closeup>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
+| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**导入人物卡**<br>SillyTavern V1 / V2 / V3 PNG 卡即点即用，内置 18 张预置角色，人设与提示词可覆写 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**虚拟人技能**<br>猜拳（本地出拳 + 看图 / MediaPipe 裁判）、看这边（转头反应游戏）、模仿我（摄像头动作镜像模仿），框架可扩展 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**程序化运镜**<br>LLM 行内 `<cam:close_up>` 直出镜头语言，特写 / 远景 / 环绕一键切换，手势自由观察 |
 
 > 注：动图中的商业模型仅供演示，因版权问题不内置在项目内，可导入自己的 VRM 模型使用。
 
@@ -34,7 +34,7 @@
 - **纯客户端对话管线**：LLM 流式 → 智能断句 → 并发 TTS → 顺序播放，无自建服务端
 - **免费开箱即说**：Edge-TTS（免 Key）+ 系统内置 ASR（免 Key），一个 Key 都不填也能语音对话
 - **服务商内置目录**：硅基流动 / 火山引擎 / OpenRouter / DeepSeek / 阿里云百炼一键切换（模型下拉实时拉取 `/models` 目录并标注视觉模型），任意 OpenAI 兼容端点 `baseUrl` 覆盖
-- **多模态行内标签**：`<emo:joy>` 表情、`<act:wave>` 动作（内置 334 个 VRMA 动画）、`<cam:closeup>` 运镜，LLM 单流直出
+- **多模态行内标签**：`<emo:happy>` 表情、`<act:aj_waving_gesture>` 动作（内置 334 个 VRMA 动画）、`<cam:close_up>` 运镜，LLM 单流直出
 - **视频通话模式**：摄像头注视（看镜头 / 跟随你的脸）、表情跟随、动作模仿
 - **导入外部 VRM 模型**：文件选择器导入即换人，表情目录自动刷新、对话上下文自动轮换
 - **语音输入三种形态**：按住说话 / 连续聆听（VAD 自动断句）/ 系统 ASR
@@ -42,6 +42,8 @@
 - **MToon 卡通渲染**：VRM 0.x / 1.0 的 MToon 材质自动走赛璐璐卡通管线（两档着色 + 轮廓描边 + Matcap + Rim 光），与 three-vrm 参考渲染逐像素对齐；同一模型的非 MToon 材质仍走 PBR，也可在设置中手动切换
 - **开箱即亮的渲染**：内置 IBL 环境光零资产；Compose（`AvatarView`）与传统 View（`AvatarSurfaceView`）双入口
 - **对话历史持久化**：Room 存储、多上下文管理、人物卡跨会话重建自动重放
+
+行内标签的有效名称以当前运行时能力目录为准，以上动作仅为示例。每次 LLM 请求（含工具续答）都会携带完整人设和当前协议；历史回放会清除未知、畸形及已失效的控制标签，原始记录仍保留用于排查。详见[可靠性方案](docs/inline-tag-reliability.md)。
 
 ## MToon 卡通渲染
 
@@ -163,7 +165,7 @@ val session = remember {
 LaunchedEffect(state) {
     if (state is AvatarState.Ready) {
         session.startFaceDriving()
-        session.speak("<emo:joy>你好呀！很高兴见到你。") // 行内标签会变成表情
+        session.speak("<emo:happy>你好呀！很高兴见到你。") // 行内标签会变成表情
     }
 }
 ```

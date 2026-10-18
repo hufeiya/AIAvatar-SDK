@@ -49,6 +49,8 @@ class MimicSkill : AvatarSkill {
 
     private var falseSinceMs = -1L  // -1 = 当前不在「不可见 episode」中
 
+    override val occupiesBody: Boolean get() = isActive
+
     override val isActive: Boolean get() = state != State.IDLE
 
     // ── 事件缝 ────────────────────────────────────────────────────────────

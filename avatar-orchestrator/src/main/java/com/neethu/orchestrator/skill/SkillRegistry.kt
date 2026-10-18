@@ -43,6 +43,8 @@ class SkillRegistry(
 
     fun find(id: String): AvatarSkill? = skills[id]
 
+    val bodyOccupied: Boolean get() = skills.values.any { it.isActive && it.occupiesBody }
+
     /** 第一个激活技能的指令行；无激活技能返回 null。 */
     fun activeDirective(): String? {
         for (skill in skills.values) {

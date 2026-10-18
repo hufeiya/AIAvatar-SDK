@@ -16,7 +16,7 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 |---|---|
 | Rendering | Filament 1.68 (realistic PBR + MToon toon shading, auto-selected per model), VRM / GLB models, spring-bone physics, IBL environment lighting, procedural camera work |
 | Conversation pipeline | Streaming LLM → smart sentence splitting → concurrent TTS → sequential playback → fully on-device lip sync / expressions |
-| Multimodal inline tags | `<emo:joy>` expressions, `<act:wave>` motions (VRMA), `<cam:closeup>` camera shots — emitted directly by the LLM |
+| Multimodal inline tags | `<emo:happy>` expressions, `<act:aj_waving_gesture>` motions (VRMA), `<cam:close_up>` camera shots — emitted directly by the LLM |
 | Voice | TTS: Edge-TTS (**free, no key**) / OpenAI-compatible / Volcano Engine; LLM: any OpenAI-compatible endpoint |
 | Other | SillyTavern character cards, bilingual zh / en, optional skill framework (Rock-Paper-Scissors / Look Over Here / Mimic Me) |
 
@@ -25,7 +25,7 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 | Spring Bones | Human-like Micro-motions | 52 Expressions |
 |:---:|:---:|:---:|
 | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0e0f838b-524c-41eb-adff-7aa9f356ea2d" /><br>**Spring-bone physics**<br>Hair, clothes, and accessories sway in real time with movement; dragging the body or breathing ripples everything together | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0f13976f-6beb-4df7-8e38-0dfe1078bdad" /><br>**Human-like micro-motions**<br>Breathing (faster while speaking), eye saccades, gaze at the lens, natural blinking, and lip sync — all driven on-device | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/37ce0d3a-7c97-4b2f-aae4-f31b8ead3db5" /><br>**52-expression driving**<br>ARKit 52 blendshapes + VRM preset emotions, emitted inline by the LLM via `<emo:>`, with automatic fallback when morph targets are missing |
-| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**Character card import**<br>SillyTavern V1 / V2 / V3 PNG cards work with one tap; 18 preset characters built in, with overridable persona and prompts | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**Avatar skills**<br>Rock-Paper-Scissors (local hand play + vision / MediaPipe judging), Look Over Here (head-turn reaction game), Mimic Me (mirror your motion via the camera); the framework is extensible | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**Procedural camera**<br>The LLM emits cinematic shots inline via `<cam:closeup>`; switch between close-up / long shot / orbit in one tag, and observe freely with gestures |
+| <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/6a684307-00a4-42f6-b4b2-59f9a1d9a6b7" /><br>**Character card import**<br>SillyTavern V1 / V2 / V3 PNG cards work with one tap; 18 preset characters built in, with overridable persona and prompts | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/0913f847-b61f-4b84-852e-9183d57ca0e9" />**Avatar skills**<br>Rock-Paper-Scissors (local hand play + vision / MediaPipe judging), Look Over Here (head-turn reaction game), Mimic Me (mirror your motion via the camera); the framework is extensible | <img width="240" height="533" alt="Image" src="https://github.com/user-attachments/assets/b487b97f-927e-45cb-a97c-06c0cf19e479" /><br>**Procedural camera**<br>The LLM emits cinematic shots inline via `<cam:close_up>`; switch between close-up / long shot / orbit in one tag, and observe freely with gestures |
 
 > Note: The commercial models shown in the GIFs are for demonstration only and are not bundled with the project due to copyright restrictions — you can import your own VRM model instead.
 
@@ -34,7 +34,7 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 - **Fully client-side conversation pipeline**: streaming LLM → smart sentence splitting → concurrent TTS → sequential playback, with no self-hosted server
 - **Free voice out of the box**: Edge-TTS (no key) + built-in system ASR (no key) — voice chat works without entering a single API key
 - **Built-in provider directory**: switch among SiliconFlow / Volcano Engine / OpenRouter / DeepSeek / Alibaba Bailian in one tap (the model dropdown fetches the live `/models` catalog and tags vision models), or override with any OpenAI-compatible `baseUrl`
-- **Multimodal inline tags**: `<emo:joy>` expressions, `<act:wave>` motions (334 VRMA animations built in), `<cam:closeup>` camera shots — all emitted by the LLM in a single stream
+- **Multimodal inline tags**: `<emo:happy>` expressions, `<act:aj_waving_gesture>` motions (334 VRMA animations built in), `<cam:close_up>` camera shots — all emitted by the LLM in a single stream
 - **Video-call mode**: camera gaze (look at the lens / follow your face), expression mirroring, and motion mimicry
 - **Import external VRM models**: pick a file and swap characters instantly; the expression catalog refreshes automatically and conversation contexts rotate per model
 - **Three voice input modes**: push-to-talk / continuous listening (VAD auto-splitting) / system ASR
@@ -42,6 +42,8 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 - **MToon toon shading**: MToon materials (VRM 0.x / 1.0) automatically render through the cel-shaded pipeline (two-tone shading + outlines + matcap + rim light), pixel-aligned with the three-vrm reference; non-MToon materials of the same model keep their PBR look, and the mode can be switched manually
 - **Bright rendering out of the box**: built-in IBL environment lighting with zero assets; dual entry points for Compose (`AvatarView`) and classic View (`AvatarSurfaceView`)
 - **Persistent chat history**: Room storage, multi-context management, and automatic replay of character cards across session rebuilds
+
+Valid inline tags come from the current runtime capability catalog; the action above is an example. Every LLM request, including tool continuations, carries the full persona and current protocol. History replay removes unknown, malformed and stale control tags while retaining raw records for diagnostics. See the [reliability plan (Chinese)](docs/inline-tag-reliability.md).
 
 ## MToon Toon Shading
 
@@ -163,7 +165,7 @@ val session = remember {
 LaunchedEffect(state) {
     if (state is AvatarState.Ready) {
         session.startFaceDriving()
-        session.speak("<emo:joy>Hi there! Great to meet you.") // inline tags become expressions
+        session.speak("<emo:happy>Hi there! Great to meet you.") // inline tags become expressions
     }
 }
 ```
