@@ -106,6 +106,7 @@ internal object FxTools {
     private fun describeAnchor(anchor: VfxAnchor): String = when (anchor) {
         is VfxAnchor.World -> "world(%.1f,%.1f,%.1f)".format(anchor.x, anchor.y, anchor.z)
         is VfxAnchor.Bone -> "bone:${anchor.boneName}"
+        is VfxAnchor.CameraFront -> "camera_front(%.1fm)".format(anchor.distanceMeters)
     }
 
     private fun stop(controller: AvatarController, t: List<String>): String {

@@ -1,14 +1,17 @@
 package com.neethu.corelib.vfx
 
 /**
- * 内置常量预设表（画质升级 2026-10-17 扩到 10 配方，docs/vfx-quality-upgrade.md）：
- * SDK 开箱即用；app 的 `assets/vfx/presets.json` sidecar 经 VfxCatalog 三层
- * 合并，app 条目覆盖同名内置项（真机调参以 sidecar 为准）。
+ * 内置常量预设表（画质升级 2026-10-17 扩到 10 配方；P2 2026-10-18 增 decal
+ * 两配方到 12，docs/vfx-quality-upgrade.md + feasibility §六 P2）：SDK 开箱
+ * 即用；app 的 `assets/vfx/presets.json` sidecar 经 VfxCatalog 三层合并，app
+ * 条目覆盖同名内置项（真机调参以 sidecar 为准）。
  *
  * 坐标口径：世界单位=米，锚点 (0,0,0)=模型脚底（transformToUnitCube 后）。
  * 画质升级要点：fire/snow 复合层化（火焰=火苗+辉光+火星+烟+照明灯，雪=远景
  * Billboard+近景 CROSS 翻滚）；petals CROSS 空间翻滚；rain/雪落地碰撞；
  * 新增舞台灯组（stage_lights 扫摆彩光 / spotlight 追光）。
+ * P2 新增：magic_circle（法阵圆盘贴花+curl 旋度光尘）/ shield（护盾穹顶
+ * 贴花+Fresnel 边缘光）；舞台光柱由 stage_lights/spotlight 灯架覆盖。
  *
  * 湍流自 2026-10-17 起为加速度量纲（米/秒²，apply 内乘 dt——修复帧率漂移），
  * 强度均已按新量纲标定。
@@ -600,6 +603,89 @@ object VfxPresets {
         ),
     )
 
+    /**
+     * 地面魔法阵（P2 贴花首配方，docs/vfx-feasibility.md §六 P2）：旋转法阵
+     * 圆盘 + 内部光尘螺旋上升（curl 旋度湍流的消费配方——涡卷不聚团）。
+     * 纯贴花+常驻光尘：与纯灯特效同款永不自停（stop 才停）。
+     */
+    val magicCircle = VfxSpec(
+        id = "magic_circle",
+        label = "魔法阵",
+        maxParticles = 1,
+        decals = listOf(
+            DecalParams(
+                shape = DecalShape.GROUND_CIRCLE,
+                texture = VfxTexture.Asset("vfx/textures/magic_circle.png"),
+                radiusMeters = 1.15f,
+                color = VfxColor(0.42f, 0.62f, 1.0f, 1f),
+                intensity = 1.05f,
+                spinSpeedDegPerSec = 36f,
+                pulseStrength = 0.22f,
+                pulseFrequency = 0.7f,
+            ),
+        ),
+        layers = listOf(
+            // 阵内光尘：缓慢盘旋上升（curl 湍流 + 轴向抬升），青白小亮点
+            VfxSpec(
+                id = "magic_motes",
+                blending = VfxBlending.ADDITIVE,
+                texture = VfxTexture.SoftDot,
+                maxParticles = 40,
+                overflow = Overflow.RECYCLE_OLDEST,
+                rate = 14f,
+                lifetimeMin = 1.8f,
+                lifetimeMax = 2.8f,
+                sizeMin = 0.008f,
+                sizeMax = 0.02f,
+                emitter = EmitterParams(
+                    shape = EmitterShape.CONE,
+                    center = VfxVec3(0f, 0.05f, 0f),
+                    radius = 0.55f,
+                    direction = VfxVec3(0f, 0.55f, 0f),
+                    speedMin = 0.15f,
+                    speedMax = 0.35f,
+                    radialFraction = 0.4f,
+                ),
+                behaviors = listOf(
+                    BehaviorParams.Turbulence(
+                        strength = 0.9f, scale = 1.1f, evolution = 0.5f, curl = true,
+                    ),
+                    BehaviorParams.ColorOverLife(
+                        listOf(
+                            ColorKey(0.00f, VfxColor(0.55f, 0.80f, 1.0f, 0f)),
+                            ColorKey(0.20f, VfxColor(0.55f, 0.80f, 1.0f, 0.85f)),
+                            ColorKey(1.00f, VfxColor(0.35f, 0.45f, 1.0f, 0f)),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    /**
+     * 护盾（P2 贴花）：锚点上方半球壳六角纹样 + CPU Fresnel 轮廓缘亮边 +
+     * 呼吸脉动。演示向配方（§七「护盾/光环」），DOME 形贴花首验载体。
+     */
+    val shield = VfxSpec(
+        id = "shield",
+        label = "护盾",
+        maxParticles = 1,
+        decals = listOf(
+            DecalParams(
+                shape = DecalShape.DOME,
+                texture = VfxTexture.Asset("vfx/textures/shield.png"),
+                radiusMeters = 0.85f,
+                heightOffsetMeters = 0f,
+                color = VfxColor(0.45f, 0.80f, 1.0f, 1f),
+                intensity = 0.85f,
+                spinSpeedDegPerSec = 12f,
+                rimStrength = 1.8f,
+                pulseStrength = 0.35f,
+                pulseFrequency = 0.5f,
+            ),
+        ),
+    )
+
     /** 内置目录（id → spec，保留声明序；app sidecar 可覆盖同名项）。 */
     val all: Map<String, VfxSpec> = linkedMapOf(
         sparkBurst.id to sparkBurst,
@@ -612,6 +698,8 @@ object VfxPresets {
         lightstickSpark.id to lightstickSpark,
         stageLights.id to stageLights,
         spotlight.id to spotlight,
+        magicCircle.id to magicCircle,
+        shield.id to shield,
     )
 
     /** 按 id 查找（大小写不敏感）。 */

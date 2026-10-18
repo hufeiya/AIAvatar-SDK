@@ -56,6 +56,120 @@ object AgentToolCatalog {
     /** [setAmbience] 的白名单（[AmbiencePreset] 枚举名的小写形态，锁单测）。 */
     internal val AMBIENCE_PRESET_NAMES = listOf("studio", "bright", "dim", "spotlight", "dreamy")
 
+    /** [playEffect] 的 `at` 位置参数白名单（语义见 schema description，锁单测）。 */
+    internal val EFFECT_AT_OPTIONS = listOf("around_me", "stage_center", "camera_front")
+
+    /**
+     * `play_effect`（P2 特效，docs/vfx-feasibility.md §六 P2）：放一段场景级
+     * 特效（雪花/篝火/魔法阵/舞台灯等）。id 是 enum 白名单（目录定型，schema
+     * 注册时生成一次、执行时再验——同 wear_accessory）。位置三选一：`at`
+     * 枚举（我在身边/舞台中心/镜头前）、`position` 显式世界坐标（米，覆盖
+     * at）、都不给 = 预设缺省锚（应援棒类自锚手骨）。**为什么是工具不是
+     * `<fx:>` 行内标签**：特效是场景级事件不是逐句修饰，工具的 enum 白名单 +
+     * 失败回灌链路（坑 26 兜底体系）全部现成，还省一个标签命名空间。
+     * [play] 缝返回 null = 成功。
+     */
+    fun playEffect(
+        texts: PromptTexts,
+        effectIds: () -> List<String>,
+        play: suspend (effect: String, at: String?, position: FloatArray?) -> EffectPlayFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val ids = effectIds()
+        val spec = ToolSpec(
+            name = "play_effect",
+            description = texts.toolPlayEffectDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "effect",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "要播放的特效 id（见列表，不要发明）")
+                            },
+                        )
+                        put(
+                            "at",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { EFFECT_AT_OPTIONS.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "可选位置语义:around_me=我身边,stage_center=舞台中心,camera_front=观众镜头前")
+                            },
+                        )
+                        put(
+                            "position",
+                            buildJsonObject {
+                                put("type", "array")
+                                put("items", buildJsonObject { put("type", "number") })
+                                put("description", "可选显式世界坐标 [x,y,z](米,地面为 y=0);给了就覆盖 at")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("effect")) })
+            },
+            systemHint = texts.toolPlayEffectHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "effect")?.lowercase().orEmpty()
+            val known = effectIds().any { it.equals(raw, ignoreCase = true) }
+            val at = stringArg(args, "at")?.lowercase()
+            val position = floatArrayArg(args, "position")?.takeIf { it.size >= 3 }?.copyOf(3)
+            when {
+                raw.isEmpty() || !known -> ToolResult(
+                    texts.toolEnumArgInvalid("play_effect", raw, effectIds()),
+                    isError = true,
+                )
+                at != null && at !in EFFECT_AT_OPTIONS -> ToolResult(
+                    texts.toolEnumArgInvalid("play_effect.at", at, EFFECT_AT_OPTIONS),
+                    isError = true,
+                )
+                else -> when (play(raw, at, position)) {
+                    null -> ToolResult(texts.toolEffectPlayed(raw))
+                    EffectPlayFailure.UNKNOWN_EFFECT -> ToolResult(texts.toolEffectUnknown, isError = true)
+                    EffectPlayFailure.NOT_AVAILABLE -> ToolResult(texts.toolEffectNotAvailable, isError = true)
+                }
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `stop_effect`（P2）：把当前在播的场景特效全部停掉（「把雪停了」「别放
+     * 烟花了」）。无参数——停止是安全动作，不做白名单（停不存在的东西也是
+     * 幂等成功）。
+     */
+    fun stopEffect(
+        texts: PromptTexts,
+        stop: suspend () -> Unit,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "stop_effect",
+            description = texts.toolStopEffectDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolStopEffectHint,
+        )
+        val executor = ToolExecutor { _ ->
+            stop()
+            ToolResult(texts.toolEffectStopped)
+        }
+        return spec to executor
+    }
+
+    /** Top-level number array field out of an arguments object; null/absent → null. */
+    private fun floatArrayArg(argumentsJson: String, key: String): FloatArray? = try {
+        val obj = kotlinx.serialization.json.Json.parseToJsonElement(argumentsJson) as? kotlinx.serialization.json.JsonObject
+        val arr = obj?.get(key) as? kotlinx.serialization.json.JsonArray ?: return null
+        FloatArray(arr.size) { i ->
+            (arr[i] as? JsonPrimitive)?.contentOrNull()?.toFloatOrNull() ?: Float.NaN
+        }.takeIf { arr.isNotEmpty() && it.none { v -> v.isNaN() } }
+    } catch (_: Exception) {
+        null
+    }
+
     /**
      * `get_device_time`：设备墙钟时间。**刻意不走 SkillHost.nowMs()**——那根缝
      * 的语义是开机以来的单调时长（SystemClock.elapsedRealtime，技能节拍用），
@@ -683,4 +797,13 @@ enum class AccessoryWearFailure {
 enum class AccessoryRemoveFailure {
     /** 其他失败（渲染层缺失等）。 */
     FAILED,
+}
+
+/** [AgentToolCatalog.playEffect] 的缝失败归因；null = 成功（未知 id 在工具层被白名单拦截）。 */
+enum class EffectPlayFailure {
+    /** 目录里查无此 id（schema 与执行时目录漂移的兜底）。 */
+    UNKNOWN_EFFECT,
+
+    /** 渲染层未就绪（材质编译失败）或对应批容量已满。 */
+    NOT_AVAILABLE,
 }

@@ -77,23 +77,61 @@ internal sealed class Behavior {
     }
 
     /**
-     * 湍流（简化三角伪流场，花瓣/烟扰动）：力沿三轴各取「下一轴坐标」的
-     * 正弦——同轴取异轴坐标避免力与坐标同相；演化项随已活时长推进。
+     * 湍流（花瓣/烟/光尘扰动），力 = 加速度（米/秒²），apply 内乘 dt（画质
+     * 升级 2026-10-17 修复：曾漏乘 dt，扰动力随帧率漂移——60fps 标定的强度
+     * 在 30fps 下翻倍；修复后预设强度按加速度量纲全量重标定）。
      *
-     * 力 = 加速度（米/秒²），apply 内乘 dt（画质升级 2026-10-17 修复：曾漏乘
-     * dt，扰动力随帧率漂移——60fps 标定的强度在 30fps 下翻倍；修复后预设
-     * 强度按加速度量纲全量重标定，docs/vfx-quality-upgrade.md §2）。
+     * - 伪流场（curl=false）：力沿三轴各取「下一轴坐标」的正弦——同轴取异轴
+     *   坐标避免力与坐标同相。
+     * - 旋度场（curl=true，P2 完整版）：向量势 ψ = (sin(k1·p+w1t),
+     *   sin(k2·p+w2t), sin(k3·p+w3t))，力 = ∇×ψ 解析展开（三个波向量互异
+     *   避免退化）——数学上散度恒零（div·curl≡0），涡旋不会聚团；幅值除以
+     *   基波数 k0 让 strength 在不同 [scale] 下保持同量纲标度。
      */
-    internal class Turbulence(private val strength: Float, scale: Float, evolution: Float) : Behavior() {
+    internal class Turbulence(
+        private val strength: Float,
+        scale: Float,
+        evolution: Float,
+        curl: Boolean,
+    ) : Behavior() {
         private val k = scale.coerceAtLeast(1e-4f)
         private val w = 2.0 * PI * evolution.coerceAtLeast(0f)
+        private val curlMode = curl
+
+        // 旋度场波向量（×k0；三个互异准随机方向）与频率失谐比
+        private val k0 = 2.0 * PI / k
+        private val k1x = 1.00 * k0; private val k1y = 0.55 * k0; private val k1z = 1.30 * k0; private val w1 = w * 1.00
+        private val k2x = 0.80 * k0; private val k2y = 1.20 * k0; private val k2z = 0.50 * k0; private val w2 = w * 0.83
+        private val k3x = 1.40 * k0; private val k3y = 0.75 * k0; private val k3z = 1.05 * k0; private val w3 = w * 0.71
+
         override fun apply(pool: ParticlePool, i: Int, dt: Float) {
             if (strength == 0f) return
-            val t = (pool.maxLife[i] - pool.life[i]).toDouble()
-            pool.vx[i] += (strength * sin(pool.py[i] * k + t * w) * dt).toFloat()
-            pool.vy[i] += (strength * sin(pool.pz[i] * k + t * w * 0.83) * dt).toFloat()
-            pool.vz[i] += (strength * sin(pool.px[i] * k + t * w * 0.71) * dt).toFloat()
+            val t = pool.maxLife[i] - pool.life[i]
+            if (curlMode) {
+                forceCurl(pool.px[i], pool.py[i], pool.pz[i], t.toDouble(), scratch)
+                pool.vx[i] += scratch[0] * dt
+                pool.vy[i] += scratch[1] * dt
+                pool.vz[i] += scratch[2] * dt
+            } else {
+                pool.vx[i] += (strength * sin(pool.py[i] * k + t * w) * dt).toFloat()
+                pool.vy[i] += (strength * sin(pool.pz[i] * k + t * w * 0.83) * dt).toFloat()
+                pool.vz[i] += (strength * sin(pool.px[i] * k + t * w * 0.71) * dt).toFloat()
+            }
         }
+
+        /** 旋度力（curl=true 的力场求值；单测散度/帧率无关性断言共用）。 */
+        internal fun forceCurl(x: Float, y: Float, z: Float, t: Double, out: FloatArray) {
+            val inv = strength / k0
+            val c1 = kotlin.math.cos(k1x * x + k1y * y + k1z * z + w1 * t).toFloat()
+            val c2 = kotlin.math.cos(k2x * x + k2y * y + k2z * z + w2 * t).toFloat()
+            val c3 = kotlin.math.cos(k3x * x + k3y * y + k3z * z + w3 * t).toFloat()
+            // F = ∇×ψ：Fx = ∂ψz/∂y − ∂ψy/∂z，以此类推
+            out[0] = ((k3y * c3 - k2z * c2) * inv).toFloat()
+            out[1] = ((k1z * c1 - k3x * c3) * inv).toFloat()
+            out[2] = ((k2x * c2 - k1y * c1) * inv).toFloat()
+        }
+
+        private val scratch = FloatArray(3)
     }
 
     /**
@@ -135,7 +173,8 @@ internal sealed class Behavior {
 
                 is BehaviorParams.Sway -> Sway(p.axis, p.amplitude, p.frequency, p.phase)
 
-                is BehaviorParams.Turbulence -> Turbulence(p.strength, p.scale, p.evolution)
+                is BehaviorParams.Turbulence ->
+                    Turbulence(p.strength, p.scale, p.evolution, p.curl)
 
                 is BehaviorParams.GroundCollision ->
                     GroundCollision(p.groundY, p.fadeSeconds.coerceAtLeast(0f), p.friction)

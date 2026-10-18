@@ -545,6 +545,11 @@ internal fun SettingsScreen(
                                 checked = aiPrefs.accessoryTools
                             ) { onAiPrefsChange(aiPrefs.copy(accessoryTools = it)) }
                             SettingsSwitchRow(
+                                title = s.fxToolsTitle,
+                                subtitle = s.fxToolsSubtitle,
+                                checked = aiPrefs.fxTools
+                            ) { onAiPrefsChange(aiPrefs.copy(fxTools = it)) }
+                            SettingsSwitchRow(
                                 title = s.llmMoveTitle,
                                 subtitle = s.llmMoveSubtitle,
                                 checked = aiPrefs.llmMove

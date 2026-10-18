@@ -1446,7 +1446,7 @@ private fun DemoScreen(
     // controller 推送；氛围只动灯光三字段，不会触发材质回退重载）。
     LaunchedEffect(
         session, uiState.aiPrefs.agentTools, uiState.aiPrefs.readClipboard,
-        uiState.aiPrefs.accessoryTools, uiState.lang,
+        uiState.aiPrefs.accessoryTools, uiState.aiPrefs.fxTools, uiState.lang,
     ) {
         val s = session ?: return@LaunchedEffect
         AgentDeviceTools.registerAll(
@@ -1462,6 +1462,15 @@ private fun DemoScreen(
         // P2 配饰穿戴工具（wear/remove_accessory，跟随 agentTools 总开关 +
         // accessoryTools 独立开关，关闭 = 两工具退场）
         AgentAccessoryTools.register(
+            session = s,
+            controller = controller,
+            context = context,
+            texts = promptTextsOf(uiState.lang),
+            prefs = uiState.aiPrefs,
+        )
+        // P2 特效工具（play/stop_effect，跟随 agentTools 总开关 + fxTools
+        // 独立开关默认关，关闭 = 两工具退场）
+        AgentEffectTools.register(
             session = s,
             controller = controller,
             context = context,

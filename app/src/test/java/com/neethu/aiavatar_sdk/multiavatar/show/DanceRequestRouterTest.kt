@@ -248,4 +248,59 @@ class DanceRequestRouterTest {
     private companion object {
         const val DanceRequestRouterLineMax = 30
     }
+    // ── P2：点播特效走导播链 ─────────────────────────────────────────────
+
+    private val fxWhitelist = setOf("magic_circle", "shield", "stage_lights")
+
+    @Test
+    fun `LLM点播特效命中插fx幕`() = runTest {
+        val reply = "{\"performer\":\"\",\"clip\":\"\",\"fx\":\"magic_circle\",\"reason\":\"观众要魔法\"}"
+        val fake = FakeLlm(reply = reply)
+        val router = llmRouter(fake)
+        val d = router.route("来个魔法阵", cast, whitelist, fxWhitelist)
+        assertTrue(d is RequestDecision.Insert)
+        d as RequestDecision.Insert
+        assertEquals("llm", d.track)
+        assertEquals("fx", d.act.type)
+        assertEquals("magic_circle", d.act.fx)
+        assertNull(d.act.clip)
+        assertEquals("观众要魔法", d.reason)
+    }
+
+    @Test
+    fun `LLM发明特效被fx白名单拒绝`() = runTest {
+        val reply = "{\"performer\":\"\",\"clip\":\"\",\"fx\":\" supernova_firework \"}"
+        val fake = FakeLlm(reply = reply)
+        val d = llmRouter(fake).route("放个超新星烟花", cast, whitelist, fxWhitelist)
+        assertTrue(d is RequestDecision.Reject)
+    }
+
+    @Test
+    fun `特效清单为空时fx输出拒绝且user消息不含特效段`() = runTest {
+        val router = llmRouter(FakeLlm())
+        val msgs = router.buildMessages("点播", cast, whitelist, fxWhitelist = emptySet())
+        assertFalse(msgs.last().content.contains("特效清单"))
+        val reply = "{\"fx\":\"magic_circle\"}"
+        val d = llmRouter(FakeLlm(reply = reply)).route("来个魔法阵", cast, whitelist, fxWhitelist = emptySet())
+        assertTrue(d is RequestDecision.Reject)
+    }
+
+    @Test
+    fun `clip与fx同时给出优先跳舞`() = runTest {
+        val reply = "{\"performer\":\"A\",\"clip\":\"08_舞蹈与表演/Bboy Hip Hop Variation One\",\"fx\":\"shield\"}"
+        val d = llmRouter(FakeLlm(reply = reply)).route("一边跳街舞一边开护盾", cast, whitelist, fxWhitelist)
+        assertTrue(d is RequestDecision.Insert)
+        d as RequestDecision.Insert
+        assertEquals("dance", d.act.type)
+        assertEquals("A", d.act.performer)
+        assertNull(d.act.fx)
+    }
+
+    @Test
+    fun `特效清单出现在user消息`() {
+        val router = llmRouter(FakeLlm())
+        val msgs = router.buildMessages("点播", cast, whitelist, fxWhitelist)
+        assertTrue(msgs.last().content.contains("特效清单"))
+        assertTrue(msgs.last().content.contains("stage_lights"))
+    }
 }

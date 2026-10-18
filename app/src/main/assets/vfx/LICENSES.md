@@ -10,7 +10,11 @@
 | `textures/streak.png` | 同上 | CC0 (self-made) |
 | `textures/petal.png` | 同上 | CC0 (self-made) |
 | `textures/confetti.png` | 同上 | CC0 (self-made) |
-| `textures/flame_4x4.png` | 同上 | CC0 (self-made) |
+| `textures/flame_8x8.png` | 同上（64 帧 1024² fBm 火舌；旧 flame_4x4 已退役） | CC0 (self-made) |
+| `textures/snowflake.png` | 同上 | CC0 (self-made) |
+| `textures/smoke.png` | 同上 | CC0 (self-made) |
+| `textures/magic_circle.png` | 同上（P2 法阵贴花） | CC0 (self-made) |
+| `textures/shield.png` | 同上（P2 护盾穹顶贴花，横向可平铺六角网） | CC0 (self-made) |
 
 再生成：`python3 tools/vfx-samples/gen_textures.py`（确定性种子，可重复对拍）。
 

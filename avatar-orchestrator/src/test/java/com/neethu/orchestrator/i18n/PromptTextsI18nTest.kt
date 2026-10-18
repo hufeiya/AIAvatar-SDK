@@ -132,6 +132,37 @@ class PromptTextsI18nTest {
     }
 
     @Test
+    fun `en accessory and effect tool texts have no chinese`() {
+        val en = PromptTextsEn
+        // 配饰（P2，docs/accessory-feasibility.md §5.6）
+        assertNoCjk("wear desc", en.toolWearAccessoryDescription)
+        assertNoCjk("wear hint", en.toolWearAccessoryHint)
+        assertNoCjk("remove desc", en.toolRemoveAccessoryDescription)
+        assertNoCjk("remove hint", en.toolRemoveAccessoryHint)
+        assertNoCjk("worn", en.toolAccessoryWorn("phone"))
+        assertNoCjk("removed", en.toolAccessoryRemoved("phone"))
+        assertNoCjk("alreadyWearing", en.toolAccessoryAlreadyWearing)
+        assertNoCjk("notWorn", en.toolAccessoryNotWorn)
+        assertNoCjk("noModel", en.toolAccessoryNoModel)
+        assertNoCjk("accFailed", en.toolAccessoryFailed)
+        // 特效（P2，docs/vfx-feasibility.md §六 P2）
+        assertNoCjk("play desc", en.toolPlayEffectDescription)
+        assertNoCjk("play hint", en.toolPlayEffectHint)
+        assertNoCjk("stop desc", en.toolStopEffectDescription)
+        assertNoCjk("stop hint", en.toolStopEffectHint)
+        assertNoCjk("played", en.toolEffectPlayed("snow"))
+        assertNoCjk("stopped", en.toolEffectStopped)
+        assertNoCjk("effectUnknown", en.toolEffectUnknown)
+        assertNoCjk("effectNotAvailable", en.toolEffectNotAvailable)
+        assertNoCjk("enumArg at", en.toolEnumArgInvalid("play_effect.at", "moon", AgentToolCatalogValues.AT))
+    }
+
+    /** EFFECT_AT_OPTIONS 的测试侧副本（不跨模块引 internal）。 */
+    private object AgentToolCatalogValues {
+        val AT = listOf("around_me", "stage_center", "camera_front")
+    }
+
+    @Test
     fun `emotion wordlists match in size`() {
         // 词表与 EmotionBlender.defs 键一一对应的不变量由 SystemPromptAssemblerTest
         // 锁定；这里只锁中英词表本身不漂移（同一批情绪、不同释义）

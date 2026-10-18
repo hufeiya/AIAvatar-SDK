@@ -107,15 +107,22 @@ sealed class BehaviorParams {
     data class Sway(val axis: String, val amplitude: Float, val frequency: Float, val phase: Float = 0f) : BehaviorParams()
 
     /**
-     * 湍流（简化三角伪流场，花瓣/烟的扰动）：三角函数伪流场——
-     * `force = strength × (sin(py·k+t), sin(pz·k+t), sin(px·k+t))`（k 由
-     * [scale] 导出，t 随粒子已活时长演化）。非真 curl（无散度约束），视觉
-     * 够用且零查表零分配；完整版留 P2。
+     * 湍流（花瓣/烟/光尘的扰动）：力语义 = 加速度（米/秒²），apply 内乘 dt
+     * （2026-10-17 修复：曾漏乘 dt 导致扰动力随帧率漂移）。
      *
-     * 力语义 = 加速度（米/秒²），apply 内乘 dt（2026-10-17 修复：曾漏乘
-     * dt 导致扰动力随帧率漂移）。
+     * - [curl]=false（默认）：简化三角伪流场——`force = strength ×
+     *   (sin(py·k+t), sin(pz·k+t), sin(px·k+t))`（k 由 [scale] 导出，t 随
+     *   粒子已活时长演化）。非真 curl（无散度约束），视觉够用且零开销。
+     * - [curl]=true（P2 完整版）：从向量势 ψ 的解析旋度 ∇×ψ 取力——三个
+     *   异构波向量的 sin 势，curl 数学上散度恒零（旋度场不会有「汇/源」
+     *   聚集），涡卷感比伪流场真实；强度同样按 [strength] 米/秒² 标度。
      */
-    data class Turbulence(val strength: Float, val scale: Float = 1f, val evolution: Float = 1f) : BehaviorParams()
+    data class Turbulence(
+        val strength: Float,
+        val scale: Float = 1f,
+        val evolution: Float = 1f,
+        val curl: Boolean = false,
+    ) : BehaviorParams()
 
     /**
      * 地面碰撞（雪落地消融/雨丝到地即逝）：粒子 y 低于 [groundY] 且在下落时
@@ -215,6 +222,46 @@ data class StageLightParams(
 )
 
 /**
+ * decal 几何（P2，docs/vfx-feasibility.md §六 P2 + 画质升级 §7.4 拆分修正：
+ * 地面平面与穹顶不是同一种几何，分两态）。非粒子的静态网格贴花——法阵地面
+ * 圆盘 / 护盾穹顶；舞台光柱由舞台灯架（StageLightParams 光束锥）覆盖不在此列。
+ */
+enum class DecalShape {
+    /** 地面圆盘：锚点水平面 XZ 上的圆形贴花（魔法阵），绕竖轴自转。 */
+    GROUND_CIRCLE,
+
+    /** 穹顶：锚点上方半球壳（护盾/光环），CPU 逐顶点 Fresnel 边缘光。 */
+    DOME,
+}
+
+/**
+ * 贴花参数（[VfxSpec.decals]）：一张静态网格 + vfx_decal 材质实例，挂独立
+ * 实体走实体变换（自转/跟随锚点），Fresnel 经 CPU 顶点色逐帧更新（穹顶）。
+ * 颜色走顶点色（灰度 Fresnel 调制），呼吸脉动走 intensity（材质实例热改）。
+ */
+data class DecalParams(
+    val shape: DecalShape = DecalShape.GROUND_CIRCLE,
+    /** 贴图（assets 路径；程序化柔边圆点兜底）。 */
+    val texture: VfxTexture = VfxTexture.SoftDot,
+    /** 半径（米）。 */
+    val radiusMeters: Float = 1.2f,
+    /** 相对锚点的高度偏移（米；地面贴花抬高防 z-fight，穹顶 0=贴地起）。 */
+    val heightOffsetMeters: Float = 0.02f,
+    /** 颜色（线性 RGB；顶点色 = 本色 × Fresnel 明度）。 */
+    val color: VfxColor = VfxColor(0.55f, 0.75f, 1.0f, 1f),
+    /** 基准亮度（呼吸脉动围绕它调制）。 */
+    val intensity: Float = 1.0f,
+    /** 自转角速度（°/秒，绕竖轴；地面贴花转贴图，穹顶慢转 UV 花纹）。 */
+    val spinSpeedDegPerSec: Float = 30f,
+    /** 穹顶 Fresnel 边缘光强度（0=无边缘光；GROUND_CIRCLE 忽略）。 */
+    val rimStrength: Float = 1.6f,
+    /** 呼吸脉动幅度（0~1；0=恒定亮度）。 */
+    val pulseStrength: Float = 0.25f,
+    /** 呼吸脉动频率（Hz 量级）。 */
+    val pulseFrequency: Float = 0.8f,
+)
+
+/**
  * 特效规格：一次播放的完整参数表。
  *
  * 发射模型：[burst]（起播一次性数量）+ [rate]（每秒持续发射，0=无）。
@@ -273,6 +320,11 @@ data class VfxSpec(
     val layers: List<VfxSpec>? = null,
     /** 舞台灯组（非空时 VfxManager 建灯架：真灯 + 可见光束 + 地面光斑）。 */
     val lights: List<StageLightParams> = emptyList(),
+    /**
+     * 贴花组（P2：法阵/护盾类静态网格贴花，非粒子通道）。非空时 VfxManager
+     * 建 decal rig（独立实体 + 实体变换），纯贴花特效与纯灯特效同款永不自停。
+     */
+    val decals: List<DecalParams> = emptyList(),
 )
 
 /** 特效锚点（P1 集齐世界点 + 骨骼锚定，docs/vfx-feasibility.md §4.8）。 */
@@ -287,6 +339,13 @@ sealed interface VfxAnchor {
      * 演员离场后实体失效）→ 特效安静自停，不持陈旧 entity（§4.8）。
      */
     data class Bone(val boneName: String, val avatarId: String? = null) : VfxAnchor
+
+    /**
+     * 镜头前（P2 play_effect 的 camera_front 语义）：每帧取相机 eye+forward
+     * 解析「眼前 [distanceMeters] 米」的悬浮点（特效跟着镜头走，不依赖角色；
+     * VfxManager 每帧已取相机三元组，app 层零相机 API 依赖）。
+     */
+    data class CameraFront(val distanceMeters: Float = 1.2f) : VfxAnchor
 }
 
 /** 一次播放的句柄（[VfxManager] 生成 id，`stopVfx` 凭它停止）。 */

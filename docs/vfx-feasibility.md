@@ -4,7 +4,7 @@
 >
 > **2026-10-17 画质目标更新**：P0/P1 已验证基础功能，但用户反馈视觉效果未达预期。针对舞台灯光、真实火焰、三维粒子与风雪互动，新增 [VFX 画质升级与 GitHub 移植调研](vfx-quality-upgrade.md)。本文下述“Billboard 唯一正确解”“少量 unlit 材质足够”“本期排除 Effekseer”等结论属于原范围，不再作为新目标的选型约束；历史验收实录保留。
 
-> 生成时间：2026-10-16。对应代码状态：`main@3741d25`（配饰 P1.5+P2 之后）。**P0 渲染内核已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P0）；P1 预设资产包+锚定发射+团播接入已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P1），P2 未开发**。
+> 生成时间：2026-10-16。对应代码状态：`main@3741d25`（配饰 P1.5+P2 之后）。**P0 渲染内核已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P0）；P1 预设资产包+锚定发射+团播接入已于 2026-10-17 开发完成并通过真机验收（实录见 §六 P1）；P2 AI 通道+decal 材质+curl 旋度湍流已于 2026-10-18 开发完成并通过真机验收（实录见 §六 P2）——VFX 三期全部收官**。
 > 起点：与 Gemini 的外部方案讨论（three.quarks 移植 + Billboard 批渲染 + 万能材质三层架构），本文结合仓库现状逐条校准——采纳什么、修正什么、否决什么（§二）。
 > 回答四个问题：①特效库怎么分层、哪部分能下沉 JVM 单测？②Filament 侧承接件（动态网格/材质/贴图）在本仓库的落点与先例？③怎么接进单人渲染/团播舞台/AI 工具三条业务线？④P0/P1/P2 各做什么、多少工作量、真机怎么验？
 
@@ -409,6 +409,29 @@ MToon 模型（10.vrm）+ PBR 模型各验一遍 → LINEAR/ACES 两种色调映
 
 **真机验收清单**：「来点舞台特效」→ `play_effect` 原生调用命中预设（wear_accessory 验收法）；胡编特效名 → 拒绝文案回灌 + UnknownTag 三层兜底不炸回合；工具开关关 → `tools_list` 无 play_effect 且请求不带 tools 键；法阵/护盾/光柱三配方目验（含与 `set_ambience SPOTLIGHT` 氛围预设叠加）；`agentSnapshot` 记录协议块 token 增量。
 
+#### P2 验收实录（2026-10-18 真机，raphael/K20 Pro · MIUI 12.5 · debug 包）
+
+| 项 | 结果 |
+|---|---|
+| decal 目验 | magic_circle：圆盘贴花落锚点（缺省锚=角色实时位 y=-1.0 与 P1.5 火焰同口径），旋转用两帧帧差+跨截图弧线位移确认；shield：六角纹样穹顶罩住角色下半身+CPU Fresnel 轮廓缘亮边；光柱由 stage_lights/spotlight 灯架覆盖（§八 P2 实施差异 #1） |
+| fps（HUD uiautomator 连采） | magic_circle 60 ×3 / shield 60 ×3 / 三特效同屏（fire 71+snow 239+magic_circle 33 粒+decal）60 ×3 / set_ambience SPOTLIGHT 叠加 magic_circle 60；装机后首个 ~30s 内 HUD 会读 20~31（首启既有加载瞬态，基线同样掉帧，非 VFX 回归） |
+| LLM 工具开关 | 默认关：`tools_list` 14 工具无 play_effect/stop_effect，`tools_call play_effect` = unknown tool；prefs 置开重启：`tools_list` 16 工具含两件 |
+| 工具执行链（tools_call 等价验收） | `{"effect":"firework"}` → ERROR + 全量合法值回灌；`{"effect":"magic_circle","at":"stage_center"}` → 成功文案+法阵上屏；`{"at":"camera_front"}` → VfxManager 锚 `camera_front(1.2m)`，六角光带罩镜头前上方目验；`stop_effect {}` → 全停成功 |
+| 真实 LLM 回合 | 「来点舞台特效吧」/「用 play_effect 放魔法阵」/「调用 play_effect 工具…」三轮 `toolRounds=0`——模型口头宣称施法不调用；**对照「戴上帽子」同样 toolRounds=0**：DeepSeek-V4-Flash 对 OpenAI tool-calls 的配合度问题（M1「宣布记住零调用」同源前科），非 P2 回归；tools 键已带 16 工具、提示词 hint 已进 system |
+| 团播 fx 点播 | `dance dm 来个魔法阵特效` → LLM 导播（非流式 JSON 通道）输出 fx 字段过白名单 → `点播插幕（llm）: 特效幕 magic_circle` → `fx on: magic_circle as fx3` hold 3s → `fx off`，插幕不打断编舞（§七 P1 实录 #5 预研兑现）；舞台 `fx list` 12 配方、fps=60 |
+| 回归 | ×20 play/stop（shield 10 播 + 10 全停）+ load_model ×3 + walk 骨锚存活：零 FATAL/SIGABRT/PreconditionPanic，PSS 1.020→1.031GB |
+| 单测 | 全模块 **2068 条全绿**（本轮 +23：corelib curl 散度零/帧率无关/幅值线性 + DecalGeometry 圆盘/穹顶/Fresnel/cameraFront 7；orchestrator 工具 catalog 8 + 双语 EN 无中文 1；app VfxCatalog decals 2 + router fx 5） |
+
+**P2 实施差异与首验项结论（回填 §八）**：
+
+1. **vfx_decal 材质照建、但 UV 流动/溶解两项 shader 特性未做**：UV 旋转流光用**实体变换自转**（spinSpeed 由 age 直接导出，零累积漂移）替代 UV 改写；噪声溶解降级为强度呼吸脉动（MI 热改，灯架 flicker 同款）。理由：文档原案的 shader 内 UV scroll/噪声溶解各需新增 uniform/噪声函数，坑 12 纪律下每个新 uniform 都是一次真机二分成本，而变换旋转+脉动在法阵/护盾两类配方上目验已达标。
+2. **Fresnel 走 CPU 顶点色而非 shader**：UNLIT fragment 里取世界坐标/法线在本仓库未验证（filament 1.68.3 材质 API 面），选择把 rim 明度逐顶点算进 COLOR（`DecalGeometry.fresnelShades`，JVM 单测锁死），shader 侧零新特性；穹顶 217 顶点 ~7.8KB/帧重传，真机 60fps 无感。
+3. **Geometry 按 §7.4 拆分兑现**：地面圆盘（2 三角 quad）与穹顶（6×32 半球壳）是 `DecalShape` 两态各自建网格；「舞台光柱」不再做独立 decal 配方——P1.5 灯架光束锥已覆盖且带扫摆。
+4. **贴图 alpha 是 decal 可见性的第一决定项（新坑 G）**：首版 shield.png 细线（2px）× 竖向渐隐后 alpha≤0.4，additive 材质下穹顶整片「隐身」；改为底光晕层（105α×渐变）+ 加粗六角线（3px/210α）后达标。decal 贴图验收先看 alpha 直方图，别先怀疑渲染层。
+5. **SphereSurfaceEmitter 未做（按需条款）**：P2 配方（法阵/护盾）无球面发射需求，curl 湍流的消费配方是 magic_circle 的阵内光尘（`Turbulence(curl=true)`）；真旋度场（向量势解析旋度）散度恒零，单测锁帧率无关性与强度线性标度，现有预设不迁（视觉已验收不动）。
+6. **CameraFront 锚点**：`VfxAnchor.CameraFront` 由 VfxManager 每帧用已取的 eye+forward 解析（app 层零相机 API 依赖），play_effect 的 `at=camera_front` 直接受益；ai_cmd 未开新参数。
+7. **fxTools 默认关**（特效是观感面+模型滥调会刷屏），设置页「AI 配置」区新增开关行；注册/退场跟随 agentTools 总开关（AgentAccessoryTools 同款幂等模板）。
+
 ### 远期（本期不做，防 scope 膨胀）
 
 | 项 | 不做的理由 |
@@ -454,7 +477,7 @@ MToon 模型（10.vrm）+ PBR 模型各验一遍 → LINEAR/ACES 两种色调映
 
 ## 九、测试与验收策略
 
-- **JVM 单测**（纯数学层）：ParticlePool（回收/预算/溢出/dt 钳制）、ParticleSystem（种子确定性积分序列）、VfxMath（基向量正交/四角/拉伸轴/flipbook UV）、Behavior 逐个、VfxCatalog（对照 assets 树，坑 25）、AgentEffectToolsCatalog（P2，schema 锁/白名单/双语）。基线：P1 交付后全模块 **2026 条全绿**（本轮 VFX 新增 20 条）。
+- **JVM 单测**（纯数学层）：ParticlePool（回收/预算/溢出/dt 钳制）、ParticleSystem（种子确定性积分序列）、VfxMath（基向量正交/四角/拉伸轴/flipbook UV）、Behavior 逐个、VfxDecalCurlTest（P2：curl 散度零/帧率无关/DecalGeometry 网格/Fresnel/cameraFront）、VfxCatalog（对照 assets 树，坑 25）、AgentEffectToolsCatalog（P2，schema 锁/白名单/双语）。基线：P2 交付后全模块 **2068 条全绿**（VFX 三期累计新增 ~70 条）。
 - **真机口径**：fps 只认 `ai_cmd state` 的 `fps=` 字段（坑 14）；视觉差分先 `camera_shot closeup` 固定机位再 screencap；命令注入一律 ai_cmd（MIUI 禁 shell 触摸）。
 - **回归清单**（特效层改动不得波及）：MToon 渲染/切角色、弹簧骨骼、走动（含 FOLLOW 跟拍）、配饰挂载、抽屉跳转往返、模型重载 ×5 泄漏。
 

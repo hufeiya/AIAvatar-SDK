@@ -300,6 +300,10 @@ class Strings(val lang: Lang) {
     val accessoryToolsSubtitle: String get() =
         zh("让模型用 wear_accessory/remove_accessory 给虚拟形象戴上/摘下配饰（帽子/手机/玩偶等，内置 CC0 目录）",
             "Let the model wear/remove accessories (hat/phone/plush, built-in CC0 catalog) via wear_accessory/remove_accessory")
+    val fxToolsTitle: String get() = zh("特效播放工具", "Effect playing tools")
+    val fxToolsSubtitle: String get() =
+        zh("让模型用 play_effect/stop_effect 放场景特效（雪花/篝火/魔法阵/舞台灯等，默认关防滥调刷屏）",
+            "Let the model play/stop scene effects (snow/campfire/magic circle/stage lights) via play_effect/stop_effect; off by default to prevent spam")
     val llmMoveTitle: String get() = zh("AI 自由走动", "AI free locomotion")
     val llmMoveSubtitle: String get() =
         zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",

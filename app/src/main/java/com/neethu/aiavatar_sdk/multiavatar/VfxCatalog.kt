@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.neethu.corelib.vfx.BehaviorParams
 import com.neethu.corelib.vfx.ColorKey
+import com.neethu.corelib.vfx.DecalParams
+import com.neethu.corelib.vfx.DecalShape
 import com.neethu.corelib.vfx.EmitterParams
 import com.neethu.corelib.vfx.EmitterShape
 import com.neethu.corelib.vfx.FlipbookParams
@@ -24,7 +26,7 @@ import kotlinx.serialization.json.Json
 
 /**
  * 内置特效目录（P1 docs/vfx-feasibility.md §4.3/§5.2）：`assets/vfx/
- * presets.json` sidecar 目录为权威调参表（8 配方 + 贴图引用），corelib
+ * presets.json` sidecar 目录为权威调参表（P2 起 12 配方 + 贴图/灯组/贴花引用），corelib
  * [VfxPresets] 常量打底、本文件条目覆盖同名内置项——三层合并（SDK 常量 →
  * sidecar 调参 → 未来命令行显式参数），越靠外优先级越高。
  *
@@ -61,6 +63,7 @@ internal object VfxCatalog {
         val strength: Float? = null,
         val scale: Float = 1f,
         val evolution: Float = 1f,
+        val curl: Boolean = false,
         val keys: List<List<Float>>? = null,
         // ground 碰撞
         val y: Float? = null,
@@ -99,6 +102,21 @@ internal object VfxCatalog {
         val flickerFrequency: Float = 8f,
     )
 
+    /** P2 贴花（法阵/护盾；形状=ground_circle/dome，几何/明暗见 corelib DecalParams）。 */
+    @Serializable
+    data class SidecarDecal(
+        val shape: String = "ground_circle",
+        val texture: String? = null,
+        val radius: Float = 1.2f,
+        val heightOffset: Float = 0.02f,
+        val color: List<Float>? = null,
+        val intensity: Float = 1.0f,
+        val spinSpeed: Float = 30f,
+        val rim: Float = 1.6f,
+        val pulseStrength: Float = 0.25f,
+        val pulseFrequency: Float = 0.8f,
+    )
+
     @Serializable
     data class SidecarEntry(
         val id: String,
@@ -126,6 +144,8 @@ internal object VfxCatalog {
         val wind: SidecarWind? = null,
         val layers: List<SidecarEntry>? = null,
         val lights: List<SidecarLight>? = null,
+        // P2 贴花（法阵/护盾）
+        val decals: List<SidecarDecal>? = null,
         val license: String = "CC0",
     )
 
@@ -166,7 +186,7 @@ internal object VfxCatalog {
             else BehaviorParams.Sway(b.axis.lowercase(), b.amplitude, b.frequency, b.phase)
 
             "turbulence" -> if (b.strength == null) dirty()
-            else BehaviorParams.Turbulence(b.strength, b.scale, b.evolution)
+            else BehaviorParams.Turbulence(b.strength, b.scale, b.evolution, b.curl)
 
             "ground" -> if (b.y == null || b.fade == null) dirty()
             else BehaviorParams.GroundCollision(b.y, b.fade.coerceAtLeast(0f), (b.friction ?: 3f).coerceAtLeast(0f))
@@ -208,6 +228,9 @@ internal object VfxCatalog {
         val lights = e.lights?.takeIf { it.isNotEmpty() && depth == 0 }
             ?.map { light(it) }
             ?.takeIf { it.size <= MAX_LIGHTS } ?: emptyList()
+        val decals = e.decals?.takeIf { it.isNotEmpty() && depth == 0 }
+            ?.mapNotNull { decal(it) }
+            ?.takeIf { it.size <= MAX_DECALS } ?: emptyList()
         val tumble = e.tumble?.takeIf { it.size >= 2 } ?: listOf(0f, 0f)
         val shape = when (e.emitter.shape.lowercase()) {
             "point" -> EmitterShape.POINT
@@ -279,6 +302,7 @@ internal object VfxCatalog {
             },
             layers = layers,
             lights = lights,
+            decals = decals,
         )
     }
 
@@ -304,6 +328,27 @@ internal object VfxCatalog {
             sweepPhaseDeg = l.sweepPhase,
             flickerStrength = l.flickerStrength.coerceIn(0f, 1f),
             flickerFrequency = l.flickerFrequency.coerceAtLeast(0f),
+        )
+    }
+
+    /** sidecar 贴花条目 → DecalParams（钳制；未知形状丢弃）。 */
+    private fun decal(dd: SidecarDecal): DecalParams? {
+        val shape = when (dd.shape.lowercase()) {
+            "ground_circle", "circle", "ground" -> DecalShape.GROUND_CIRCLE
+            "dome", "shield" -> DecalShape.DOME
+            else -> return null
+        }
+        return DecalParams(
+            shape = shape,
+            texture = assetTexture(dd.texture) ?: VfxTexture.SoftDot,
+            radiusMeters = dd.radius.coerceIn(0.1f, 6f),
+            heightOffsetMeters = dd.heightOffset.coerceIn(-1f, 3f),
+            color = rgba(dd.color, VfxColor(0.55f, 0.75f, 1.0f, 1f)),
+            intensity = dd.intensity.coerceIn(0.01f, 20f),
+            spinSpeedDegPerSec = dd.spinSpeed.coerceIn(-720f, 720f),
+            rimStrength = dd.rim.coerceIn(0f, 5f),
+            pulseStrength = dd.pulseStrength.coerceIn(0f, 1f),
+            pulseFrequency = dd.pulseFrequency.coerceAtLeast(0f),
         )
     }
 
@@ -355,4 +400,7 @@ internal object VfxCatalog {
     private const val MAX_LAYERS = 6
     private const val MAX_LAYER_PARTICLES = 1200
     private const val MAX_LIGHTS = 4
+
+    /** 贴花上限（P2；单特效法阵+穹顶各一已覆盖现有配方）。 */
+    private const val MAX_DECALS = 2
 }

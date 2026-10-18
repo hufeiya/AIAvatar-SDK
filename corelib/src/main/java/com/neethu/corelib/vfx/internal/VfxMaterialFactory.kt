@@ -18,16 +18,20 @@ import com.google.android.filament.filamat.MaterialPackage
  *  - vfx_beam        — 舞台灯光束锥（ADD）：UV0.x=径向占比（0=轴心 1=锥缘）、
  *    UV0.y=长度进度（0=灯口 1=末端），fragment 纯数学算软边+纵向渐隐——
  *    beam 局部坐标逐顶点烘焙进 UV，任意视角截面都是软光柱（drei SpotLight
- *    的径向渐隐思路，docs/vfx-quality-upgrade.md §3.2）。
+ *    的径向渐隐思路，docs/vfx-quality-upgrade.md §3.2）；
+ *  - vfx_decal       — 贴花（P2 法阵/护盾）：OBJECT 域静态网格 + 实体变换
+ *    （自转/跟随锚点），tex × 顶点色 × intensity——Fresnel 明度由 CPU 逐帧
+ *    写进穹顶顶点色（DecalGeometry.fresnelShades），本色/淡出全在顶点色里。
  *
  * 参数表（唯一事实源，坑 10：设置未声明的 uniform 是 SIGABRT）：
- *  mainTexture（sampler）+ intensity（float）；beam: color（float3）+ intensity。
+ *  mainTexture（sampler）+ intensity（float）；beam/decal: color（float3）+ intensity。
  */
 internal class VfxMaterialFactory private constructor(private val engine: Engine) {
 
     val additive: Material
     val transparent: Material
     val beam: Material
+    val decal: Material
 
     init {
         additive = compile(
@@ -41,12 +45,14 @@ internal class VfxMaterialFactory private constructor(private val engine: Engine
             OUT_LINE = "material.baseColor = vec4(c.rgb * c.a * materialParams.intensity, c.a);",
         )
         beam = compileBeam()
+        decal = compileDecal()
     }
 
     fun destroy() {
         engine.destroyMaterial(additive)
         engine.destroyMaterial(transparent)
         engine.destroyMaterial(beam)
+        engine.destroyMaterial(decal)
     }
 
     private fun compile(
@@ -123,6 +129,47 @@ internal class VfxMaterialFactory private constructor(private val engine: Engine
             )
         val pkg = builder.build()
         check(pkg.isValid) { "VFX material vfx_beam failed to compile" }
+        return Material.Builder().payload(pkg.buffer, pkg.buffer.remaining()).build(engine)
+    }
+
+    /**
+     * vfx_decal：贴花材质（P2 法阵/护盾）。OBJECT 域（静态网格 + 实体变换，
+     * beam 同款）；顶点色 RGB = 本色×Fresnel 明度（CPU 逐帧）、alpha = 淡出
+     * 包络；ADD 预乘同 vfx_additive 语义。坑 12：uniform 全走结构体语法。
+     */
+    private fun compileDecal(): Material {
+        MaterialBuilder.init()
+        val builder = MaterialBuilder()
+            .name("vfx_decal")
+            .platform(MaterialBuilder.Platform.MOBILE)
+            .optimization(MaterialBuilder.Optimization.SIZE)
+            .shading(MaterialBuilder.Shading.UNLIT)
+            .blending(MaterialBuilder.BlendingMode.ADD)
+            .depthWrite(false)
+            .culling(MaterialBuilder.CullingMode.NONE)   // 地面/穹顶各自在 MI 上剔 BACK
+            .flipUV(false)
+            .require(MaterialBuilder.VertexAttribute.UV0)
+            .require(MaterialBuilder.VertexAttribute.COLOR)
+            .samplerParameter(
+                MaterialBuilder.SamplerType.SAMPLER_2D,
+                MaterialBuilder.SamplerFormat.FLOAT,
+                MaterialBuilder.ParameterPrecision.DEFAULT,
+                "mainTexture",
+            )
+            .uniformParameter(MaterialBuilder.UniformType.FLOAT, "intensity")
+            .material(
+                """
+                void material(inout MaterialInputs material) {
+                    prepareMaterial(material);
+                    vec4 tex = texture(materialParams_mainTexture, getUV0());
+                    vec4 vc = getColor();
+                    float a = tex.a * vc.a * materialParams.intensity;
+                    material.baseColor = vec4(tex.rgb * vc.rgb * a, 1.0); // ADD 预乘
+                }
+                """.trimIndent()
+            )
+        val pkg = builder.build()
+        check(pkg.isValid) { "VFX material vfx_decal failed to compile" }
         return Material.Builder().payload(pkg.buffer, pkg.buffer.remaining()).build(engine)
     }
 

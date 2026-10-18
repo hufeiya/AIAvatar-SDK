@@ -1352,6 +1352,133 @@
         }
       ],
       "license": "CC0 (self-made)"
+    },
+    {
+      "id": "magic_circle",
+      "name": "魔法阵",
+      "nameEn": "Magic Circle",
+      "texture": "textures/magic_circle.png",
+      "maxParticles": 1,
+      "decals": [
+        {
+          "shape": "ground_circle",
+          "texture": "textures/magic_circle.png",
+          "radius": 1.15,
+          "heightOffset": 0.02,
+          "color": [
+            0.42,
+            0.62,
+            1.0,
+            1
+          ],
+          "intensity": 1.05,
+          "spinSpeed": 36,
+          "pulseStrength": 0.22,
+          "pulseFrequency": 0.7
+        }
+      ],
+      "layers": [
+        {
+          "id": "magic_motes",
+          "name": "阵内光尘",
+          "texture": "textures/soft_dot.png",
+          "blending": "additive",
+          "maxParticles": 40,
+          "overflow": "recycle_oldest",
+          "rate": 14,
+          "lifetime": [
+            1.8,
+            2.8
+          ],
+          "size": [
+            0.008,
+            0.02
+          ],
+          "emitter": {
+            "shape": "cone",
+            "center": [
+              0,
+              0.05,
+              0
+            ],
+            "radius": 0.55,
+            "direction": [
+              0,
+              0.55,
+              0
+            ],
+            "speed": [
+              0.15,
+              0.35
+            ],
+            "radialFraction": 0.4
+          },
+          "behaviors": [
+            {
+              "type": "turbulence",
+              "strength": 0.9,
+              "scale": 1.1,
+              "evolution": 0.5,
+              "curl": true
+            },
+            {
+              "type": "color_over_life",
+              "keys": [
+                [
+                  0.0,
+                  0.55,
+                  0.8,
+                  1.0,
+                  0
+                ],
+                [
+                  0.2,
+                  0.55,
+                  0.8,
+                  1.0,
+                  0.85
+                ],
+                [
+                  1.0,
+                  0.35,
+                  0.45,
+                  1.0,
+                  0
+                ]
+              ]
+            }
+          ],
+          "license": "CC0 (self-made)"
+        }
+      ],
+      "license": "CC0 (self-made)"
+    },
+    {
+      "id": "shield",
+      "name": "护盾",
+      "nameEn": "Shield",
+      "texture": "textures/shield.png",
+      "maxParticles": 1,
+      "decals": [
+        {
+          "shape": "dome",
+          "texture": "textures/shield.png",
+          "radius": 0.85,
+          "heightOffset": 0,
+          "color": [
+            0.45,
+            0.8,
+            1.0,
+            1
+          ],
+          "intensity": 0.85,
+          "spinSpeed": 12,
+          "rim": 1.8,
+          "pulseStrength": 0.35,
+          "pulseFrequency": 0.5
+        }
+      ],
+      "license": "CC0 (self-made)"
     }
   ]
 }

@@ -34,13 +34,14 @@ class VfxCatalogTest {
     }
 
     @Test
-    fun `sidecar 解析出 10 配方且 id 齐全`() {
+    fun `sidecar 解析出 12 配方且 id 齐全`() {
         val (presets, errors) = parseWithErrors(sidecarText())
-        assertEquals("解析诊断: $errors", 10, presets.size)
+        assertEquals("解析诊断: $errors", 12, presets.size)
         assertEquals(
             setOf(
                 "spark_burst", "snow", "ring_pulse", "rain", "fire", "confetti",
                 "petals", "lightstick_spark", "stage_lights", "spotlight",
+                "magic_circle", "shield",
             ),
             presets.map { it.id }.toSet(),
         )
@@ -172,5 +173,45 @@ class VfxCatalogTest {
             VfxCatalog.parse(sidecarText()).map { it.id }.toSet(),
             VfxPresets.all.keys,
         )
+    }
+    // ── P2 贴花 ──────────────────────────────────────────────────────────
+
+    @Test
+    fun `decal 条目解析成 DecalParams 且脏形状丢弃`() {
+        val text = """
+            {"presets":[
+              {"id":"a","decals":[{"shape":"ground_circle","texture":"textures/magic_circle.png",
+                "radius":1.4,"spinSpeed":42.0,"color":[0.1,0.2,0.3,1.0],"rim":2.0}]},
+              {"id":"b","decals":[{"shape":"dome","radius":0.8,"rim":3.0}]},
+              {"id":"c","decals":[{"shape":"banana"}]}
+            ]}
+        """.trimIndent()
+        val (presets, errors) = parseWithErrors(text)
+        // 脏形状 decal 被丢弃（id=c 降级 decals 空表，与 lights 软钳一致）
+        assertEquals("解析诊断: $errors", 3, presets.size)
+        assertTrue("脏形状丢弃", presets.first { it.id == "c" }.decals.isEmpty())
+        val ground = presets.first { it.id == "a" }.decals.single()
+        assertEquals(com.neethu.corelib.vfx.DecalShape.GROUND_CIRCLE, ground.shape)
+        assertEquals(1.4f, ground.radiusMeters, 1e-6f)
+        assertEquals(42f, ground.spinSpeedDegPerSec, 1e-4f)
+        assertEquals(0.1f, ground.color.r, 1e-6f)
+        val dome = presets.first { it.id == "b" }.decals.single()
+        assertEquals(com.neethu.corelib.vfx.DecalShape.DOME, dome.shape)
+        assertEquals(3.0f, dome.rimStrength, 1e-6f)
+    }
+
+    @Test
+    fun `decal 超上限降级空表且 radius 钳制`() {
+        val many = (1..3).joinToString(",") {
+            """{"id":"d$it","decals":[{"shape":"dome"},{"shape":"dome"},{"shape":"dome"}]}"""
+        }
+        val presets = VfxCatalog.parse("""{"presets":[$many]}""")
+        // 与 lights 同款软钳：条目保留、decals 清空（MAX_DECALS=2）
+        assertEquals(3, presets.size)
+        assertTrue(presets.all { it.decals.isEmpty() })
+        val clamped = VfxCatalog.parse(
+            """{"presets":[{"id":"big","decals":[{"shape":"dome","radius":99.0}]}]}""",
+        ).single().decals.single()
+        assertTrue(clamped.radiusMeters <= 6f)
     }
 }

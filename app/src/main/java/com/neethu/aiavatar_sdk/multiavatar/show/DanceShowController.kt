@@ -57,6 +57,9 @@ internal class DanceShowController(
     /** 曲目白名单（归一后的完整 assets 路径），启动时全库扫描。 */
     val whitelist: Set<String> = scanAnimationWhitelist(context)
 
+    /** 特效白名单（P2 点播特效走导播链：目录 id 表，空目录=不宣传 fx 能力）。 */
+    val fxWhitelist: Set<String> = VfxCatalog.all(context).keys
+
     /** 背景音乐（P1：music 幕的落点；随停演/页面停止收干净）。 */
     private val music = MusicPlayer(context, ::log)
 
@@ -208,13 +211,17 @@ internal class DanceShowController(
         }
         val members = castMembers()
         scope.launch {
-            val decision = router.route(text, members, whitelist)
+            val decision = router.route(text, members, whitelist, fxWhitelist)
             recordDecision("dm「${text.take(20)}」→ ${decisionSummary(decision)}")
             when (decision) {
                 is RequestDecision.Insert -> {
-                    val clipName = decision.act.clip?.substringAfterLast('/') ?: "-"
+                    val desc = if (decision.act.type == ActTypes.FX) {
+                        "特效幕 ${decision.act.fx}"
+                    } else {
+                        "${decision.act.performer} ${decision.act.clip?.substringAfterLast('/') ?: "-"}"
+                    }
                     if (director.enqueueAct(decision.act)) {
-                        log("点播插幕（${decision.track}）: ${decision.act.performer} $clipName — ${decision.reason}")
+                        log("点播插幕（${decision.track}）: $desc — ${decision.reason}")
                     } else {
                         log("点播未受理: 演出已收场")
                     }

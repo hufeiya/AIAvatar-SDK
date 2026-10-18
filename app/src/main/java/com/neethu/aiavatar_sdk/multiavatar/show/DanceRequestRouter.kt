@@ -80,12 +80,14 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
 
     /**
      * 点播入口：先规则档；未中走 LLM 档（未开启/缺 Key/超时/垃圾输出/白名单
-     * 校验失败 → Reject，原因行供 director_log 回显）。
+     * 校验失败 → Reject，原因行供 director_log 回显）。[fxWhitelist] 为特效
+     * preset id 表（P2：点播特效走导播链，空表 = 不向模型宣传特效能力）。
      */
     suspend fun route(
         text: String,
         cast: List<RequestCastMember>,
         whitelist: Set<String>,
+        fxWhitelist: Set<String> = emptySet(),
     ): RequestDecision {
         ruleTrack(text, cast, whitelist)?.let { return it }
         val llmPolicy = policy as? RequestPolicy.Llm
@@ -97,7 +99,7 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
         llmCalls++
         val startedAt = System.currentTimeMillis()
         val result = withTimeoutOrNull(llmPolicy.timeoutMs) {
-            runCatching { complete(llmPolicy.llm, buildMessages(text, cast, whitelist), cfg) }.getOrNull()
+            runCatching { complete(llmPolicy.llm, buildMessages(text, cast, whitelist, fxWhitelist), cfg) }.getOrNull()
         }
         lastLatencyMs = System.currentTimeMillis() - startedAt
         if (result == null) {
@@ -107,7 +109,7 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
         val (raw, usage) = result
         tokPrompt += usage?.promptTokens ?: 0
         tokCompletion += usage?.completionTokens ?: 0
-        return parse(raw, cast, whitelist)
+        return parse(raw, cast, whitelist, fxWhitelist)
             ?: run {
                 llmFails++
                 RequestDecision.Reject("LLM 输出未过白名单校验: ${raw.take(RAW_SNIPPET)}")
@@ -215,6 +217,7 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
         text: String,
         cast: List<RequestCastMember>,
         whitelist: Set<String>,
+        fxWhitelist: Set<String> = emptySet(),
     ): List<ChatMessage> {
         val roster = cast.joinToString("\n") { "- ${it.id}（${it.displayName}）" }
         val clips = whitelist.map { it.removePrefix("animations/").removeSuffix(".vrma") }
@@ -224,6 +227,10 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
             appendLine(roster)
             appendLine("曲目清单（类别/文件名，点播跳舞优先从 08_舞蹈与表演 类挑）：")
             appendLine(clips)
+            if (fxWhitelist.isNotEmpty()) {
+                appendLine("特效清单（点播氛围/灯光/魔法效果时填 fx 字段）：")
+                appendLine(fxWhitelist.sorted().joinToString("\n"))
+            }
             append("观众点播：「$text」。请从清单里翻译成一场插入演出并输出 JSON。")
         }
         return listOf(
@@ -234,28 +241,38 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
 
     /**
      * 解析+白名单双向校验：截首个平衡 JSON（圆桌 LlmDirector.parse 同款），
-     * performer 解析回在场演员 id（id 或显示名）、clip 归一后必须在白名单内；
-     * 任何一关不过返回 null = 调用方拒绝降级。
+     * performer 解析回在场演员 id（id 或显示名）、clip 归一后必须在白名单内、
+     * fx 必须在特效白名单内（P2）；任何一关不过返回 null = 调用方拒绝降级。
+     * clip 与 fx 同时给出时优先 clip（点播跳舞的主语义）。
      */
     internal fun parse(
         raw: String,
         cast: List<RequestCastMember>,
         whitelist: Set<String>,
+        fxWhitelist: Set<String> = emptySet(),
     ): RequestDecision? {
         val obj = firstJsonObject(raw)?.let {
             runCatching { lenientJson.parseToJsonElement(it) }.getOrNull() as? JsonObject
         } ?: return null
         fun str(key: String) = (obj[key] as? JsonPrimitive)?.content?.trim()
-        val performer = resolvePerformer(str("performer").orEmpty(), cast) ?: return null
-        val clip = str("clip")?.takeIf { it.isNotBlank() }
-            ?.let { resolveClipAsset(it) }?.takeIf { it in whitelist } ?: return null
         val line = str("line")?.takeIf { it.isNotBlank() }?.take(MAX_LINE_CHARS)
         val reason = str("reason")?.take(24).orEmpty().ifEmpty { "LLM 点播" }
-        return RequestDecision.Insert(
-            insertAct(performer, clip, line),
-            track = "llm",
-            reason = reason,
-        )
+        val fxId = str("fx")?.takeIf { it.isNotBlank() }
+        val clip = str("clip")?.takeIf { it.isNotBlank() }
+            ?.let { resolveClipAsset(it) }?.takeIf { it in whitelist }
+        return when {
+            clip != null -> {
+                val performer = resolvePerformer(str("performer").orEmpty(), cast) ?: return null
+                RequestDecision.Insert(insertAct(performer, clip, line), track = "llm", reason = reason)
+            }
+
+            // 点播特效（P2）：fx 幕是舞台级事件，performer 不参与；白名单外拒绝
+            fxId != null && fxWhitelist.any { it.equals(fxId, ignoreCase = true) } -> {
+                RequestDecision.Insert(insertFxAct(fxWhitelist.first { it.equals(fxId, true) }), track = "llm", reason = reason)
+            }
+
+            else -> return null
+        }
     }
 
     /** 点播文本里的演员 → 在场演员 id（id/显示名精确相等优先，容忍「让A跳」截出的 id）。 */
@@ -275,6 +292,12 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
         camera = "full",
         fans = listOf(FanActions.CLAP),
         line = line,
+    )
+
+    /** 插出的特效幕（P2）：舞台中心 fx 幕，时长走 ShowDirector 缺省。 */
+    private fun insertFxAct(fxId: String) = ShowAct(
+        type = ActTypes.FX,
+        fx = fxId,
     )
 
     private val lenientJson = Json {
@@ -323,9 +346,10 @@ class DanceRequestRouter(private val policy: RequestPolicy) {
         val ROUTER_SYSTEM =
             "你是虚拟人团播的导播。观众用一句话点播（可能口语、含糊），你把它翻译成一场插入演出。" +
                 "只输出一个 JSON 对象：" +
-                "{\"performer\":\"演员id\",\"clip\":\"清单里的曲目\",\"line\":\"不超过20字的串场词\",\"reason\":\"不超过12字理由\"}；" +
+                "{\"performer\":\"演员id\",\"clip\":\"清单里的曲目\",\"fx\":\"清单里的特效(仅点播特效时填,与clip二选一)\"," +
+                "\"line\":\"不超过20字的串场词\",\"reason\":\"不超过12字理由\"}；" +
                 "清单里挑不出合适曲目时输出 {\"performer\":\"\",\"clip\":\"\",\"reason\":\"无合适曲目\"}。" +
-                "严禁发明清单外的任何演员或曲目，不要输出其他内容。"
+                "严禁发明清单外的任何演员、曲目或特效，不要输出其他内容。"
 
         val POLISH_SYSTEM =
             "你是团播串场词润色师。把给定的串场词改写成一句意思相同的口语变体（不超过20字），保持热情的主持人语气。" +

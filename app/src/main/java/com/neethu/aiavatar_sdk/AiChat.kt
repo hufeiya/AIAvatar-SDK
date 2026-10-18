@@ -91,6 +91,12 @@ data class AiChatPrefs(
      * 身份签名刻意不含（与其他工具开关同列）。
      */
     val accessoryTools: Boolean = true,
+    /**
+     * 特效工具（P2，docs/vfx-feasibility.md §六 P2）：play_effect/stop_effect
+     * 两工具（跟随 agentTools 总开关）。**默认关**——特效是观感面，模型滥调
+     * 会刷屏，且部分特效带真灯有帧预算，用户显式开启。身份签名刻意不含。
+     */
+    val fxTools: Boolean = false,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -169,6 +175,7 @@ private const val KEY_AI_LLM_MOVE = "ai_llm_move"
 private const val KEY_AI_MEMORY = "ai_agent_memory"
 private const val KEY_AI_MEMORY_AUTO_EXTRACT = "ai_memory_auto_extract"
 private const val KEY_AI_ACCESSORY_TOOLS = "ai_accessory_tools"
+private const val KEY_AI_FX_TOOLS = "ai_fx_tools"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -205,6 +212,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         memory = getBoolean(KEY_AI_MEMORY, true),
         memoryAutoExtract = getBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, true),
         accessoryTools = getBoolean(KEY_AI_ACCESSORY_TOOLS, true),
+        fxTools = getBoolean(KEY_AI_FX_TOOLS, false),
     )
 }
 
@@ -229,6 +237,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_MEMORY, p.memory)
         .putBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, p.memoryAutoExtract)
         .putBoolean(KEY_AI_ACCESSORY_TOOLS, p.accessoryTools)
+        .putBoolean(KEY_AI_FX_TOOLS, p.fxTools)
         .apply()
 }
 

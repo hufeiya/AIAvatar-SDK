@@ -346,6 +346,94 @@ def gen_smoke():
     save(img, "smoke.png")
 
 
+# ── magic_circle：地面魔法阵（P2 贴花；同心圆环+刻度+符文点+六芒星，
+#    白色 RGB+alpha，色调走 vfx_decal 顶点色；图案含在 UV 圆内）────────────
+def gen_magic_circle():
+    S = 512
+    img = Image.new("RGBA", (S, S), (255, 255, 255, 0))
+    d = ImageDraw.Draw(img)
+    c = (S - 1) / 2.0
+    white = (255, 255, 255, 255)
+
+    def ring(radius, width, alpha):
+        d.ellipse([c - radius, c - radius, c + radius, c + radius],
+                  outline=(255, 255, 255, alpha), width=width)
+
+    # 多重同心圆环
+    ring(244, 6, 235)
+    ring(224, 2, 200)
+    ring(150, 3, 215)
+    ring(96, 2, 190)
+
+    # 外环刻度（60 根短径向线）
+    for k in range(60):
+        ang = 2.0 * math.pi * k / 60.0
+        r0, r1 = 232.0, 242.0
+        d.line([(c + r0 * math.cos(ang), c + r0 * math.sin(ang)),
+                (c + r1 * math.cos(ang), c + r1 * math.sin(ang))],
+               fill=(255, 255, 255, 170), width=2)
+
+    # 中环符文点（12 个小菱形——弱方向性「符文」，避免具象文字）
+    for k in range(12):
+        ang = 2.0 * math.pi * k / 12.0 + 0.13
+        rx, ry = c + 187.0 * math.cos(ang), c + 187.0 * math.sin(ang)
+        s = 7.0
+        d.polygon([(rx, ry - s), (rx + s, ry), (rx, ry + s), (rx - s, ry)],
+                  fill=(255, 255, 255, 225))
+
+    # 内区六芒星（两个错相三角）
+    for phase in (0.0, math.pi / 3.0):
+        pts = [(c + 144.0 * math.cos(2.0 * math.pi * k / 3.0 + phase - math.pi / 2.0),
+                c + 144.0 * math.sin(2.0 * math.pi * k / 3.0 + phase - math.pi / 2.0))
+               for k in range(3)]
+        d.polygon(pts, outline=(255, 255, 255, 230), width=4)
+
+    # 中心小板 + 光晕点
+    d.ellipse([c - 14, c - 14, c + 14, c + 14], outline=white, width=3)
+    d.ellipse([c - 4, c - 4, c + 4, c + 4], fill=white)
+
+    img = img.filter(ImageFilter.GaussianBlur(1.0))
+    save(img, "magic_circle.png")
+
+
+# ── shield：护盾穹顶贴图（P2 贴花；横向可平铺六角网+竖向渐隐——u=方位角
+#    0..1 环绕，左右边周期一致；明暗靠 CPU Fresnel 顶点色。底光晕必须给足
+#    alpha——真机首验：细线低 alpha 在 additive 下不可辨，穹顶「隐身」）────
+def gen_shield():
+    S = 256
+    # 底光晕层：竖向渐隐的整体薄罩（穹顶读作半透明泡，Fresnel 在其上叠亮边）
+    ys = (np.arange(S, dtype="float32") + 0.5) / S
+    grad = (1.0 - 0.85 * ys)  # v=0（仰角0°=底缘）→ 1.0，v=1（顶缘）→ 0.15
+    fill = np.zeros((S, S, 4), dtype="float32")
+    fill[..., 0] = 255
+    fill[..., 1] = 255
+    fill[..., 2] = 255
+    fill[..., 3] = 105.0 * grad[:, None]
+    img = Image.fromarray(fill.astype("uint8"), "RGBA")
+
+    # 六角网线层（比底晕亮一档）：8 列整除宽度、行错位半个周期（u 周期严格 = S）
+    overlay = Image.new("RGBA", (S, S), (255, 255, 255, 0))
+    od = ImageDraw.Draw(overlay)
+    hex_w = S / 8.0
+    hex_h = hex_w * math.sqrt(3.0)
+    rows = int(math.ceil(S / (hex_h / 2.0))) + 1
+    for row in range(rows):
+        y = row * hex_h / 2.0
+        xoff = (hex_w / 2.0) if row % 2 else 0.0
+        col = -1
+        while True:
+            x = col * hex_w + xoff
+            if x - hex_w / 2.0 > S:
+                break
+            pts = [(x + (hex_w / 2.0) * 0.92 * math.cos(math.pi / 3.0 * k + math.pi / 6.0),
+                    y + (hex_w / 2.0) * 0.92 * math.sin(math.pi / 3.0 * k + math.pi / 6.0))
+                   for k in range(6)]
+            od.polygon(pts, outline=(255, 255, 255, 210), width=3)
+            col += 1
+    img = Image.alpha_composite(img, overlay)
+    save(img, "shield.png")
+
+
 if __name__ == "__main__":
     gen_soft_dot()
     gen_spark()
@@ -356,4 +444,6 @@ if __name__ == "__main__":
     gen_flame_8x8()
     gen_snowflake()
     gen_smoke()
+    gen_magic_circle()
+    gen_shield()
     print("done.")

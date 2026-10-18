@@ -30,6 +30,10 @@ import kotlin.math.sqrt
  * 复合层（VfxSpec.layers）：一个预设 = 多个子发射器（火焰 = 火苗+辉光+火星+
  * 烟），共享锚点与生命周期；全层播完才自停。舞台灯组（VfxSpec.lights）挂
  * [VfxStageLightRig]（真灯+光束+地面光斑），纯灯特效永不自停（stop 才停）。
+ * 贴花组（VfxSpec.decals，P2 法阵/护盾）挂 [VfxDecalRig]，纯贴花同款常驻；
+ * 移除路径（stop/stopAll/锚失效/播完/destroy）全部同步销毁 decal 架（新坑 4
+ * 纪律：新资源入生命周期，全移除路径必须收口）。CameraFront 锚点每帧用
+ * eye+forward 解析（app 层零相机依赖）。
  *
  * 批按（混合档 × 贴图 × 渲染模式）键控（材质实例一张 mainTexture，异贴图/
  * 异顶点布局不能共批；全屏 draw call 数 = 在用组合数，个位数）。贴图缓存
@@ -57,8 +61,10 @@ internal class VfxManager(private val host: VfxHost) {
         val spec: VfxSpec,
         val layers: List<Layer>,
         val rig: VfxStageLightRig?,
+        /** 贴花架（P2 法阵/护盾；null = 无 decals）。 */
+        val decals: VfxDecalRig?,
         val anchor: VfxAnchor,
-        /** 世界坐标锚点缓存（World = 一次写入；Bone = 每帧覆写）。 */
+        /** 世界坐标锚点缓存（World = 一次写入；Bone/CameraFront = 每帧覆写）。 */
         val anchorPos: FloatArray,
         val anchorText: String,
         var age: Float,
@@ -153,6 +159,13 @@ internal class VfxManager(private val host: VfxHost) {
                 if (!ok) pos[1] = 1f // 兜底抬到腰部量级，可见性优先；随后每帧重解析
                 text = "bone:${anchor.boneName}${anchor.avatarId?.let { "@$it" } ?: ""}"
             }
+
+            is VfxAnchor.CameraFront -> {
+                // 播放瞬间无相机三元组（update 每帧解析）：先给个取景框内的
+                // 占位，首个 update 帧即被覆写（play 在帧间执行，不会渲染该值）
+                pos[0] = 0f; pos[1] = 1.2f; pos[2] = -2.8f
+                text = "camera_front(%.1fm)".format(anchor.distanceMeters)
+            }
         }
 
         // 舞台灯架（纯灯特效 = layers 无粒子也常驻）
@@ -165,16 +178,26 @@ internal class VfxManager(private val host: VfxHost) {
             )
         }
 
+        // 贴花架（P2 法阵/护盾；构建失败的单张贴花在 rig 内部降级跳过）
+        var decalRig: VfxDecalRig? = null
+        if (spec.decals.isNotEmpty()) {
+            decalRig = VfxDecalRig(
+                host.vfxEngine, host.vfxScene, factory.decal,
+                spec.decals.map { VfxDecalRig.Binding(it, ensureTexture(it.texture)) },
+            )
+        }
+
         val handle = VfxHandle("fx${idCounter.incrementAndGet()}")
-        active.add(Active(handle, spec, plan, rig, anchor, pos, text, 0f))
+        active.add(Active(handle, spec, plan, rig, decalRig, anchor, pos, text, 0f))
         publish()
-        Log.i(TAG, "play '${spec.id}' as ${handle.id} (${spec.blending}, ${plan.size} layer(s), ${spec.lights.size} light(s) @ $text)")
+        Log.i(TAG, "play '${spec.id}' as ${handle.id} (${spec.blending}, ${plan.size} layer(s), " +
+            "${spec.lights.size} light(s), ${spec.decals.size} decal(s) @ $text)")
         return handle
     }
 
-    /** 停止一个特效（粒子当帧不再写出；灯架同帧摘除——真机回归抓漏：
+    /** 停止一个特效（粒子当帧不再写出；灯架/贴花架同帧摘除——真机回归抓漏：
      *  stop 不销毁 rig 会让光束 MI/灯实体跨次播放累积，毁材质时
-     *  "N instances still alive" PreconditionPanic）。 */
+     *  "N instances still alive" PreconditionPanic；decal 架同理收口）。 */
     fun stop(id: String): Boolean {
         var removedAny = false
         val it = active.iterator()
@@ -182,6 +205,7 @@ internal class VfxManager(private val host: VfxHost) {
             val a = it.next()
             if (a.handle.id == id) {
                 a.rig?.destroy()
+                a.decals?.destroy()
                 it.remove()
                 removedAny = true
             }
@@ -190,10 +214,13 @@ internal class VfxManager(private val host: VfxHost) {
         return removedAny
     }
 
-    /** 停止全部特效（同 [stop]：rig 先于列表清空销毁）。 */
+    /** 停止全部特效（同 [stop]：rig/decal 架先于列表清空销毁）。 */
     fun stopAll() {
         if (active.isEmpty()) return
-        active.forEach { it.rig?.destroy() }
+        active.forEach {
+            it.rig?.destroy()
+            it.decals?.destroy()
+        }
         active.clear()
         publish()
     }
@@ -239,19 +266,28 @@ internal class VfxManager(private val host: VfxHost) {
         var i = 0
         while (i < active.size) {
             val a = active[i]
-            // Bone 锚点逐帧重解析（发射器跟随；实体失效→安静自停，不持陈旧引用）
-            if (a.anchor is VfxAnchor.Bone) {
-                val ok = host.vfxResolveBone(a.anchor.avatarId, a.anchor.boneName, bonePos)
-                if (!ok) {
-                    Log.i(TAG, "anchor lost for ${a.handle.id} (${a.anchorText}); auto-stopping")
-                    a.rig?.destroy()
-                    active.removeAt(i)
-                    removedAny = true
-                    continue
+            // 每帧重解析锚点：Bone 跟骨骼（实体失效→安静自停，不持陈旧引用）；
+            // CameraFront 跟镜头（eye+forward·距离，VfxMath.cameraFrontPoint）
+            when (val anc = a.anchor) {
+                is VfxAnchor.Bone -> {
+                    val ok = host.vfxResolveBone(anc.avatarId, anc.boneName, bonePos)
+                    if (!ok) {
+                        Log.i(TAG, "anchor lost for ${a.handle.id} (${a.anchorText}); auto-stopping")
+                        a.rig?.destroy()
+                        a.decals?.destroy()
+                        active.removeAt(i)
+                        removedAny = true
+                        continue
+                    }
+                    a.anchorPos[0] = bonePos[0]
+                    a.anchorPos[1] = bonePos[1]
+                    a.anchorPos[2] = bonePos[2]
                 }
-                a.anchorPos[0] = bonePos[0]
-                a.anchorPos[1] = bonePos[1]
-                a.anchorPos[2] = bonePos[2]
+
+                is VfxAnchor.CameraFront ->
+                    VfxMath.cameraFrontPoint(eye, forward, anc.distanceMeters, a.anchorPos)
+
+                is VfxAnchor.World -> Unit
             }
             i++
         }
@@ -262,7 +298,7 @@ internal class VfxManager(private val host: VfxHost) {
         i = 0
         while (i < active.size) {
             val a = active[i]
-            var allFinished = a.rig == null
+            var allFinished = a.rig == null && a.decals == null
             for (layer in a.layers) {
                 val count = layer.system.update(
                     dt, windSeconds, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2],
@@ -275,8 +311,10 @@ internal class VfxManager(private val host: VfxHost) {
             }
             a.age += dt
             a.rig?.update(a.age, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2])
+            a.decals?.update(a.age, a.anchorPos[0], a.anchorPos[1], a.anchorPos[2], eye)
             if (allFinished) {
                 a.rig?.destroy()
+                a.decals?.destroy()
                 active.removeAt(i)
                 removedAny = true
                 continue // 换位补位后原下标重查
@@ -362,7 +400,10 @@ internal class VfxManager(private val host: VfxHost) {
     fun destroy() {
         if (destroyed) return
         destroyed = true
-        active.forEach { it.rig?.destroy() }
+        active.forEach {
+            it.rig?.destroy()
+            it.decals?.destroy()
+        }
         active.clear()
         batches.values.forEach { it.destroy() }
         batches.clear()

@@ -217,6 +217,24 @@ interface PromptTexts {
     /** 挂载/卸载执行缝失败（渲染层缺失等）的错误文案。 */
     val toolAccessoryFailed: String
 
+    // ── 智能体工具（P2 特效，docs/vfx-feasibility.md §六 P2）────────────
+    val toolPlayEffectDescription: String
+    val toolPlayEffectHint: String
+    val toolStopEffectDescription: String
+    val toolStopEffectHint: String
+
+    /** 播放成功的确认文案。 */
+    fun toolEffectPlayed(effect: String): String
+
+    /** 停止成功的确认文案。 */
+    val toolEffectStopped: String
+
+    /** 目录查无此 id（schema 与执行时目录漂移兜底）的错误文案。 */
+    val toolEffectUnknown: String
+
+    /** 渲染层未就绪/批容量满的错误文案。 */
+    val toolEffectNotAvailable: String
+
     /**
      * 智能体工具使用说明块（钉在协议块末尾，同一条 system——部分服务商拒绝
      * 多条 system）。[hints] 是 (工具名, 时机提示) 列表；轮数上限写进块里，
@@ -592,6 +610,33 @@ object PromptTextsZh : PromptTexts {
 
     override val toolAccessoryFailed: String =
         "配饰穿戴/摘除失败了。请口头向用户说明这次没成功。"
+
+    // ── 特效（P2，docs/vfx-feasibility.md §六 P2）────────────────────────
+
+    override val toolPlayEffectDescription: String =
+        "在场景里放一段特效(雪花/篝火/魔法阵/舞台灯等,id 见参数列表)。"
+
+    override val toolPlayEffectHint: String =
+        "用户想要氛围/庆祝/魔法效果(「来点雪花」「放个烟花」「召唤魔法阵」「来点舞台特效」)时调用;" +
+            "id 必须来自参数列表,不要发明;不调用就宣称「已放特效」是错的,不要演;同一特效重复播会叠加,别刷屏。"
+
+    override val toolStopEffectDescription: String =
+        "停掉当前在播的全部场景特效。"
+
+    override val toolStopEffectHint: String =
+        "用户觉得特效吵/要收场(「把雪停了」「别放烟花了」「清掉特效」)时调用;没有特效在播时调用也无害。"
+
+    override fun toolEffectPlayed(effect: String): String =
+        "特效「$effect」已经放上了,观众现在能看到。请自然地继续对话。"
+
+    override val toolEffectStopped: String =
+        "特效都停掉了。请自然地继续对话。"
+
+    override val toolEffectUnknown: String =
+        "这个特效名不在列表里。请只用列表里的 id 重试。"
+
+    override val toolEffectNotAvailable: String =
+        "特效没能放出来(渲染没就绪或场景太满)。请口头向用户说明这次没成功。"
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {
@@ -1007,6 +1052,36 @@ object PromptTextsEn : PromptTexts {
 
     override val toolAccessoryFailed: String =
         "Wearing/removing the accessory failed. Tell the user it didn't work this time."
+
+    // ── Effects (P2, docs/vfx-feasibility.md §六 P2) ────────────────────
+
+    override val toolPlayEffectDescription: String =
+        "Play a scene effect (snowfall/campfire/magic circle/stage lights etc.; ids are listed in the schema)."
+
+    override val toolPlayEffectHint: String =
+        "Call when the user wants atmosphere, celebration or a magic moment (\"make it snow\", " +
+            "\"some fireworks\", \"summon a magic circle\"); the id MUST come from the schema list — " +
+            "never invent one; claiming an effect is playing without calling is wrong, never act it out; " +
+            "replaying the same effect stacks, don't spam it."
+
+    override val toolStopEffectDescription: String =
+        "Stop every scene effect that is currently playing."
+
+    override val toolStopEffectHint: String =
+        "Call when the user finds effects noisy or wants to wrap up (\"stop the snow\", \"cut the " +
+            "fireworks\", \"clear the effects\"); calling it with nothing playing is harmless."
+
+    override fun toolEffectPlayed(effect: String): String =
+        "The \"$effect\" effect is now playing and visible to the audience. Continue naturally."
+
+    override val toolEffectStopped: String =
+        "All effects have been stopped. Continue naturally."
+
+    override val toolEffectUnknown: String =
+        "That effect id is not in the list. Retry with an id from the list only."
+
+    override val toolEffectNotAvailable: String =
+        "The effect could not be played (renderer not ready or the scene is too full). Tell the user it didn't work this time."
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {

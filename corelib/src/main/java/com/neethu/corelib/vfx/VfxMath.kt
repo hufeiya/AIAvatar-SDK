@@ -197,6 +197,21 @@ object VfxMath {
     }
 
     /**
+     * 镜头前悬浮点（VfxAnchor.CameraFront 每帧解析）：p = eye + forward·d。
+     * 写入 [out]（3 float），纯函数零分配。forward 已由调用方归一。
+     */
+    fun cameraFrontPoint(
+        eye: FloatArray,
+        forward: FloatArray,
+        distanceMeters: Float,
+        out: FloatArray,
+    ) {
+        out[0] = eye[0] + forward[0] * distanceMeters
+        out[1] = eye[1] + forward[1] * distanceMeters
+        out[2] = eye[2] + forward[2] * distanceMeters
+    }
+
+    /**
      * 折线曲线采样（ScalarKey 升序）：t 钳 [first.t, last.t]，段内线性插值。
      * [flat] = [t0, v0, t1, v1, …]（调用方把 keys 摊平，避免热路径迭代器分配）。
      */
