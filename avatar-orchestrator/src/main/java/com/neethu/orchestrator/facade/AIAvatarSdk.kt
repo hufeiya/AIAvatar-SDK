@@ -161,6 +161,14 @@ class AIAvatarSdk(
          */
         val persona: String = "",
     ) {
+        /**
+         * /models 实时目录注入缝（demo 设置页下拉实时拉取的模型 id）：参与
+         * [resolvedLlmModel] 校验放行、**刻意不在构造参数里**——不进 data class
+         * 的 equals/copy，即缓存刷新/填充不改变会话身份、不触发重建（模型清单
+         * 是挑选面，不是能力面；用户真的换模型时 llmModel 字段本身会变）。
+         */
+        var catalogLlmModels: Set<String> = emptySet()
+
         /** 自定义端点模式：模型/音色透传，不走目录校验。 */
         val isCustomEndpoint: Boolean
             get() = !baseUrl.isNullOrBlank()
@@ -205,7 +213,11 @@ class AIAvatarSdk(
 
         /** 大模型解析后的模型名（目录校验 + 默认；自定义端点透传）。 */
         val resolvedLlmModel: String
-            get() = if (isCustomEndpoint) llmModel.trim() else resolveLlmModel(provider, llmModel)
+            get() = if (isCustomEndpoint) {
+                llmModel.trim()
+            } else {
+                resolveLlmModel(provider, llmModel, catalogLlmModels)
+            }
 
         /** TTS 解析后的模型名（Edge 引擎用占位值——端点不校验 model）。 */
         val resolvedTtsModel: String
@@ -327,6 +339,11 @@ class AIAvatarSdk(
                 // OpenRouter 同一 OpenAI 兼容 schema，适配器直接复用
                 ChatProvider.OPENROUTER ->
                     OpenAiCompatibleTtsAdapter(config.ttsBaseUrl, config.ttsKeyResolved)
+                // 百炼 qwen3-tts 走 DashScope 原生协议（compatible-mode 的
+                // /audio/speech 实测 404）：适配器内部 POST 原生端点 → OSS 下载
+                // → 重采样 16k PCM 直喂口型管线（详见适配器 KDoc）
+                ChatProvider.BAILIAN ->
+                    com.neethu.aiadapter.bailian.BailianTtsAdapter(config.ttsKeyResolved)
                 // DeepSeek 无 TTS 端点，ttsEngineResolved 已把选它的请求归入上方
                 // EDGE 分支；此臂编译期兜底（枚举穷尽所需），运行期不可达
                 ChatProvider.DEEPSEEK ->
@@ -382,6 +399,16 @@ class AIAvatarSdk(
                         model = config.resolvedTtsModel,
                         voice = config.resolvedVoice,
                         responseFormat = "mp3",
+                    )
+                // 百炼 qwen3-tts：适配器已把 WAV(24k) 重采样成 16k PCM 返回
+                // （wLipSync 标定输入率，分数降采样路径见附录A 教训），这里
+                // sampleRate 与 TtsResult.rawPcmSampleRate 同值
+                ChatProvider.BAILIAN ->
+                    TtsConfig(
+                        model = config.resolvedTtsModel,
+                        voice = config.resolvedVoice,
+                        responseFormat = "wav",
+                        sampleRate = 16_000,
                     )
                 // DeepSeek 无 TTS 端点：ttsEngineResolved 已把选它的请求归入上方
                 // EDGE 分支；此臂编译期兜底，运行期不可达

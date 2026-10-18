@@ -12,7 +12,9 @@ import com.neethu.orchestrator.facade.ChatProvider
  * 设置页除 API Key 外的所有 AI 配置都是下拉框选择，杜绝手输模型名
  * （2026-10 多厂商：硅基流动 + 火山引擎 + OpenRouter〔面向海外用户，一把
  * key 通吃大模型/TTS/ASR〕+ DeepSeek 官方〔只有 chat，TTS 自动回落 Edge、
- * ASR 回落硅基流动〕）。
+ * ASR 回落硅基流动〕+ 阿里云百炼〔一把 key 通吃，chat 专属端点；TTS 走
+ * DashScope 原生协议、ASR 走 chat+input_audio 定制形态〕）。模型下拉支持
+ * /models 实时拉取（内存缓存，重启失效，见 [ModelCatalogCache]）。
  */
 enum class AiProvider(
     val label: String,
@@ -64,6 +66,16 @@ enum class AiProvider(
         ttsKeyLabel = "DeepSeek API Key",
         ttsKeyHint = "sk-...",
     ),
+    BAILIAN(
+        label = "阿里云百炼",
+        sdk = ChatProvider.BAILIAN,
+        // 一把 key 通吃 大模型/TTS/ASR（chat 专属端点 + DashScope 原生 TTS +
+        // chat 形态 ASR 三端通用，同硅基流动模式）
+        llmKeyLabel = "阿里云百炼 API Key",
+        llmKeyHint = "sk-...",
+        ttsKeyLabel = "阿里云百炼 API Key（语音合成用）",
+        ttsKeyHint = "sk-...",
+    ),
     ;
 
     /** OpenAI 兼容端点（火山即方舟 Ark v3，chat/completions 同构）。 */
@@ -113,6 +125,7 @@ fun inferProviderFromBaseUrl(baseUrl: String): AiProvider = when {
     baseUrl.contains("volces.com", ignoreCase = true) -> AiProvider.VOLCANO
     baseUrl.contains("openrouter.ai", ignoreCase = true) -> AiProvider.OPENROUTER
     baseUrl.contains("deepseek.com", ignoreCase = true) -> AiProvider.DEEPSEEK
+    baseUrl.contains("aliyuncs.com", ignoreCase = true) -> AiProvider.BAILIAN
     else -> AiProvider.SILICONFLOW
 }
 
@@ -152,13 +165,14 @@ fun resolveVoice(provider: AiProvider, configured: String): String =
 fun llmExtraBody(provider: AiProvider, model: String) =
     com.neethu.orchestrator.facade.llmExtraBody(provider.sdk, model)
 
-/** ASR 实际生效的服务商：火山/DeepSeek 缺 OpenAI 兼容 ASR 端点，回落硅基流动。 */
+/** ASR 实际生效的服务商：火山/DeepSeek 缺云端 ASR 端点，回落硅基流动；百炼走自家 chat 形态直连。 */
 fun asrProviderFor(llmProvider: AiProvider): AiProvider =
     when (com.neethu.orchestrator.facade.asrProviderFor(llmProvider.sdk)) {
         ChatProvider.SILICONFLOW -> AiProvider.SILICONFLOW
         ChatProvider.VOLCANO -> AiProvider.VOLCANO
         ChatProvider.OPENROUTER -> AiProvider.OPENROUTER
         ChatProvider.DEEPSEEK -> AiProvider.DEEPSEEK
+        ChatProvider.BAILIAN -> AiProvider.BAILIAN
     }
 
 /** ASR 模型下拉的显式候选（「自动」之外）；留空时按端点推断见 [resolveAsrModel]。 */

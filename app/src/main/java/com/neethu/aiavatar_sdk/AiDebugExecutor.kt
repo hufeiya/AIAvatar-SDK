@@ -58,9 +58,9 @@ internal class AiChatDebugHooks(
     val setInputMode: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd show_buttons on|off（无参=翻转）：显隐所有悬浮按钮（切换输入模式外的话题）。 */
     val showButtons: (String?) -> String = { _ -> "AI chat not wired in this screen" },
-    /** ai_cmd set_provider siliconflow|volcano|openrouter|deepseek：切大模型服务商（模型清单随之切换）。 */
+    /** ai_cmd set_provider siliconflow|volcano|openrouter|deepseek|bailian：切大模型服务商（模型清单随之切换）。 */
     val setProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
-    /** ai_cmd set_tts_provider siliconflow|volcano|openrouter：TTS 独立服务商切换（自动取消同服务商勾选；deepseek 无 TTS 会被改道 Edge）。 */
+    /** ai_cmd set_tts_provider siliconflow|volcano|openrouter|bailian：TTS 独立服务商切换（自动取消同服务商勾选；deepseek 无 TTS 会被改道 Edge）。 */
     val setTtsProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_llm_model <清单id>：当前服务商下的大模型切换（清单校验，视频模式验证用）。 */
     val setLlmModel: (String?) -> String = { _ -> "AI chat not wired in this screen" },

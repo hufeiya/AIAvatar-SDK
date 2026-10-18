@@ -36,10 +36,12 @@ secrets.properties 键 → `demo_settings.xml` 里的 string 条目名。正本�
 | VOLCANO_TTS_API_KEY | ai_api_key_volcano_tts |
 | OPENROUTER_API_KEY | ai_api_key_openrouter |
 | DEEPSEEK_OFFICIAL_API_KEY | ai_api_key_deepseek |
+| ALIYUNBAILIAN_API_KEY | ai_api_key_bailian |
 
 - 火山有两把互不通用的 key:`VOLCANO_ARK_API_KEY` 是方舟大模型(chat),`VOLCANO_TTS_API_KEY` 是豆包语音控制台(TTS WebSocket 的 X-Api-Key)。
 - 硅基流动与 OpenRouter 的 key 各自同时用于其 LLM/TTS(OpenRouter 还含 ASR)。
 - DeepSeek 官方只有 chat(无 TTS/ASR 端点):`DEEPSEEK_OFFICIAL_API_KEY` 只喂大模型,语音合成自动走 Edge-TTS、识别回落硅基流动。
+- 阿里云百炼一把 key 通吃大模型/TTS/ASR:chat 走企业专属端点(ws-*.maas.aliyuncs.com compatible-mode),TTS 走 DashScope 原生协议,ASR 走 chat+input_audio 形态,三端同一把 key。
 
 ## 手动验证
 

@@ -128,7 +128,7 @@ fun onboardingGuideVariant(lang: Lang, aiConfigured: Boolean): GuideVariant? = w
 
 /**
  * 「确认」时的一键配置（纯函数可测）。大模型都选**免费 + 带视觉**的落点：
- * - 国内：硅基流动视觉清单首位（Qwen3.8-27B 多模态，视频模式开箱即用）；
+ * - 国内：硅基流动视觉清单首位（Qwen3-VL-32B 多模态，视频模式开箱即用）；
  * - 海外：OpenRouter 目录里名字含 "free" 的首个（用户点名规则；当前即
  *   `openrouter/free` 官方免费路由，64px 红蓝图实测真视觉）。名字含 free 的
  *   条目哪天没了就落视觉清单首位，引导不空手。

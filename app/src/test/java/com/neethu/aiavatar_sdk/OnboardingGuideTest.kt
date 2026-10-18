@@ -44,8 +44,8 @@ class OnboardingGuideTest {
         val p = withOnboardingKey(legacy, "  sk-test-123  ", GuideVariant.CN)
         assertEquals(AiProvider.SILICONFLOW, p.provider)
         assertEquals("sk-test-123", p.apiKeySiliconflow)
-        // 大模型钉住视觉多模态（用户点名的 Qwen3.8-27B）：视频模式开箱即用
-        assertEquals("Qwen/Qwen3.8-27B", p.llmModel)
+        // 大模型钉住视觉多模态（视觉清单首位=Qwen3-VL-32B）：视频模式开箱即用
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", p.llmModel)
         assertTrue(isVisionLlm(p.provider, p.llmModel))
         assertTrue(p.isConfigured)
         assertEquals(TtsEngine.OPENAI_COMPATIBLE, p.ttsEngine)

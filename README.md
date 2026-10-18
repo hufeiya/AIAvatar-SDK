@@ -33,7 +33,7 @@
 
 - **纯客户端对话管线**：LLM 流式 → 智能断句 → 并发 TTS → 顺序播放，无自建服务端
 - **免费开箱即说**：Edge-TTS（免 Key）+ 系统内置 ASR（免 Key），一个 Key 都不填也能语音对话
-- **服务商内置目录**：硅基流动 / 火山引擎 / OpenRouter / DeepSeek 一键切换，任意 OpenAI 兼容端点 `baseUrl` 覆盖
+- **服务商内置目录**：硅基流动 / 火山引擎 / OpenRouter / DeepSeek / 阿里云百炼一键切换（模型下拉实时拉取 `/models` 目录并标注视觉模型），任意 OpenAI 兼容端点 `baseUrl` 覆盖
 - **多模态行内标签**：`<emo:joy>` 表情、`<act:wave>` 动作（内置 334 个 VRMA 动画）、`<cam:closeup>` 运镜，LLM 单流直出
 - **视频通话模式**：摄像头注视（看镜头 / 跟随你的脸）、表情跟随、动作模仿
 - **导入外部 VRM 模型**：文件选择器导入即换人，表情目录自动刷新、对话上下文自动轮换
@@ -175,7 +175,7 @@ LaunchedEffect(state) {
 ```kotlin
 val chat = AIAvatarSdk(scope, controller, applicationContext)
 
-// 内置四家服务商目录（硅基流动 / 火山引擎 / OpenRouter / DeepSeek），模型/音色留空 = 服务商默认
+// 内置五家服务商目录（硅基流动 / 火山引擎 / OpenRouter / DeepSeek / 阿里云百炼），模型/音色留空 = 服务商默认（默认模型=视觉优先）
 chat.configure(AIAvatarSdk.ChatConfig(apiKey = "sk-...", ttsEngine = TtsEngine.EDGE))
 
 chat.send("今晚吃什么好？")            // LLM 流式回复，逐句 TTS 播报

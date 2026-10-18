@@ -33,7 +33,7 @@ An open-source Android 3D avatar SDK: **Filament PBR / MToon rendering + a fully
 
 - **Fully client-side conversation pipeline**: streaming LLM → smart sentence splitting → concurrent TTS → sequential playback, with no self-hosted server
 - **Free voice out of the box**: Edge-TTS (no key) + built-in system ASR (no key) — voice chat works without entering a single API key
-- **Built-in provider directory**: switch among SiliconFlow / Volcano Engine / OpenRouter / DeepSeek in one tap, or override with any OpenAI-compatible `baseUrl`
+- **Built-in provider directory**: switch among SiliconFlow / Volcano Engine / OpenRouter / DeepSeek / Alibaba Bailian in one tap (the model dropdown fetches the live `/models` catalog and tags vision models), or override with any OpenAI-compatible `baseUrl`
 - **Multimodal inline tags**: `<emo:joy>` expressions, `<act:wave>` motions (334 VRMA animations built in), `<cam:closeup>` camera shots — all emitted by the LLM in a single stream
 - **Video-call mode**: camera gaze (look at the lens / follow your face), expression mirroring, and motion mimicry
 - **Import external VRM models**: pick a file and swap characters instantly; the expression catalog refreshes automatically and conversation contexts rotate per model
@@ -175,7 +175,7 @@ LaunchedEffect(state) {
 ```kotlin
 val chat = AIAvatarSdk(scope, controller, applicationContext)
 
-// Built-in directory of four providers (SiliconFlow / Volcano Engine / OpenRouter / DeepSeek); empty model/voice = provider defaults
+// Built-in directory of five providers (SiliconFlow / Volcano Engine / OpenRouter / DeepSeek / Alibaba Bailian); empty model/voice = provider defaults (defaults prefer vision models)
 chat.configure(AIAvatarSdk.ChatConfig(apiKey = "sk-...", ttsEngine = TtsEngine.EDGE))
 
 chat.send("What should we have for dinner tonight?")   // streaming LLM reply, spoken sentence by sentence

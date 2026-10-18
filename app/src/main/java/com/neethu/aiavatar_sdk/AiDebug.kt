@@ -271,14 +271,16 @@ fun aiDebugHelp(): String = """
 |  memory_clear             Wipe ALL memories and the pending window
 |  memory_config [t] [c]    View (no args) or set extraction thresholds
 |                           (t turns OR c chars triggers a request)
-|Providers (SiliconFlow + Volcano + OpenRouter; LLM/TTS/ASR dropdowns in ⚙️):
+|Providers (SiliconFlow + Volcano + OpenRouter + DeepSeek + Bailian; LLM/TTS/ASR dropdowns in ⚙️):
 |  set_provider <arg>       Switch LLM provider: siliconflow | volcano |
-|                           openrouter (model list follows; empty model =
-|                           vendor default)
+|                           openrouter | deepseek | bailian (model list
+|                           follows; empty model = vendor default)
 |  set_tts_provider <arg>   Switch TTS provider independently (unchecks
-|                           "same as LLM"): siliconflow | volcano | openrouter
+|                           "same as LLM"): siliconflow | volcano |
+|                           openrouter | bailian
 |  set_llm_model <arg>      Switch the LLM model within the current provider's
-|                           catalog (exact id, e.g. Qwen/Qwen3.8-27B)
+|                           catalog (exact id, e.g. Qwen/Qwen3.8-27B; live
+|                           /models ids work too once fetched)
 |Gaze (look-at; default = camera, the avatar watches the user):
 |  look_at                  No ai_arg = dump gaze state (target + applied yaw/pitch)
 |  look_at <arg>            ai_arg = camera (watch the user/lens) | off (release);

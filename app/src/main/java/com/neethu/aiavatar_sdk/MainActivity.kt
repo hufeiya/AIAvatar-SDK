@@ -892,8 +892,10 @@ private fun parseProviderArg(arg: String?): AiProvider = when (arg?.lowercase())
     "openrouter", "or", "openr" -> AiProvider.OPENROUTER
     // DeepSeek 只有 chat；set_tts_provider 传它会被 ttsEngineResolved 改道 Edge
     "deepseek", "ds" -> AiProvider.DEEPSEEK
+    // 百炼 TTS/ASR 齐活，set_tts_provider 直连原生协议
+    "bailian", "bl", "aliyun" -> AiProvider.BAILIAN
     else -> throw IllegalArgumentException(
-        "expects siliconflow|volcano|openrouter|deepseek, got '$arg'"
+        "expects siliconflow|volcano|openrouter|deepseek|bailian, got '$arg'"
     )
 }
 
@@ -1613,15 +1615,19 @@ private fun DemoScreen(
 
     /**
      * 每次识别现建适配器读最新 prefs；缓存实例会在改端点后用旧地址。
-     * ASR 跟随大模型服务商（OpenAI 兼容 /audio/transcriptions，硅基流动与
-     * OpenRouter 同构，key 各自共用大模型那份）；火山无该形态端点，回落
-     * 硅基流动（见 [asrProviderFor]）。
+     * ASR 跟随大模型服务商：硅基流动/OpenRouter 走 OpenAI 兼容
+     * /audio/transcriptions（同构 multipart，key 各自共用大模型那份）；百炼走
+     * 自家 chat+input_audio 形态（/audio/transcriptions 实测 404）；火山无该
+     * 形态端点，回落硅基流动（见 [asrProviderFor]）。
      */
-    fun asrFor(): OpenAiCompatibleAsrAdapter {
+    fun asrFor(): com.neethu.aiadapter.api.AsrAdapter {
         val p = asrProviderFor(uiState.aiPrefs.provider)
         val key = uiState.aiPrefs.apiKeyFor(p)
         check(key.isNotBlank()) { uiState.strings().asrNeedsKey(p) }
-        return OpenAiCompatibleAsrAdapter(p.baseUrl, key)
+        return when (p) {
+            AiProvider.BAILIAN -> com.neethu.aiadapter.bailian.BailianAsrAdapter(p.baseUrl, key)
+            else -> OpenAiCompatibleAsrAdapter(p.baseUrl, key)
+        }
     }
 
     /** ASR 模型解析：端点随大模型服务商（显式配置过的用显式值）。 */
@@ -1775,7 +1781,8 @@ private fun DemoScreen(
         when {
             new && !micGranted -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
             new && uiState.voicePrefs.asrEngine == AsrEngine.CLOUD &&
-                uiState.aiPrefs.apiKeyFor(AiProvider.SILICONFLOW).isBlank() ->
+                // 云端识别跟随大模型服务商（火山/DeepSeek 回落硅基流动，见 asrProviderFor）
+                uiState.aiPrefs.apiKeyFor(asrProviderFor(uiState.aiPrefs.provider)).isBlank() ->
                 chatError = s.freeTalkCloudNeedsKey
             new && uiState.voicePrefs.asrEngine == AsrEngine.SYSTEM && !systemAsr.isAvailable() ->
                 chatError = s.freeTalkNoSystemAsr
@@ -2162,7 +2169,8 @@ private fun DemoScreen(
                     "voice=${resolveVoice(provider, uiState.aiPrefs.voice)} " +
                     "ttsKey=${if (uiState.aiPrefs.apiKeyForTts().isNotBlank()) "set" else "MISSING"}"
             },
-            // 当前服务商的大模型切换（清单校验；MIUI 禁触摸注入，设置页下拉的命令入口）
+            // 当前服务商的大模型切换（清单校验：静态 + /models 实时目录缓存；
+            // MIUI 禁触摸注入，设置页下拉的命令入口）
             setLlmModel = { arg ->
                 val provider = uiState.aiPrefs.provider
                 val id = arg?.trim()
@@ -2170,9 +2178,10 @@ private fun DemoScreen(
                         "set_llm_model expects ai_arg = a model id from ${provider.name.lowercase()} " +
                             "catalog: ${provider.llmModels}"
                     )
-                if (id !in provider.llmModels) {
+                val known = provider.llmModels + ModelCatalogCache.idsFor(provider)
+                if (id !in known) {
                     throw IllegalArgumentException(
-                        "model '$id' not in ${provider.name.lowercase()} catalog: ${provider.llmModels}"
+                        "model '$id' not in ${provider.name.lowercase()} catalog: $known"
                     )
                 }
                 uiState.updateAiPrefs(uiState.aiPrefs.copy(llmModel = id))

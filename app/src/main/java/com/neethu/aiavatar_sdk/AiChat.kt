@@ -38,6 +38,8 @@ data class AiChatPrefs(
     val apiKeyOpenrouter: String = "",
     /** DeepSeek 官方 API Key——只有 chat（TTS/ASR 官方无端点，见上）。 */
     val apiKeyDeepseek: String = "",
+    /** 阿里云百炼 API Key——一把通吃大模型/TTS/ASR（chat 专属端点三端通用）。 */
+    val apiKeyBailian: String = "",
     /** TTS 与大模型同服务商（默认勾选）。 */
     val ttsSameProvider: Boolean = true,
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
@@ -121,20 +123,22 @@ data class AiChatPrefs(
             ttsEngine
         }
 
-    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter / DeepSeek 官方）。 */
+    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter / DeepSeek / 百炼）。 */
     fun apiKeyFor(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcano
         AiProvider.OPENROUTER -> apiKeyOpenrouter
         AiProvider.DEEPSEEK -> apiKeyDeepseek
+        AiProvider.BAILIAN -> apiKeyBailian
     }
 
-    /** 语音合成服务的 API Key（硅基流动/OpenRouter 共用一份；火山语音用豆包语音那把；DeepSeek 无 TTS 走 Edge 不读 Key）。 */
+    /** 语音合成服务的 API Key（硅基流动/OpenRouter/百炼共用一份；火山语音用豆包语音那把；DeepSeek 无 TTS 走 Edge 不读 Key）。 */
     fun apiKeyForTts(): String = when (ttsProviderResolved) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcanoTts
         AiProvider.OPENROUTER -> apiKeyOpenrouter
         AiProvider.DEEPSEEK -> apiKeyDeepseek
+        AiProvider.BAILIAN -> apiKeyBailian
     }
 
     /** TTS 侧的就绪条件：Edge 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
@@ -183,6 +187,7 @@ private const val KEY_AI_API_KEY_VOLCANO = "ai_api_key_volcano" // 火山方舟�
 private const val KEY_AI_API_KEY_VOLCANO_TTS = "ai_api_key_volcano_tts" // 豆包语音（合成）
 private const val KEY_AI_API_KEY_OPENROUTER = "ai_api_key_openrouter"
 private const val KEY_AI_API_KEY_DEEPSEEK = "ai_api_key_deepseek"
+private const val KEY_AI_API_KEY_BAILIAN = "ai_api_key_bailian"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
@@ -222,6 +227,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         apiKeyVolcanoTts = getString(KEY_AI_API_KEY_VOLCANO_TTS, null) ?: volcTtsKey,
         apiKeyOpenrouter = getString(KEY_AI_API_KEY_OPENROUTER, "").orEmpty(),
         apiKeyDeepseek = getString(KEY_AI_API_KEY_DEEPSEEK, "").orEmpty(),
+        apiKeyBailian = getString(KEY_AI_API_KEY_BAILIAN, "").orEmpty(),
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
@@ -248,6 +254,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_API_KEY_VOLCANO_TTS, p.apiKeyVolcanoTts.trim())
         .putString(KEY_AI_API_KEY_OPENROUTER, p.apiKeyOpenrouter.trim())
         .putString(KEY_AI_API_KEY_DEEPSEEK, p.apiKeyDeepseek.trim())
+        .putString(KEY_AI_API_KEY_BAILIAN, p.apiKeyBailian.trim())
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
@@ -388,10 +395,12 @@ class AiChatController(
         lang: Lang = Lang.ZH,
     ): AvatarSession? {
         if (!prefs.isConfigured) return null
-        return sdk.configure(
-            prefs.toChatConfig(contextId, characterId, lang),
-            modelReady = ready,
-        )
+        val config = prefs.toChatConfig(contextId, characterId, lang)
+        // /models 实时目录注入：缓存里的模型 id 放行校验（静态清单外的实时
+        // 模型可被选中并真实发请求）。缓存不进会话身份（ChatConfig 的 var 属性，
+        // 不参与 equals）——进程存活期重新拉取/清空都不会重建会话。
+        config.catalogLlmModels = ModelCatalogCache.idsFor(prefs.provider)
+        return sdk.configure(config, modelReady = ready)
     }
 
     /** 长期记忆总开关（运行时切换，不重建会话）。 */

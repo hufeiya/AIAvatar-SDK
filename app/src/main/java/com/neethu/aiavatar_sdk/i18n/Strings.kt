@@ -51,11 +51,26 @@ class Strings(val lang: Lang) {
         zh("DeepSeek 官方无语音合成端点：OpenAI 兼容引擎下自动改走 Edge-TTS（免费无 Key）",
             "DeepSeek's official API has no TTS endpoint: the OpenAI-compatible engine automatically falls back to Edge-TTS (free, no key)")
 
+    // ── 大模型下拉的实时目录（/models 拉取）────────────────────────────────
+    /** 视觉模型标签（下拉项尾部徽标）。 */
+    val visionModelTag: String get() = zh("视觉", "Vision")
+    /** 目录拉取中（首次展开且无缓存时）。 */
+    val modelListLoading: String get() = zh("正在获取模型清单…", "Fetching model list…")
+    /** 目录拉取失败：回退内置静态清单的说明。 */
+    val modelListFetchFailed: String get() =
+        zh("实时清单获取失败，已显示内置清单（稍后重开下拉可重试）",
+            "Couldn't fetch the live model list — showing the built-in list (reopen the dropdown to retry)")
+    /** 未填 Key 时无法拉目录的说明。 */
+    val modelListNeedsKey: String get() =
+        zh("填好 API Key 后，展开此下拉会自动获取该服务商的最新模型清单",
+            "Fill in the API key and reopen this dropdown to fetch the provider's latest model list")
+
     fun provider(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> zh("硅基流动", "SiliconFlow")
         AiProvider.VOLCANO -> zh("火山引擎", "Volcano Engine")
         AiProvider.OPENROUTER -> "OpenRouter"
         AiProvider.DEEPSEEK -> "DeepSeek"
+        AiProvider.BAILIAN -> zh("阿里云百炼", "Alibaba Bailian")
     }
 
     /** 服务商 API Key 字段标签（大模型侧）。 */
@@ -64,13 +79,15 @@ class Strings(val lang: Lang) {
         AiProvider.VOLCANO -> zh("火山方舟 API Key（大模型用）", "Volcano Ark API key (for LLM)")
         AiProvider.OPENROUTER -> "OpenRouter API key"
         AiProvider.DEEPSEEK -> "DeepSeek API Key"
+        AiProvider.BAILIAN -> zh("阿里云百炼 API Key", "Alibaba Bailian API key")
     }
 
     /** 服务商 API Key 字段标签（语音合成侧；火山是另一把豆包语音 key）。 */
     fun ttsKeyLabel(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> zh("硅基流动 API Key（语音合成用）", "SiliconFlow API key (for TTS)")
-        AiProvider.VOLCANO -> zh("豆包语音 API Key（语音合成用）", "Douban Voice API key (for TTS)")
+        AiProvider.VOLCANO -> zh("豆包语音 API Key（语音合成用）", "Doubao Voice API key (for TTS)")
         AiProvider.OPENROUTER -> "OpenRouter API key (for TTS)"
+        AiProvider.BAILIAN -> zh("阿里云百炼 API Key（语音合成用）", "Alibaba Bailian API key (for TTS)")
         // DeepSeek 无 TTS 端点：TTS 服务商下拉不出现它，此臂仅为穷尽占位
         AiProvider.DEEPSEEK -> "DeepSeek API Key"
     }
@@ -175,8 +192,8 @@ class Strings(val lang: Lang) {
     fun asrFailed(message: String?): String =
         zh("语音识别失败：$message", "Speech recognition failed: $message")
     val freeTalkCloudNeedsKey: String get() =
-        zh("自由说话（云端识别）需要硅基流动 API Key，先在 ⚙️ 设置里配置或改用系统识别",
-            "Free talk (cloud) needs a SiliconFlow API key — configure it in ⚙️ Settings or switch to system recognition")
+        zh("自由说话（云端识别）需要 API Key，先在 ⚙️ 设置里配置当前服务商的 Key 或改用系统识别",
+            "Free talk (cloud) needs an API key — configure the current provider's key in ⚙️ Settings or switch to system recognition")
     val freeTalkNoSystemAsr: String get() =
         zh("本机没有系统语音识别服务，请改用云端识别",
             "No system recognition service on this device — switch to cloud ASR")
@@ -195,8 +212,8 @@ class Strings(val lang: Lang) {
         zh("先在 ⚙️ 设置里配置 AI 服务，再开视频模式",
             "Configure the AI service in ⚙️ Settings before entering video mode")
     fun videoNeedsVision(model: String): String =
-        zh("当前大模型「$model」不支持图片输入，视频模式需要多模态模型（⚙️ 设置里切换：硅基流动选 Qwen3.8-27B / Qwen3-VL，火山/DeepSeek 默认模型即可）",
-            "The current LLM \"$model\" cannot take images — video mode needs a multimodal model (switch in ⚙️ Settings: pick Qwen3.8-27B / Qwen3-VL on SiliconFlow, or any default Volcano/DeepSeek model)")
+        zh("当前大模型「$model」不支持图片输入，视频模式需要多模态模型（⚙️ 设置里选带「视觉」标签的模型，各家默认模型即可）",
+            "The current LLM \"$model\" cannot take images — video mode needs a multimodal model (pick one tagged \"Vision\" in ⚙️ Settings, or use any provider's default model)")
     val videoCameraNotRunning: String get() =
         zh("视频相机未启动——先进入视频模式 (set_mode video)",
             "Video camera not running — enter video mode first (set_mode video)")

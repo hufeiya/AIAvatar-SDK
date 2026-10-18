@@ -234,7 +234,7 @@ adb shell am start -n com.neethu.aiavatar_sdk/.MainActivity --es ai_cmd send_cha
 
 | 功能 | 入口 | 实现 | 关键文件 |
 |---|---|---|---|
-| 流式对话（LLM） | 输入框 / `send_chat` | OpenAI 兼容 SSE；四家服务商目录（硅基流动/火山/OpenRouter/DeepSeek）+ 自定义 baseUrl；关思考参数按模型方言分发 | `OpenAiCompatibleLlmAdapter`、`AiProviders`、`ChatProviders` |
+| 流式对话（LLM） | 输入框 / `send_chat` | OpenAI 兼容 SSE；五家服务商目录（硅基流动/火山/OpenRouter/DeepSeek/阿里云百炼）+ 自定义 baseUrl；模型下拉实时拉取 `/models` 目录（内存缓存）并标注视觉模型；关思考参数按模型方言分发 | `OpenAiCompatibleLlmAdapter`、`AiProviders`、`ChatProviders` |
 | 逐句 TTS 流水 | 自动 | 断句→并发合成（≤4）→严格有序播放 | `SentenceChunker`、`SpeechPipeline`、`AudioTrackPlaybackQueue` |
 | 免费语音合成 | 设置→TTS 引擎=Edge-TTS | WSS+Sec-MS-GEC，恒 MP3 24kHz | `EdgeTtsAdapter` |
 | 口型同步 | 自动 | 离线 MFCC viseme 时间线+VowelDriver 五元音平滑，AudioTrack 时钟采样 | `WlipsyncLipSyncProcessor`、`VowelDriver`、FaceDriver |

@@ -57,8 +57,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +81,9 @@ import com.neethu.aiavatar_sdk.AsrEngine
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.aiavatar_sdk.AiProvider
 import com.neethu.aiavatar_sdk.ConversationContextSummary
+import com.neethu.aiavatar_sdk.ModelCatalogCache
+import com.neethu.aiavatar_sdk.ModelOption
+import com.neethu.aiavatar_sdk.chatModelOptions
 import com.neethu.aiavatar_sdk.EdgeTtsCatalog
 import com.neethu.aiavatar_sdk.FreeSpeechSettings
 import com.neethu.aiavatar_sdk.TtsEngine
@@ -140,6 +145,7 @@ private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): A
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcano = key)
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
         AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
+        AiProvider.BAILIAN -> prefs.copy(apiKeyBailian = key)
     }
 
 /** 写语音合成服务的 API Key（火山写豆包语音那把，与大模型 key 互不通用）。 */
@@ -148,6 +154,7 @@ private fun withTtsApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String)
         AiProvider.SILICONFLOW -> prefs.copy(apiKeySiliconflow = key)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcanoTts = key)
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
+        AiProvider.BAILIAN -> prefs.copy(apiKeyBailian = key)
         // DeepSeek 不出现在 TTS 服务商下拉（无 TTS 端点），此臂仅为穷尽占位
         AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
     }
@@ -412,10 +419,12 @@ internal fun SettingsScreen(
                                 placeholder = s.keyHint(aiPrefs.provider, tts = false),
                                 password = true
                             ) { onAiPrefsChange(withApiKey(aiPrefs, aiPrefs.provider, it)) }
-                            SettingsDropdownRow(
-                                title = s.llmModelTitle,
-                                options = aiPrefs.provider.llmModels.map { DropdownOption(it, it) },
+                            // 模型下拉 = /models 实时目录（展开时拉取，内存缓存重启
+                            // 失效）+ 静态清单兜底；带「视觉」标签的模型可看图
+                            SettingsModelDropdownRow(
+                                provider = aiPrefs.provider,
                                 selectedValue = resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel),
+                                apiKey = aiPrefs.apiKeyFor(aiPrefs.provider),
                             ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
 
                             // ── 语音合成（TTS）─────────────────────────────
@@ -1781,6 +1790,149 @@ private fun SettingsDropdownRow(
                             expanded = false
                             if (option.value != selectedValue) onSelect(option.value)
                         }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 大模型下拉（实时目录版）：展开时若无内存缓存则拉该服务商 `GET /models`
+ * （模型版本实时更新；缓存刻意不落盘——退出应用再进来重新拉）。选项 =
+ * 实时目录过滤后的对话模型 + 静态清单兜底并集（[chatModelOptions]），带
+ * 「视觉」标签的模型支持图片输入（视频模式/看图工具的门控同源）；拉取中
+ * 显示 loading 行，失败回退内置清单并提示（重开下拉可重试）。未填 Key 时
+ * 只显示静态清单附引导文案。选中值经 [resolveLlmModel] 归位后传入，保证
+ * 与实际请求一致（含默认模型=视觉优先语义）。
+ */
+@Composable
+private fun SettingsModelDropdownRow(
+    provider: AiProvider,
+    selectedValue: String,
+    apiKey: String,
+    onSelect: (String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val s = LocalStrings.current
+    // 选项与拉取状态随服务商记忆（切服务商各自独立；清缓存语义归全局缓存对象）
+    var options by remember(provider) {
+        mutableStateOf(chatModelOptions(provider, ModelCatalogCache.entriesFor(provider)))
+    }
+    var loading by remember(provider) { mutableStateOf(false) }
+    var fetchFailed by remember(provider) { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
+
+    val startFetch: () -> Unit = {
+        if (apiKey.isNotBlank() && !ModelCatalogCache.has(provider) && !loading) {
+            loading = true
+            scope.launch {
+                val entries = ModelCatalogCache.fetch(provider, apiKey)
+                fetchFailed = entries.isEmpty()
+                options = chatModelOptions(provider, ModelCatalogCache.entriesFor(provider))
+                loading = false
+            }
+        }
+    }
+
+    // 选中值不在选项里（如手输/缓存过期）时追加保底，避免下拉框显示成裸值
+    val displayOptions = remember(options, selectedValue) {
+        if (selectedValue.isNotBlank() && options.none { it.id == selectedValue }) {
+            options + ModelOption(selectedValue, false)
+        } else options
+    }
+    val selectedLabel = displayOptions.firstOrNull { it.id == selectedValue }?.id ?: selectedValue
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = s.llmModelTitle,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        expanded = true
+                        startFetch()
+                    }
+                    .padding(top = 6.dp, bottom = 6.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selectedLabel,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = s.chooseA11y(s.llmModelTitle),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                if (options.isEmpty() && loading) {
+                    DropdownMenuItem(
+                        text = { Text(text = s.modelListLoading, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
+                displayOptions.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = option.id + if (option.id == selectedValue) s.currentSuffix else "",
+                                    fontWeight = if (option.id == selectedValue) FontWeight.SemiBold else FontWeight.Normal,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (option.vision) {
+                                    androidx.compose.material3.Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = s.visionModelTag,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            if (option.id != selectedValue) onSelect(option.id)
+                        }
+                    )
+                }
+                if (fetchFailed && options.isNotEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text(text = s.modelListFetchFailed, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
+                if (apiKey.isBlank()) {
+                    DropdownMenuItem(
+                        text = { Text(text = s.modelListNeedsKey, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        onClick = {},
+                        enabled = false,
                     )
                 }
             }

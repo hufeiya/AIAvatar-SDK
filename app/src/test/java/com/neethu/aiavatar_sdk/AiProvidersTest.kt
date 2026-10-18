@@ -24,7 +24,9 @@ class AiProvidersTest {
             ),
             sf.llmModels,
         )
-        assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.defaultLlmModel)
+        assertEquals("deepseek-ai/DeepSeek-V4-Flash", sf.llmModels.first())
+        // 默认=视觉优先（2026-10-18）：VL-32B 刻意排在视觉清单首位
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", sf.defaultLlmModel)
         assertEquals(listOf("FunAudioLLM/CosyVoice2-0.5B", "fnlp/MOSS-TTSD-v0.5"), sf.ttsModels)
         assertEquals("FunAudioLLM/CosyVoice2-0.5B", sf.defaultTtsModel)
         assertEquals("anna", sf.defaultVoice)
@@ -84,7 +86,8 @@ class AiProvidersTest {
     // ── 模型默认值解析 ────────────────────────────────────────────────────
     @Test
     fun `model resolution falls back to vendor defaults`() {
-        assertEquals("deepseek-ai/DeepSeek-V4-Flash", resolveLlmModel(AiProvider.SILICONFLOW, ""))
+        // 默认=视觉优先（2026-10-18 需求）：空配置也归位到可看图的模型
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", resolveLlmModel(AiProvider.SILICONFLOW, ""))
         assertEquals("deepseek-ai/DeepSeek-V3", resolveLlmModel(AiProvider.SILICONFLOW, "deepseek-ai/DeepSeek-V3"))
         assertEquals("doubao-seed-2-0-mini-260428", resolveLlmModel(AiProvider.VOLCANO, "  "))
         assertEquals("seed-tts-2.0", resolveTtsModel(AiProvider.VOLCANO, ""))
@@ -101,8 +104,8 @@ class AiProvidersTest {
             "zh_female_vv_uranus_bigtts",
             resolveVoice(AiProvider.VOLCANO, "FunAudioLLM/CosyVoice2-0.5B:alex"),
         )
-        // 反向：火山的值落到硅基流动默认
-        assertEquals("deepseek-ai/DeepSeek-V4-Flash", resolveLlmModel(AiProvider.SILICONFLOW, "doubao-seed-2-1-pro-260915"))
+        // 反向：火山的值落到硅基流动默认（视觉优先）
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", resolveLlmModel(AiProvider.SILICONFLOW, "doubao-seed-2-1-pro-260915"))
         assertEquals("FunAudioLLM/CosyVoice2-0.5B", resolveTtsModel(AiProvider.SILICONFLOW, "seed-tts-2.0"))
         assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", resolveVoice(AiProvider.SILICONFLOW, "zh_male_m191_uranus_bigtts"))
     }
@@ -219,17 +222,17 @@ class AiProvidersTest {
 
     @Test
     fun `isVisionLlm resolves through resolveLlmModel first`() {
-        // 留空 = 默认：硅基流动默认 DeepSeek-V4-Flash 不支持视觉（视频模式要手动切 Qwen）
-        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, ""))
+        // 留空 = 默认：默认模型=视觉优先（2026-10-18），视频模式开箱即用
+        assertTrue(isVisionLlm(AiProvider.SILICONFLOW, ""))
         assertTrue(isVisionLlm(AiProvider.SILICONFLOW, "Qwen/Qwen3.8-27B"))
         // 火山默认就是视觉模型（视频模式开箱即用）
         assertTrue(isVisionLlm(AiProvider.VOLCANO, ""))
         // 跨服务商残留值先归位再判定：SF 的 DeepSeek 残留到火山 → 火山默认（视觉），
-        // 但 SF 收到火山的值 → 落 SF 默认（非视觉）——不会把残留值误判成清单内视觉模型
+        // 火山的模型残留到 SF → 落 SF 默认（视觉）——残留值本身不会被误判成清单内视觉模型
         assertTrue(isVisionLlm(AiProvider.VOLCANO, "deepseek-ai/DeepSeek-V3"))
-        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, "doubao-seed-2-0-mini-260428"))
-        // 大小写敏感：不在清单内就是不支持，不模糊匹配
-        assertFalse(isVisionLlm(AiProvider.SILICONFLOW, "qwen/qwen3.8-27b"))
+        assertTrue(isVisionLlm(AiProvider.SILICONFLOW, "doubao-seed-2-0-mini-260428"))
+        // 大小写敏感：不在清单内就不模糊匹配，归位到默认再判定
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", resolveLlmModel(AiProvider.SILICONFLOW, "qwen/qwen3.8-27b"))
     }
 
     // ── 请求体专属参数（关深度思考 = 首句延迟治理，2026-10-04）────────────
@@ -400,12 +403,15 @@ class OpenRouterProviderTest {
         assertEquals(or, asrProviderFor(or))
         assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.VOLCANO))
         assertEquals(AiProvider.SILICONFLOW, asrProviderFor(AiProvider.DEEPSEEK))
+        // 百炼 ASR 同商直连（chat+input_audio 定制形态）
+        assertEquals(AiProvider.BAILIAN, asrProviderFor(AiProvider.BAILIAN))
     }
 
     @Test
     fun `asr explicit model options per provider`() {
         assertEquals(listOf("Qwen/Qwen3-ASR-1.7B"), asrExplicitAsrModels(AiProvider.SILICONFLOW))
         assertEquals(listOf("openai/whisper-large-v3"), asrExplicitAsrModels(or))
+        assertEquals(listOf("qwen3-asr-flash"), asrExplicitAsrModels(AiProvider.BAILIAN))
         assertEquals(emptyList<String>(), asrExplicitAsrModels(AiProvider.VOLCANO))
         assertEquals(emptyList<String>(), asrExplicitAsrModels(AiProvider.DEEPSEEK))
     }

@@ -90,10 +90,13 @@ class AIAvatarSdkTest {
         )!!
         val llm = session.llmConfig!!
         assertEquals("https://api.siliconflow.cn/v1", llm.baseUrl)
-        assertEquals("deepseek-ai/DeepSeek-V4-Flash", llm.model) // 目录外残留 → SF 默认
+        assertEquals("Qwen/Qwen3-VL-32B-Instruct", llm.model) // 目录外残留 → SF 默认（视觉优先）
         assertEquals("sk-1", llm.apiKey)
-        // 关思考方言按 服务商+模型族 分发（SF 默认是 DeepSeek，无额外参数）
-        assertNull(llm.extraBody)
+        // 关思考方言按 服务商+模型族 分发（新默认是 Qwen3-VL → enable_thinking=false）
+        assertEquals(
+            "false",
+            (llm.extraBody!!["enable_thinking"] as kotlinx.serialization.json.JsonPrimitive).content,
+        )
 
         val tts = session.ttsConfig!!
         assertEquals(AIAvatarSdk.ChatConfig.EDGE_TTS_MODEL, tts.model)
@@ -267,6 +270,53 @@ class AIAvatarSdkTest {
         val session = sdk.configure(ds)!!
         assertEquals(AIAvatarSdk.ChatConfig.EDGE_TTS_MODEL, session.ttsConfig!!.model)
         assertEquals("mp3", session.ttsConfig!!.responseFormat)
+    }
+
+    @Test
+    fun `bailian assembles native tts and shares one key across llm and tts`() {
+        // 百炼一把 key 通吃（chat 专属端点 + DashScope 原生 TTS + chat 形态 ASR）
+        val bl = AIAvatarSdk.ChatConfig(provider = ChatProvider.BAILIAN, apiKey = "sk-bl")
+        assertEquals(TtsEngine.OPENAI_COMPATIBLE, bl.ttsEngineResolved) // 有 TTS，不改道 Edge
+        assertTrue(bl.isConfigured)
+        assertEquals("sk-bl", bl.ttsKeyResolved) // 同商共用大模型 key
+        assertEquals("qwen3.8-flash", bl.resolvedLlmModel) // 默认=视觉优先（红/蓝图实测）
+        assertEquals("qwen3-tts-flash", bl.resolvedTtsModel)
+        assertEquals("Cherry", bl.resolvedVoice)
+
+        val session = newSdk().configure(bl)!!
+        // TTS 走 DashScope 原生协议：适配器内部重采样 16k PCM（wLipSync 标定
+        // 输入率，见 BailianTtsAdapter KDoc），配置侧同值对齐
+        assertEquals("qwen3-tts-flash", session.ttsConfig!!.model)
+        assertEquals("Cherry", session.ttsConfig!!.voice)
+        assertEquals(16_000, session.ttsConfig!!.sampleRate)
+        // 关思考方言：qwen 系 enable_thinking=false（glm 系不发）
+        assertEquals(
+            "false",
+            (session.llmConfig!!.extraBody!!["enable_thinking"] as kotlinx.serialization.json.JsonPrimitive).content,
+        )
+    }
+
+    @Test
+    fun `live catalog ids validate without joining session identity`() {
+        // 实时目录 id（静态清单外）经 catalogLlmModels 放行
+        val config = AIAvatarSdk.ChatConfig(
+            provider = ChatProvider.BAILIAN,
+            apiKey = "sk-bl",
+            llmModel = "qwen3.9-max-future",
+        )
+        assertEquals("qwen3.8-flash", config.resolvedLlmModel) // 无目录注入 → 默认
+        config.catalogLlmModels = setOf("qwen3.9-max-future")
+        assertEquals("qwen3.9-max-future", config.resolvedLlmModel)
+
+        // 刻意不在构造参数里（var 属性）：目录注入/刷新不进 equals/copy，
+        // 进程存活期拉取缓存不会触发会话重建
+        val other = config.copy()
+        other.catalogLlmModels = emptySet()
+        assertEquals(config, other)
+
+        // 装配产物用注入后的模型真实发请求
+        val session = newSdk().configure(config)!!
+        assertEquals("qwen3.9-max-future", session.llmConfig!!.model)
     }
 
     @Test
