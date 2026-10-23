@@ -152,6 +152,7 @@ class Strings(val lang: Lang) {
     val drawerHome: String get() = zh("主界面", "Home")
     val drawerSimpleDemo: String get() = zh("最小接入演示", "Minimal demo")
     val drawerMultiAvatar: String get() = zh("多虚拟人舞台", "Multi-Avatar Stage")
+    val drawerDebate: String get() = zh("辩论赛", "Debate")
 
     // 输入框占位
     val placeholderNotConfigured: String get() = zh("先在 ⚙️ 设置里配置 AI 服务", "Configure the AI service in ⚙️ Settings first")

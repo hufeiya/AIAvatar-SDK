@@ -1,0 +1,72 @@
+{
+  "timestamp": 1792332462890,
+  "matchState": "FINISHED",
+  "epoch": 1,
+  "matchId": "ai-last-ticket-quick",
+  "phase": "HOST_CLOSING",
+  "segment": "7/7",
+  "legalSpeakers": [],
+  "postureWaiting": [],
+  "teamBalancesMs": {
+    "PRO": 0,
+    "CON": 0
+  },
+  "wallRemainingMs": null,
+  "lastError": null,
+  "participants": [
+    {
+      "id": "HOST",
+      "name": "MiniMax·主持",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO1",
+      "name": "豆包·一辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO2",
+      "name": "DeepSeek·二辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO3",
+      "name": "千问·三辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO4",
+      "name": "Kimi·四辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON1",
+      "name": "ChatGPT·一辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON2",
+      "name": "Claude·二辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON3",
+      "name": "GLM·三辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON4",
+      "name": "Gemini·四辩",
+      "ready": true,
+      "failed": false
+    }
+  ]
+}

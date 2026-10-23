@@ -44,6 +44,38 @@ private fun quickConfig(
 @OptIn(ExperimentalCoroutinesApi::class)
 class DebateEngineTest {
 
+    @Test fun `turn started observers see current speaker before posture or playback`() {
+        val h = Harness(standWhenSpeaking = true)
+        h.build()
+        val observed = mutableListOf<Pair<String, String?>>()
+        h.eventScope.launch {
+            h.engine.events.collect { event ->
+                if (event is DebateEvent.TurnStarted) {
+                    observed += event.turn.speakerId to h.engine.state.value.currentTurn?.speakerId
+                }
+            }
+        }
+        h.engine.start()
+        h.engine.endTurn()
+        assertEquals(listOf("HOST" to "HOST", "PRO1" to "PRO1"), observed)
+    }
+
+    @Test fun `AI preparation allows generation time and transcript stores actual speech`() {
+        val h = Harness()
+        h.build(quickConfig(speech = DebateConfigDto.SpeechDto(
+            mode = "ai", generationTimeoutMs = 700L, firstAudioTimeoutMs = 300L)))
+        h.engine.start()
+        assertEquals(1000L, h.timer.remaining(DebateEngine.TIMER_PREP))
+        val turn = h.engine.state.value.currentTurn!!
+        val epoch = h.engine.state.value.epoch
+        h.engine.notifySpeechTextPrepared(epoch - 1, turn.turnId, "过期的台词")
+        h.engine.notifySpeechTextPrepared(epoch, turn.turnId + 1, "错误回合的台词")
+        h.engine.notifySpeechTextPrepared(epoch, turn.turnId, "我是豆包，这次给灵感搭把手！")
+        h.engine.notifySpeechAudioStarted(epoch, turn.turnId)
+        h.engine.notifySpeechCompleted(epoch, turn.turnId, false, 100L)
+        assertEquals("我是豆包，这次给灵感搭把手！", h.engine.transcriptEntries.single().text)
+    }
+
     // ── 测试替身 ────────────────────────────────────────────────────────
 
     class TestClock(var now: Long = 10_000L) : DebateClock {

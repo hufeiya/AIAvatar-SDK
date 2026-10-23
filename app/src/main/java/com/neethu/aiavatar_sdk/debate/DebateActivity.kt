@@ -4,6 +4,15 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,10 +24,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,15 +46,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
-import com.neethu.corelib.stage.AvatarStage
 import com.neethu.corelib.stage.AvatarStageView
 import com.neethu.corelib.stage.rememberAvatarStage
 import com.neethu.orchestrator.debate.DebateTeam
 import com.neethu.aiavatar_sdk.loadAiPrefs
 import com.neethu.orchestrator.debate.MatchState
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 /**
  * 4v4 虚拟人辩论赛页面（docs/debate-feasibility.md）：固定横屏、舞台为主体、
@@ -59,11 +65,21 @@ class DebateActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         router = DebateControlRouter(this) { rigRef }
         router.start()
         setContent { DebateScreen(onRigReady = { rigRef = it }) }
-        router.submit(intent)
+        router.submit(if (intent.getStringExtra(DebateControlRouter.EXTRA_CMD).isNullOrBlank()) {
+            buildIntent("load") {
+                putExtra("config_file", "debate_default.json")
+                putExtra("config_source", "assets")
+            }
+        } else intent)
     }
 
     /** UI 控制按钮与 Intent 协议同一条命令通道。 */
@@ -101,9 +117,9 @@ private fun DebateScreen(onRigReady: (DebateRig) -> Unit) {
     var rig by remember { mutableStateOf<DebateRig?>(null) }
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
 
-    Box(Modifier.fillMaxSize().background(Color(0xFF0D1117)).systemBarsPadding()) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF0D1117))) {
         AvatarStageView(
-            modifier = Modifier.fillMaxSize().padding(top = 30.dp, bottom = 104.dp, end = 156.dp),
+            modifier = Modifier.fillMaxSize(),
             stage = stage,
         )
 
@@ -122,153 +138,198 @@ private fun DebateScreen(onRigReady: (DebateRig) -> Unit) {
             }
         }
 
-        rig?.let { r -> DebateOverlay(r, stage) }
+        rig?.let { r -> DebateOverlay(r) }
     }
 }
 
 @Composable
-private fun DebateOverlay(rig: DebateRig, stage: AvatarStage) {
+private fun DebateOverlay(rig: DebateRig) {
     val state by rig.engine.state.collectAsState()
     val subtitle by rig.subtitle.collectAsState()
     val loadStatus by rig.loadStatus.collectAsState()
     val matchId by rig.matchId.collectAsState()
+    val speechError by rig.speechError.collectAsState()
+    val generationStatus by rig.generationStatus.collectAsState()
     val activity = androidx.compose.ui.platform.LocalContext.current as DebateActivity
 
-    Column(Modifier.fillMaxSize()) {
-        // ── 顶部赛况条 ──────────────────────────────────────────────
-        Surface(color = Color(0xCC101820), modifier = Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    "辩论赛 ${matchId ?: "未加载"}",
-                    color = Color(0xFFE6EDF3), fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                Text("[${state.matchState}]", color = Color(0xFF7EE787), fontSize = 12.sp)
-                state.phase?.let { phase ->
-                    Text(phaseLabel(phase), color = Color(0xFF79C0FF), fontSize = 12.sp)
-                }
-                state.teamBalancesMs?.let { balances ->
-                    Text(
-                        "正 ${formatMs(balances[DebateTeam.PRO] ?: 0)}",
-                        color = Color(0xFFFF9E9E), fontSize = 12.sp,
-                    )
-                    Text(
-                        "反 ${formatMs(balances[DebateTeam.CON] ?: 0)}",
-                        color = Color(0xFF9ECBFF), fontSize = 12.sp,
-                    )
-                }
-                state.wallRemainingMs?.let {
-                    Text("轮 ${formatMs(it)}", color = Color(0xFFF2CC60), fontSize = 12.sp)
-                }
-            }
-        }
+    var buttonsVisible by rememberSaveable { mutableStateOf(true) }
 
-        Row(Modifier.weight(1f)) {
-            // ── 左侧：当前回合信息 + 字幕 ────────────────────────────
-            Column(
-                Modifier.weight(1f).padding(10.dp).fillMaxHeight(),
-                verticalArrangement = Arrangement.Bottom,
-            ) {
-                state.currentTurn?.let { turn ->
-                    Surface(color = Color(0xAA161B22), modifier = Modifier.padding(bottom = 6.dp)) {
-                        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                            Text(
-                                "▶ ${rig.parts[turn.speakerId]?.dto?.name ?: turn.speakerId}（${kindLabel(turn.kind)}）",
-                                color = Color(0xFFFFD700), fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                "${stageLabel(turn.stage)} 剩余 ${formatMs(turn.remainingMs)}" +
-                                    if (state.postureWaiting.isNotEmpty()) " · 起立中:${state.postureWaiting.joinToString()}" else "",
-                                color = Color(0xFFB0BEC5), fontSize = 11.sp,
-                            )
-                        }
-                    }
-                }
-                subtitle?.let { (speaker, text) ->
-                    Surface(color = Color(0xCC0D1117), modifier = Modifier.fillMaxWidth(0.75f)) {
+    Box(Modifier.fillMaxSize().systemBarsPadding().padding(6.dp)) {
+        if (buttonsVisible) {
+            Column(Modifier.fillMaxSize()) {
+                // ── 顶部赛况条 ──────────────────────────────────────────────
+                Surface(color = Color(0x88101820), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.padding(start = 10.dp, end = 108.dp, top = 4.dp, bottom = 4.dp).horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Text(
-                            "${rig.parts[speaker]?.dto?.name ?: speaker}：$text",
-                            color = Color.White, fontSize = 14.sp,
-                            modifier = Modifier.padding(8.dp),
+                            rig.config?.topic ?: "辩论赛 ${matchId ?: "未加载"}",
+                            modifier = Modifier.widthIn(max = 340.dp),
+                            color = Color(0xFFE6EDF3), fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
+                        Text("[${state.matchState}]", color = Color(0xFF7EE787), fontSize = 12.sp)
+                        state.phase?.let { phase ->
+                            Text(phaseLabel(phase), color = Color(0xFF79C0FF), fontSize = 12.sp)
+                        }
+                        state.teamBalancesMs?.let { balances ->
+                            Text(
+                                "正 ${formatMs(balances[DebateTeam.PRO] ?: 0)}",
+                                color = Color(0xFFFF9E9E), fontSize = 12.sp,
+                            )
+                            Text(
+                                "反 ${formatMs(balances[DebateTeam.CON] ?: 0)}",
+                                color = Color(0xFF9ECBFF), fontSize = 12.sp,
+                            )
+                        }
+                        state.wallRemainingMs?.let {
+                            Text("轮 ${formatMs(it)}", color = Color(0xFFF2CC60), fontSize = 12.sp)
+                        }
                     }
                 }
-                state.lastError?.let {
-                    Text(it, color = Color(0xFFFF7B72), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-            }
 
-            // ── 右侧：九人辩位牌 ─────────────────────────────────────
-            Surface(
-                color = Color(0xB3101820),
-                modifier = Modifier.width(148.dp).fillMaxHeight().padding(4.dp),
-            ) {
-                LazyColumn(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    items(loadStatus, key = { it.id }) { status ->
-                        val speaking = state.currentTurn?.speakerId == status.id
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    when {
-                                        speaking -> Color(0xFF2EA043)
-                                        status.failed -> Color(0xFFB62324)
-                                        status.ready -> Color(0xFF21262D)
-                                        else -> Color(0xFF30363D)
-                                    }
+                Row(Modifier.weight(1f)) {
+                    // ── 左侧：当前回合信息 + 字幕 ────────────────────────────
+                    Column(
+                        Modifier.weight(1f).padding(10.dp).fillMaxHeight(),
+                        verticalArrangement = Arrangement.Bottom,
+                    ) {
+                        state.currentTurn?.let { turn ->
+                            Surface(color = Color(0xAA161B22), modifier = Modifier.padding(bottom = 6.dp)) {
+                                Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                    Text(
+                                        "▶ ${rig.parts[turn.speakerId]?.dto?.name ?: turn.speakerId}（${kindLabel(turn.kind)}）",
+                                        color = Color(0xFFFFD700), fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                    )
+                                    Text(
+                                        "${stageLabel(turn.stage)} 剩余 ${formatMs(turn.remainingMs)}" +
+                                            if (state.postureWaiting.isNotEmpty()) " · 起立中:${state.postureWaiting.joinToString()}" else "",
+                                        color = Color(0xFFB0BEC5), fontSize = 11.sp,
+                                    )
+                                }
+                            }
+                        }
+                        subtitle?.let { (speaker, text) ->
+                            Surface(color = Color(0xCC0D1117), modifier = Modifier.fillMaxWidth(0.75f)) {
+                                Text(
+                                    "${rig.parts[speaker]?.dto?.name ?: speaker}：$text",
+                                    color = Color.White, fontSize = 14.sp,
+                                    modifier = Modifier.padding(8.dp),
                                 )
-                                .padding(horizontal = 6.dp, vertical = 3.dp),
-                        ) {
-                            Text(
-                                "${status.name}${if (speaking) " ▶" else ""}",
-                                color = Color(0xFFE6EDF3), fontSize = 11.sp,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
+                            }
+                        }
+                        generationStatus?.let {
+                            Text(it, color = Color(0xFFF2CC60), fontSize = 11.sp,
+                                modifier = Modifier.background(Color(0x990D1117)).padding(4.dp))
+                        }
+                        state.lastError?.let {
+                            Text(it, color = Color(0xFFFF7B72), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        speechError?.let {
+                            Text(it, color = Color(0xFFFF7B72), fontSize = 11.sp)
+                        }
+                    }
+
+                    // ── 右侧：九人辩位牌 ─────────────────────────────────────
+                    Surface(
+                        color = Color(0x88101820),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.width(148.dp).heightIn(max = 260.dp).padding(4.dp),
+                    ) {
+                        LazyColumn(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            items(loadStatus, key = { it.id }) { status ->
+                                val speaking = state.currentTurn?.speakerId == status.id
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            when {
+                                                speaking -> Color(0xAA2EA043)
+                                                status.failed -> Color(0xAAB62324)
+                                                status.ready -> Color(0x6621262D)
+                                                else -> Color(0x6630363D)
+                                            }
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                                ) {
+                                    Text(
+                                        "${status.name}${if (speaking) " ▶" else ""}",
+                                        color = Color(0xFFE6EDF3), fontSize = 11.sp,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── 底部控制栏 ──────────────────────────────────────────────
+                Surface(color = Color(0x88101820), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ControlButton("载入短赛程") {
+                                submitCommand(activity, buildIntent("load") {
+                                    putExtra("config_file", "debate_quick.json")
+                                    putExtra("config_source", "assets")
+                                })
+                            }
+                            ControlButton("载入擂台赛") {
+                                submitCommand(activity, buildIntent("load") {
+                                    putExtra("config_file", "debate_default.json")
+                                    putExtra("config_source", "assets")
+                                })
+                            }
+                            if (state.matchState == MatchState.READY) {
+                                ControlButton("开赛", enabled = speechError == null) { submitCommand(activity, buildIntent("start")) }
+                            }
+                            if (state.matchState == MatchState.RUNNING) {
+                                ControlButton("暂停") { submitCommand(activity, buildIntent("pause")) }
+                                ControlButton("结束发言") { submitCommand(activity, buildIntent("end_turn")) }
+                                ControlButton("跳段") { submitCommand(activity, buildIntent("next_phase")) }
+                            }
+                            if (state.matchState == MatchState.PAUSED) {
+                                ControlButton("恢复") { submitCommand(activity, buildIntent("resume")) }
+                            }
+                            if (state.matchState == MatchState.FINISHED || state.matchState == MatchState.STOPPED) {
+                                ControlButton("重置") { submitCommand(activity, buildIntent("reset")) }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ControlButton("正方镜头") { submitCommand(activity, cameraIntent("team", team = "PRO")) }
+                            ControlButton("反方镜头") { submitCommand(activity, cameraIntent("team", team = "CON")) }
+                            ControlButton("主持人") { submitCommand(activity, cameraIntent("host")) }
+                            ControlButton("九人全景") { submitCommand(activity, cameraIntent("wide")) }
+                            ControlButton("全景5秒") { submitCommand(activity, cameraIntent("wide", holdMs = 5000L)) }
+                            ControlButton("恢复自动") { submitCommand(activity, buildIntent("camera_auto")) }
+                            ControlButton("状态") { submitCommand(activity, buildIntent("state")) }
                         }
                     }
                 }
             }
-        }
-
-        // ── 底部控制栏 ──────────────────────────────────────────────
-        Surface(color = Color(0xCC101820), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ControlButton("载入短赛程") {
-                        submitCommand(activity, buildIntent("load") { putExtra("config_file", "debate_quick.json") })
-                    }
-                    ControlButton("载入全时赛程") {
-                        submitCommand(activity, buildIntent("load") { putExtra("config_file", "debate_default.json") })
-                    }
-                    if (state.matchState == MatchState.READY) {
-                        ControlButton("开赛") { submitCommand(activity, buildIntent("start")) }
-                    }
-                    if (state.matchState == MatchState.RUNNING) {
-                        ControlButton("暂停") { submitCommand(activity, buildIntent("pause")) }
-                        ControlButton("结束发言") { submitCommand(activity, buildIntent("end_turn")) }
-                        ControlButton("跳段") { submitCommand(activity, buildIntent("next_phase")) }
-                    }
-                    if (state.matchState == MatchState.PAUSED) {
-                        ControlButton("恢复") { submitCommand(activity, buildIntent("resume")) }
-                    }
-                    if (state.matchState == MatchState.FINISHED || state.matchState == MatchState.STOPPED) {
-                        ControlButton("重置") { submitCommand(activity, buildIntent("reset")) }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ControlButton("正方镜头") { submitCommand(activity, cameraIntent("team", team = "PRO")) }
-                    ControlButton("反方镜头") { submitCommand(activity, cameraIntent("team", team = "CON")) }
-                    ControlButton("主持人") { submitCommand(activity, cameraIntent("host")) }
-                    ControlButton("九人全景") { submitCommand(activity, cameraIntent("wide")) }
-                    ControlButton("全景5秒") { submitCommand(activity, cameraIntent("wide", holdMs = 5000L)) }
-                    ControlButton("恢复自动") { submitCommand(activity, buildIntent("camera_auto")) }
-                    ControlButton("状态") { submitCommand(activity, buildIntent("state")) }
+        } else {
+            subtitle?.let { (speaker, text) ->
+                Surface(
+                    color = Color(0xAA0D1117),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth(0.75f),
+                ) {
+                    Text(
+                        "${rig.parts[speaker]?.dto?.name ?: speaker}：$text", color = Color.White,
+                        fontSize = 14.sp, modifier = Modifier.padding(10.dp),
+                    )
                 }
             }
+        }
+        Surface(
+            onClick = { buttonsVisible = !buttonsVisible },
+            color = Color.Black.copy(alpha = 0.45f),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+        ) {
+            Text(if (buttonsVisible) "隐藏按钮" else "显示按钮", color = Color.White,
+                fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
         }
     }
 }
@@ -291,8 +352,12 @@ private fun cameraIntent(shot: String, team: String? = null, holdMs: Long? = nul
 
 
 @Composable
-private fun ControlButton(label: String, onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 2.dp)) {
+private fun ControlButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    FilledTonalButton(onClick = onClick, enabled = enabled,
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = Color(0x99415465), contentColor = Color.White,
+            disabledContainerColor = Color(0x55415465), disabledContentColor = Color(0x99FFFFFF),
+        ), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 2.dp)) {
         Text(label, fontSize = 11.sp)
     }
 }

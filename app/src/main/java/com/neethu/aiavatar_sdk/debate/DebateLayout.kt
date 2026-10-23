@@ -131,6 +131,14 @@ object DebateFiles {
 
     fun parseLayout(text: String): DebateLayoutDto = json.decodeFromString(DebateLayoutDto.serializer(), text)
 
+    /** 内建入口直接读取 APK，不引导复制，也不受 filesDir 中旧配置覆盖。 */
+    fun readAssetConfigText(context: Context, relative: String): String? {
+        if (safeRelative(context, relative) == null) return null
+        return runCatching {
+            context.assets.open("$ROOT_DIR/$relative").bufferedReader().use { it.readText() }
+        }.onFailure { Log.w(TAG, "读取内建配置失败: $relative (${it.message})") }.getOrNull()
+    }
+
     /** 写结果文件（失败只记日志，不阻塞命令流）。 */
     fun writeResult(context: Context, requestId: String, payload: String) {
         runCatching {

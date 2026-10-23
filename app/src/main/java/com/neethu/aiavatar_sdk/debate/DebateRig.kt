@@ -3,9 +3,14 @@ package com.neethu.aiavatar_sdk.debate
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
+import com.neethu.corelib.Lang
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.neethu.aiavatar_sdk.AiChatPrefs
 import com.neethu.corelib.AvatarState
-import com.neethu.corelib.Lang
 import com.neethu.corelib.VrmaFinished
 import com.neethu.corelib.accessory.AccessorySource
 import com.neethu.corelib.accessory.AccessorySpec
@@ -30,8 +35,6 @@ import com.neethu.orchestrator.debate.PostureAction
 import com.neethu.orchestrator.debate.PostureCommand
 import com.neethu.orchestrator.debate.TurnKind
 import com.neethu.orchestrator.facade.AIAvatarSdk
-import com.neethu.orchestrator.facade.ChatProvider
-import com.neethu.orchestrator.facade.TtsEngine
 import com.neethu.orchestrator.history.InMemoryConversationStore
 import com.neethu.orchestrator.session.AvatarEvent
 import kotlinx.coroutines.CoroutineScope
@@ -50,7 +53,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * 辩论舞台装配（docs/debate-feasibility.md §4 DebateRig 槽位）：九个业务 ID
  * 显式映射到 [AvatarHandle]（不依赖舞台自动 A/B/C id）、辩论布局的座位/椅子/
- * 持麦、每参与者独立 TTS 会话（P0 固定稿直说，不走 LLM）、[DebateEngine]
+ * 持麦、每参与者独立 TTS 会话（fixed 固定稿 / ai 实时短句）、[DebateEngine]
  * 的姿态/播放两缝、镜头导演。
  *
  * 纪律：不调 RoundtableSession、不启用圆桌走位；辩论模式下 LLM 相机/走动
@@ -86,6 +89,18 @@ class DebateRig(
 
     private val monotonicClock = DebateClock { SystemClock.elapsedRealtime() }
     private val speechPlayer = RigSpeechPlayer()
+    private val turnTexts = mutableMapOf<Pair<Long, Long>, String>()
+    private var generationConnection: Pair<String, String>? = null
+    private var generationAdapter: OpenAiCompatibleLlmAdapter? = null
+
+    private fun generationAdapter(chat: AIAvatarSdk.ChatConfig): OpenAiCompatibleLlmAdapter {
+        val connection = chat.llmBaseUrl to chat.apiKey
+        if (generationConnection != connection || generationAdapter == null) {
+            generationConnection = connection
+            generationAdapter = OpenAiCompatibleLlmAdapter(chat.llmBaseUrl, chat.apiKey)
+        }
+        return checkNotNull(generationAdapter)
+    }
     private val postureDirector = RigPostureDirector()
 
     val engine: DebateEngine = DebateEngine(
@@ -295,7 +310,10 @@ class DebateRig(
                     camera.onMatchEvent()
                 }
                 is DebateEvent.PhaseChanged -> camera.onMatchEvent()
-                is DebateEvent.SpeechAudioStarted -> setTalkGesture(event.speakerId, talking = true)
+                is DebateEvent.SpeechAudioStarted -> {
+                    camera.onMatchEvent()
+                    setTalkGesture(event.speakerId, talking = true)
+                }
                 is DebateEvent.TurnEnded -> {
                     setTalkGesture(event.speakerId, talking = false)
                     _subtitle.value = null
@@ -331,56 +349,25 @@ class DebateRig(
             .onFailure { Log.w(TAG, "手势切换失败 $speakerId: ${it.message}") }
     }
 
-    // ── 会话（P0：固定稿直说，TTS + 口型 + 表情；记忆不入库）────────────
+    // ── 会话（TTS + 口型 + 表情；AI 引用引擎内的实际台词记录）────────────
 
-    /** Edge-TTS 免 Key 兜底的九人音色表（已实测可合成的中文音色）。 */
-    private val EDGE_VOICES = listOf(
-        "zh-CN-YunxiNeural", "zh-CN-XiaoxiaoNeural", "zh-CN-YunyangNeural",
-        "zh-CN-XiaoyiNeural", "zh-CN-YunjianNeural", "zh-CN-XiaohanNeural",
-        "zh-CN-YunyeNeural", "zh-CN-XiaozhenNeural", "zh-CN-XiaomoNeural",
-    )
+    private val _generationStatus = MutableStateFlow<String?>(null)
+    val generationStatus: StateFlow<String?> get() = _generationStatus
+
+    private val _speechError = MutableStateFlow<String?>(null)
+    val speechError: StateFlow<String?> get() = _speechError
 
     private fun buildChats(dto: DebateConfigDto) {
         val prefs = globalPrefs()
-        val globalKey = runCatching { prefs.apiKeyFor(prefs.provider) }.getOrDefault("")
-        val useEdge = globalKey.isBlank()
-        var voiceIdx = 0
+        _speechError.value = if (prefs.apiKeyVolcanoTts.isBlank()) {
+            "请在主界面 AI 设置中配置火山豆包语音 Key，再重新载入赛程"
+        } else null
+        if (_speechError.value != null) return
         for (p in dto.participants) {
             val part = parts[p.id] ?: continue
             val handle = part.handle ?: continue
-            val voice = p.voice.ifBlank {
-                if (useEdge) EDGE_VOICES[voiceIdx % EDGE_VOICES.size] else ""
-            }
-            voiceIdx++
-            val chatConfig = if (useEdge) {
-                // 免 Key 兜底：Edge-TTS 免费合成；LLM 字段占位（P0 固定稿不调 LLM）
-                AIAvatarSdk.ChatConfig(
-                    provider = ChatProvider.DEEPSEEK,
-                    apiKey = "debate-fixed-script",
-                    llmModel = "unused",
-                    ttsEngine = TtsEngine.EDGE,
-                    voice = voice,
-                    lang = Lang.ZH,
-                    enableLlmCamera = false,
-                    enableLlmMove = false,
-                    contextId = "debate_${dto.matchId}_${p.id}",
-                    characterId = p.name,
-                    persona = debatePersona(p),
-                    ttsMaxConcurrent = 2,
-                )
-            } else {
-                prefs.toChatConfig(
-                    contextId = "debate_${dto.matchId}_${p.id}",
-                    characterId = p.name,
-                    lang = Lang.ZH,
-                ).copy(
-                    voice = voice,
-                    enableLlmCamera = false,
-                    enableLlmMove = false,
-                    persona = debatePersona(p),
-                    ttsMaxConcurrent = 2,
-                )
-            }
+            val chatConfig = DebateSpeech.config(prefs, dto.matchId, p.id, p.name, p.voice, debatePersona(p))
+            Log.i(TAG, "辩论语音 ${p.id}: VOLCANO ${chatConfig.resolvedVoice}")
             part.chat = ParticipantChat(p, handle, chatConfig)
             part.chat!!.start()
         }
@@ -414,7 +401,7 @@ class DebateRig(
         )
 
         fun start() {
-            sdk.configure(chatConfig, modelReady = handle.isReady)
+            checkNotNull(sdk.configure(chatConfig, modelReady = handle.isReady)) { "辩论语音配置不完整" }
             scope.launch {
                 sdk.events.collect { event ->
                     if (event is com.neethu.orchestrator.session.AvatarEvent.SentenceStarted) {
@@ -448,6 +435,7 @@ class DebateRig(
                 engine.notifySpeechFailed(turn.epoch, turn.turnId, IllegalStateException("no session"))
                 return
             }
+            _generationStatus.value = null
             val epoch = turn.epoch
             val turnId = turn.turnId
             val token = seq.incrementAndGet()
@@ -468,7 +456,35 @@ class DebateRig(
                     }
                 }
                 try {
-                    sdk.speak(text)
+                    val dto = config
+                    var actualText = text
+                    if (dto?.speech?.mode == "ai" && turn.speakerId != DebateIds.HOST && (epoch to turnId) !in turnTexts) {
+                        _generationStatus.value = "${part.dto.name} 正在接招…"
+                        val prefs = globalPrefs()
+                        val llmConfig = prefs.toChatConfig("debate_generation", part.dto.name, Lang.ZH)
+                        actualText = try {
+                            check(llmConfig.apiKey.isNotBlank()) { "未配置 AI Key" }
+                            DebateAiSpeech.generate(
+                                generationAdapter(llmConfig),
+                                llmConfig, dto, turn, engine.transcriptEntries,
+                            ).also { _generationStatus.value = null }
+                        } catch (t: Exception) {
+                            // 生成超时使用备用稿；暂停/跳段/重载的取消必须继续传播。
+                            if (t is CancellationException && t !is TimeoutCancellationException) throw t
+                            currentCoroutineContext().ensureActive()
+                            _generationStatus.value = "${part.dto.name} 使用备用台词（AI 台词未就绪）"
+                            Log.w(TAG, "AI 台词回退 ${turn.speakerId}: ${t.javaClass.simpleName}")
+                            val fallback = if (turn.kind == TurnKind.CROSS_ANSWER) {
+                                dto.scripts[turn.speakerId]?.get(DebatePhase.CROSS_SUMMARY.name) ?: text
+                            } else text
+                            DebateAiSpeech.clean(fallback)
+                        }
+                        turnTexts[epoch to turnId] = actualText
+                    }
+                    actualText = turnTexts[epoch to turnId] ?: actualText
+                    if (token != seq.get()) return@launch
+                    engine.notifySpeechTextPrepared(epoch, turnId, actualText)
+                    sdk.speak(actualText)
                     if (token != seq.get()) return@launch
                     playbackFailure?.let { throw it }
                     check(audioStarted[0]) { "TTS 回合结束但没有音频起播" }
@@ -487,6 +503,7 @@ class DebateRig(
         }
 
         override fun cancelActive(reason: String) {
+            _generationStatus.value = null
             seq.incrementAndGet() // 在途失败回调按 token 丢弃
             activeJob?.cancel()
             activeJob = null
@@ -584,6 +601,9 @@ class DebateRig(
             part.handle = null
         }
         parts.clear()
+        turnTexts.clear()
+        generationConnection = null
+        generationAdapter = null
         crossQuestioner = null
         crossAnswerer = null
         camera.reset()

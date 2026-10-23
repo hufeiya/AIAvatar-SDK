@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "units": "meters",
+  "coordinateSystem": "glTF RH +Y up, +Z forward",
+  "floorY": -1.0,
+  "seatSurfaceHeight": 0.52,
+  "seats": {
+    "HOST": {
+      "avatarRootNode": "AVATAR_ROOT_HOST",
+      "seatNode": "SEAT_HOST",
+      "floorNode": "FLOOR_HOST",
+      "facingNode": "FACING_HOST",
+      "avatarRoot": [
+        0,
+        0,
+        -3.2
+      ],
+      "seatSurface": [
+        0,
+        -0.48,
+        -3.2
+      ],
+      "floor": [
+        0,
+        -1,
+        -3.2
+      ],
+      "forward": [
+        0.0,
+        0,
+        1.0
+      ],
+      "yawDeg": 0,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        0.0,
+        0,
+        1.0
+      ]
+    },
+    "PRO1": {
+      "avatarRootNode": "AVATAR_ROOT_PRO1",
+      "seatNode": "SEAT_PRO1",
+      "floorNode": "FLOOR_PRO1",
+      "facingNode": "FACING_PRO1",
+      "avatarRoot": [
+        -0.7,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        -0.7,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        -0.7,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": 12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "PRO2": {
+      "avatarRootNode": "AVATAR_ROOT_PRO2",
+      "seatNode": "SEAT_PRO2",
+      "floorNode": "FLOOR_PRO2",
+      "facingNode": "FACING_PRO2",
+      "avatarRoot": [
+        -1.42,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        -1.42,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        -1.42,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": 12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "PRO3": {
+      "avatarRootNode": "AVATAR_ROOT_PRO3",
+      "seatNode": "SEAT_PRO3",
+      "floorNode": "FLOOR_PRO3",
+      "facingNode": "FACING_PRO3",
+      "avatarRoot": [
+        -2.14,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        -2.14,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        -2.14,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": 12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "PRO4": {
+      "avatarRootNode": "AVATAR_ROOT_PRO4",
+      "seatNode": "SEAT_PRO4",
+      "floorNode": "FLOOR_PRO4",
+      "facingNode": "FACING_PRO4",
+      "avatarRoot": [
+        -2.86,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        -2.86,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        -2.86,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": 12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "CON1": {
+      "avatarRootNode": "AVATAR_ROOT_CON1",
+      "seatNode": "SEAT_CON1",
+      "floorNode": "FLOOR_CON1",
+      "facingNode": "FACING_CON1",
+      "avatarRoot": [
+        0.7,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        0.7,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        0.7,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        -0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": -12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        -0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "CON2": {
+      "avatarRootNode": "AVATAR_ROOT_CON2",
+      "seatNode": "SEAT_CON2",
+      "floorNode": "FLOOR_CON2",
+      "facingNode": "FACING_CON2",
+      "avatarRoot": [
+        1.42,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        1.42,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        1.42,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        -0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": -12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        -0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "CON3": {
+      "avatarRootNode": "AVATAR_ROOT_CON3",
+      "seatNode": "SEAT_CON3",
+      "floorNode": "FLOOR_CON3",
+      "facingNode": "FACING_CON3",
+      "avatarRoot": [
+        2.14,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        2.14,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        2.14,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        -0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": -12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        -0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    },
+    "CON4": {
+      "avatarRootNode": "AVATAR_ROOT_CON4",
+      "seatNode": "SEAT_CON4",
+      "floorNode": "FLOOR_CON4",
+      "facingNode": "FACING_CON4",
+      "avatarRoot": [
+        2.86,
+        0,
+        -1.7
+      ],
+      "seatSurface": [
+        2.86,
+        -0.48,
+        -1.7
+      ],
+      "floor": [
+        2.86,
+        -1,
+        -1.7
+      ],
+      "forward": [
+        -0.2079117,
+        0,
+        0.9781476
+      ],
+      "yawDeg": -12,
+      "gltfRotationQuaternionXYZW": [
+        0,
+        -0.10452846326765347,
+        0,
+        0.9945218953682733
+      ]
+    }
+  }
+}

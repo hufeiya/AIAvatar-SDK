@@ -1,0 +1,4 @@
+GLB 2; 3600776 bytes; 77644 triangles; 404 nodes
+PASS: 9 chairs, 27 world position anchors and 9 facing directions match seat_anchors.json within 1e-5 m.
+PASS: no external images, cameras or punctual lights.
+Validation covers export structure and coordinates; Android runtime and avatar hip contact not tested.

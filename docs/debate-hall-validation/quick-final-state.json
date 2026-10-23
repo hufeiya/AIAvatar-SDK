@@ -1,0 +1,72 @@
+{
+  "timestamp": 1792330681405,
+  "matchState": "FINISHED",
+  "epoch": 2,
+  "matchId": "debate-quick-001",
+  "phase": "HOST_CLOSING",
+  "segment": "7/7",
+  "legalSpeakers": [],
+  "postureWaiting": [],
+  "teamBalancesMs": {
+    "PRO": 0,
+    "CON": 0
+  },
+  "wallRemainingMs": null,
+  "lastError": null,
+  "participants": [
+    {
+      "id": "HOST",
+      "name": "主持人",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO1",
+      "name": "正方一辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO2",
+      "name": "正方二辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO3",
+      "name": "正方三辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "PRO4",
+      "name": "正方四辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON1",
+      "name": "反方一辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON2",
+      "name": "反方二辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON3",
+      "name": "反方三辩",
+      "ready": true,
+      "failed": false
+    },
+    {
+      "id": "CON4",
+      "name": "反方四辩",
+      "ready": true,
+      "failed": false
+    }
+  ]
+}

@@ -3727,6 +3727,15 @@ private fun AppDrawerContent(
                 context.startActivity(Intent(context, MultiAvatarActivity::class.java))
             },
         )
+        NavigationDrawerItem(
+            icon = { Icon(Icons.Default.Face, contentDescription = null) },
+            label = { Text(text = strings.drawerDebate) },
+            selected = false,
+            onClick = {
+                onClose()
+                context.startActivity(Intent(context, com.neethu.aiavatar_sdk.debate.DebateActivity::class.java))
+            },
+        )
     }
 }
 

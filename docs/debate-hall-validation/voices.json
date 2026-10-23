@@ -1,0 +1,65 @@
+[
+  {
+    "id": "HOST",
+    "voice": "zh_male_m191_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 1980,
+    "elapsedSeconds": 0.85
+  },
+  {
+    "id": "PRO1",
+    "voice": "zh_female_vv_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2187,
+    "elapsedSeconds": 0.95
+  },
+  {
+    "id": "PRO2",
+    "voice": "zh_female_xiaohe_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2210,
+    "elapsedSeconds": 0.73
+  },
+  {
+    "id": "PRO3",
+    "voice": "zh_male_taocheng_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 1980,
+    "elapsedSeconds": 0.74
+  },
+  {
+    "id": "PRO4",
+    "voice": "zh_female_sophie_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 1975,
+    "elapsedSeconds": 1.15
+  },
+  {
+    "id": "CON1",
+    "voice": "zh_female_qingxinnvsheng_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2780,
+    "elapsedSeconds": 0.93
+  },
+  {
+    "id": "CON2",
+    "voice": "zh_male_shaonianzixin_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2194,
+    "elapsedSeconds": 0.79
+  },
+  {
+    "id": "CON3",
+    "voice": "zh_female_meilinvyou_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2192,
+    "elapsedSeconds": 0.85
+  },
+  {
+    "id": "CON4",
+    "voice": "zh_female_cancan_uranus_bigtts",
+    "status": "PASS",
+    "audioMs": 2597,
+    "elapsedSeconds": 0.89
+  }
+]

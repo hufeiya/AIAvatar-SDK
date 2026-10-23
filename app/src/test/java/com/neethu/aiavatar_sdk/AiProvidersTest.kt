@@ -37,7 +37,7 @@ class AiProvidersTest {
         assertEquals(6, volc.llmModels.size)
         assertEquals(listOf("seed-tts-2.0"), volc.ttsModels)
         assertEquals("zh_female_vv_uranus_bigtts", volc.defaultVoice)
-        assertEquals(6, volc.voices.size)
+        assertEquals(9, volc.voices.size)
         assertTrue(volc.voicePrefix == null)
     }
 

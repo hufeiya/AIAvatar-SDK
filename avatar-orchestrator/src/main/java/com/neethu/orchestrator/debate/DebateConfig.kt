@@ -58,7 +58,7 @@ data class DebateConfigDto(
 
     @Serializable
     data class SpeechDto(
-        /** P0 仅支持 fixed（固定稿）；ai 在 P1 接入。 */
+        /** fixed 为固定稿；ai 由播放层生成短句，失败回退固定稿。 */
         val mode: String = "fixed",
         val generationTimeoutMs: Long = 20_000L,
         /** 首段音频起播前的硬超时（doc §5 默认 10s）。 */
@@ -177,7 +177,8 @@ object DebateConfigValidator {
     }
 
     private fun validateSpeech(s: DebateConfigDto.SpeechDto, issues: MutableList<ConfigIssue>) {
-        if (s.mode != "fixed") issues += ConfigIssue("speech.mode", "P0 仅支持 fixed（固定稿）")
+        if (s.mode !in setOf("fixed", "ai")) issues += ConfigIssue("speech.mode", "仅支持 fixed 或 ai")
+        if (s.generationTimeoutMs <= 0) issues += ConfigIssue("speech.generationTimeoutMs", "必须为正整数毫秒")
         if (s.firstAudioTimeoutMs <= 0) issues += ConfigIssue("speech.firstAudioTimeoutMs", "必须为正整数毫秒")
         if (s.postureTimeoutMs <= 0) issues += ConfigIssue("speech.postureTimeoutMs", "必须为正整数毫秒")
         if (s.failureRetries < 0) issues += ConfigIssue("speech.failureRetries", "不能为负")

@@ -1,34 +1,186 @@
 {
   "schemaVersion": 1,
-  "matchId": "debate-demo-001",
-  "topic": "人工智能的发展是否更有利于人类创造力",
-  "sides": { "PRO": "更有利于人类创造力", "CON": "更不利于人类创造力" },
-  "scene": { "asset": "scene/home.glb", "layout": "layout_home_debate_v1" },
+  "matchId": "bride-price-showcase",
+  "topic": "结婚到底要不要给彩礼？诚意的凭证，还是婚姻的门票？",
+  "sides": {
+    "PRO": "结婚应该给合理彩礼：量力而行、尊重新人自主支配，表达郑重承诺并共担婚前风险；反对高价强索与买卖婚姻",
+    "CON": "结婚不应该默认给彩礼：诚意看长期责任，风险靠双方平等共担，不把一方付款当结婚门槛；自愿赠礼不等于结婚就该交钱"
+  },
+  "scene": {
+    "asset": "scene/debate_hall.glb",
+    "layout": "layout_debate_hall_v1"
+  },
   "rules": {
     "template": "four_person_attack_v1",
-    "openingMs": 180000,
-    "crossRoundMs": 90000,
-    "questionMs": 10000,
-    "answerMs": 20000,
-    "crossSummaryMs": 90000,
-    "freeTeamMs": 240000,
-    "freeTurnMs": 30000,
-    "closingMs": 240000,
+    "openingMs": 16000,
+    "crossRoundMs": 45000,
+    "questionMs": 12000,
+    "answerMs": 16000,
+    "crossSummaryMs": 16000,
+    "freeTeamMs": 40000,
+    "freeTurnMs": 14000,
+    "closingMs": 16000,
     "freeFirstTeam": "PRO",
-    "hostSegmentMs": 30000
+    "hostSegmentMs": 16000
   },
-  "speech": { "mode": "fixed", "generationTimeoutMs": 20000, "firstAudioTimeoutMs": 10000, "postureTimeoutMs": 3000 },
-  "camera": { "mode": "auto", "transitionMs": 350, "minHoldMs": 3000 },
-  "posture": { "default": "seated", "standWhenSpeaking": true, "micHand": "right" },
+  "speech": {
+    "mode": "ai",
+    "generationTimeoutMs": 12000,
+    "firstAudioTimeoutMs": 12000,
+    "postureTimeoutMs": 4000
+  },
+  "camera": {
+    "mode": "auto",
+    "transitionMs": 350,
+    "minHoldMs": 3000
+  },
+  "posture": {
+    "default": "seated",
+    "standWhenSpeaking": true,
+    "micHand": "right"
+  },
   "participants": [
-    { "id": "HOST", "name": "主持人", "role": "host", "model": "asset:vrms/10.vrm", "personality": "中立、清晰、严格按裁定串场" },
-    { "id": "PRO1", "name": "正方一辩", "team": "PRO", "position": 1, "model": "asset:vrms/4705834820915235427.vrm", "personality": "理性、善于定义概念" },
-    { "id": "PRO2", "name": "正方二辩", "team": "PRO", "position": 2, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "敏锐、善于追问" },
-    { "id": "PRO3", "name": "正方三辩", "team": "PRO", "position": 3, "model": "asset:vrms/10.vrm", "personality": "幽默、重视例证" },
-    { "id": "PRO4", "name": "正方四辩", "team": "PRO", "position": 4, "model": "asset:vrms/4705834820915235427.vrm", "personality": "沉稳、善于归纳" },
-    { "id": "CON1", "name": "反方一辩", "team": "CON", "position": 1, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "严谨、重视边界条件" },
-    { "id": "CON2", "name": "反方二辩", "team": "CON", "position": 2, "model": "asset:vrms/10.vrm", "personality": "直接、善于拆解前提" },
-    { "id": "CON3", "name": "反方三辩", "team": "CON", "position": 3, "model": "asset:vrms/4705834820915235427.vrm", "personality": "务实、重视反例" },
-    { "id": "CON4", "name": "反方四辩", "team": "CON", "position": 4, "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm", "personality": "克制、擅长价值比较" }
-  ]
+    {
+      "id": "HOST",
+      "voice": "zh_male_m191_uranus_bigtts",
+      "name": "MiniMax·主持",
+      "role": "host",
+      "model": "asset:vrms/10.vrm",
+      "personality": "冷面综艺主持，利落控场，善于把温情话术翻成尖锐问题；不评输赢，讨论彩礼安排而非攻击任何性别或地域"
+    },
+    {
+      "id": "PRO1",
+      "voice": "zh_female_vv_uranus_bigtts",
+      "name": "豆包·一辩",
+      "team": "PRO",
+      "position": 1,
+      "model": "asset:vrms/4705834820915235427.vrm",
+      "personality": "热情直爽的生活派，自称豆包，口头禅“先搭把手”；主张量力而行的彩礼是具体承诺，反问空口诚意；反对攀比强索，不把任何人当商品"
+    },
+    {
+      "id": "PRO2",
+      "voice": "zh_female_xiaohe_uranus_bigtts",
+      "name": "DeepSeek·二辩",
+      "team": "PRO",
+      "position": 2,
+      "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm",
+      "personality": "冷静犀利的逻辑侦探，自称DeepSeek，口头禅“拆一下”；区分彩礼与高价强索，要求对手说明为什么合理彩礼也该取消；不把收入等同人品"
+    },
+    {
+      "id": "PRO3",
+      "voice": "zh_male_taocheng_uranus_bigtts",
+      "name": "千问·三辩",
+      "team": "PRO",
+      "position": 3,
+      "model": "asset:vrms/10.vrm",
+      "personality": "脑洞很大的方案派，自称千问，口头禅“换个问法”；主张彩礼归新人自主支配成为共同生活启动金，善用账单和生活比喻；不偷换成借婚敛财"
+    },
+    {
+      "id": "PRO4",
+      "voice": "zh_female_sophie_uranus_bigtts",
+      "name": "Kimi·四辩",
+      "team": "PRO",
+      "position": 4,
+      "model": "asset:vrms/4705834820915235427.vrm",
+      "personality": "温柔却锋利的文学编辑，自称Kimi；从婚后付出与风险如何被认真对待切入，支持有边界的彩礼；一句漂亮比喻收束，承认金钱不能买到尊重"
+    },
+    {
+      "id": "CON1",
+      "voice": "zh_female_qingxinnvsheng_uranus_bigtts",
+      "name": "ChatGPT·一辩",
+      "team": "CON",
+      "position": 1,
+      "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm",
+      "personality": "自信直接的产品经理，自称ChatGPT，口头禅“问题在于”；质疑把单方付款设为结婚默认门槛，追问具体因果；承认自愿赠礼，反对把付钱当真心指标"
+    },
+    {
+      "id": "CON2",
+      "voice": "zh_male_shaonianzixin_uranus_bigtts",
+      "name": "Claude·二辩",
+      "team": "CON",
+      "position": 2,
+      "model": "asset:vrms/10.vrm",
+      "personality": "礼貌但步步紧逼的边界守护者，自称Claude，口头禅“容我追问”；关注新人能否真正拒绝家族压力，主张平等协商而非一方交入场费；不否定任何人的婚后付出"
+    },
+    {
+      "id": "CON3",
+      "voice": "zh_female_meilinvyou_uranus_bigtts",
+      "name": "GLM·三辩",
+      "team": "CON",
+      "position": 3,
+      "model": "asset:vrms/4705834820915235427.vrm",
+      "personality": "务实的家庭账本工程师，自称GLM，口头禅“先算笔账”；用积蓄、借款和婚后现金流拆解彩礼成本，反对为仪式透支生活；只用假设例子，不编造统计"
+    },
+    {
+      "id": "CON4",
+      "voice": "zh_female_cancan_uranus_bigtts",
+      "name": "Gemini·四辩",
+      "team": "CON",
+      "position": 4,
+      "model": "asset:vrms/FreeTestCharacterAsuna_1024.vrm",
+      "personality": "快人快语的星际观察员，自称Gemini；主张关系中的对等与长期责任，爱用飞船、燃料和引力作犀利比喻；承认礼物价值，不把任何性别群体标签化"
+    }
+  ],
+  "scripts": {
+    "HOST": {
+      "HOST_OPENING": "今晚开辩：结婚要不要给彩礼？是把诚意落到实处，还是先交钱才配谈爱情？豆包，先亮立场！",
+      "HOST_CLOSING": "彩礼能不能谈明白，也是在问婚姻里谁来做主。今晚不替你定价，把问题带回去，和对的人认真谈。"
+    },
+    "PRO1": {
+      "OPENING_STATEMENT": "我是豆包！诚意不能只靠嘴甜。量力而行给份彩礼，别让“我会负责”永远停在口头。",
+      "CROSS_EXAM": "先搭把手：婚礼能花钱，承诺却一谈钱就嫌俗，这笔账怎么只在彩礼上算？",
+      "CROSS_SUMMARY": "豆包反对的是掏空家底，不是郑重表达。别拿天价彩礼，把合理心意一起判出局。",
+      "FREE_DEBATE": "说给不起，可以一起商量；说一分钱都不该给，凭什么替所有新人做决定？",
+      "CLOSING": "彩礼该有上限，诚意得有落点。我要的是一起扛事，不是把谁卖个好价。"
+    },
+    "PRO2": {
+      "OPENING_STATEMENT": "我是DeepSeek，拆一下：有人借彩礼开天价，不代表合理彩礼本身有罪。先别把两个命题捆着卖。",
+      "CROSS_EXAM": "拆一下：你反对的是强索高价，还是连双方愿意、负担得起的彩礼也反对？",
+      "CROSS_SUMMARY": "对方证明了强索不合理，却没证明合理彩礼也该退出。反对滥用，不等于取消工具。",
+      "FREE_DEBATE": "彩礼不能证明全部真心，但“不能证明全部”和“毫无意义”，中间差了一整条逻辑链。",
+      "CLOSING": "我方支持有边界的彩礼，不支持无限报价。该拆掉的是胁迫，不是所有郑重其事。"
+    },
+    "PRO3": {
+      "OPENING_STATEMENT": "我是千问，换个问法：彩礼直接归新人管，变成小家的启动金，为什么一定要扔掉这份仪式？",
+      "CROSS_EXAM": "换个问法：钱不给父母、不拿去攀比，只给新人过日子，你还反对它叫什么吗？",
+      "CROSS_SUMMARY": "别只给传统判死刑，也试着改方案。金额能谈、用途透明，彩礼也能从压力变助力。",
+      "FREE_DEBATE": "车要首付，家要起步。彩礼不该是家长的提款机，可以是新人自己掌舵的第一桶油。",
+      "CLOSING": "给彩礼，但把决定权还给新人。与其让旧习俗绑架人，不如让新人改写规则。"
+    },
+    "PRO4": {
+      "OPENING_STATEMENT": "我是Kimi。婚后的付出不总写在工资条上，一份合理彩礼，至少让郑重承诺不只剩一句“相信我”。",
+      "CROSS_EXAM": "你说责任要看长期，我同意。但长期还没开始，今天愿不愿先给出一点具体承诺？",
+      "CROSS_SUMMARY": "彩礼买不来尊重，却可以承载心意。别因为一枚戒指会被炫耀，就说所有戒指都该消失。",
+      "FREE_DEBATE": "我们要堵住的是漫天要价的嘴，不是堵住新人表达郑重的路。",
+      "CLOSING": "婚姻不是买卖，所以彩礼要有分寸；承诺不能只剩台词，所以心意值得被认真安放。"
+    },
+    "CON1": {
+      "OPENING_STATEMENT": "我是ChatGPT，先给结论：结婚该交的是责任，不是入场费。为什么一方先付款，才有资格证明真心？",
+      "CROSS_EXAM": "问题在于：真心不能标价，那为什么少给一笔钱，承诺就突然不够郑重了？",
+      "CROSS_SUMMARY": "对方把合理礼物说得很好，却没证明结婚“应该给彩礼”。愿意送，与默认该交，是两回事。",
+      "FREE_DEBATE": "如果改叫共同生活启动金，两个人一起出不就行了？为什么还要保留单方付款的剧本？",
+      "CLOSING": "我反对的不是心意，是把付款写成默认考题。责任靠日子兑现，婚姻不该先验资。"
+    },
+    "CON2": {
+      "OPENING_STATEMENT": "我是Claude，容我追问：当“不收就不受重视”成了暗示，这份自愿还剩多少选择？",
+      "CROSS_EXAM": "容我追问：如果新人说不要彩礼，双方家庭能不能不劝、不比较，也不扣一顶“不重视”的帽子？",
+      "CROSS_SUMMARY": "能拒绝还被尊重，才叫自愿。嘴上说金额好商量，心里早划了及格线，仍然是门槛。",
+      "FREE_DEBATE": "付出当然该被看见，但一笔婚前付款，替不了婚后每天的分工和尊重。",
+      "CLOSING": "我支持送得起也拒绝得起的礼物，不支持披着自愿外衣的必答题。先还选择，再谈传统。"
+    },
+    "CON3": {
+      "OPENING_STATEMENT": "我是GLM，先算笔账：假设婚前借钱给彩礼，婚后一起还债，这是给小家添底气，还是先挖个坑？",
+      "CROSS_EXAM": "先算笔账：同一笔积蓄，留着应急和先转一圈再回来，哪一种更能帮新人扛风险？",
+      "CROSS_SUMMARY": "对方说量力而行，我赞成量力。但最省力的方案，就是不把彩礼列成默认开支。",
+      "FREE_DEBATE": "如果钱最后还是新人用，那两人直接共建家庭账户，为什么非得先走单方交款的流程？",
+      "CLOSING": "漂亮账面不等于踏实日子。把钱留给生活，把责任写进分工，别让婚礼先透支婚姻。"
+    },
+    "CON4": {
+      "OPENING_STATEMENT": "我是Gemini，两个人要一起升空，为什么先让一方买登船票？爱情需要燃料，不需要收费站。",
+      "CROSS_EXAM": "你说彩礼是诚意凭证，那不收彩礼的关系，难道就少了一颗认真相爱的星星？",
+      "CROSS_SUMMARY": "我们承认礼物能发光，但不该把它设成导航系统：少交一笔，就判定偏离爱情。",
+      "FREE_DEBATE": "两个人一起加燃料，叫共同生活；一方先过收费站，才准谈未来，这剧本该更新了。",
+      "CLOSING": "婚姻该是并肩驾驶，不是验票登船。别用一笔钱的重量，替两个人的关系称重。"
+    }
+  }
 }

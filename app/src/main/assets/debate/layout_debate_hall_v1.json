@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "layoutId": "debate_hall_v1",
+  "scene": {
+    "asset": "scene/debate_hall.glb"
+  },
+  "seats": {
+    "HOST": {
+      "x": 0,
+      "y": 0,
+      "z": -3.2,
+      "yawDeg": 0
+    },
+    "PRO1": {
+      "x": -0.7,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": 12
+    },
+    "PRO2": {
+      "x": -1.42,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": 12
+    },
+    "PRO3": {
+      "x": -2.14,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": 12
+    },
+    "PRO4": {
+      "x": -2.86,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": 12
+    },
+    "CON1": {
+      "x": 0.7,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": -12
+    },
+    "CON2": {
+      "x": 1.42,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": -12
+    },
+    "CON3": {
+      "x": 2.14,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": -12
+    },
+    "CON4": {
+      "x": 2.86,
+      "y": 0,
+      "z": -1.7,
+      "yawDeg": -12
+    }
+  },
+  "chair": {
+    "enabled": false
+  },
+  "animations": {
+    "seatedIdle": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
+    "seatedTalk": "animations/04_交流手势/Sitting And Talking To Another Person.vrma",
+    "standingIdle": "animations/01_待机与站姿/Arms Down.vrma",
+    "standingTalk": "animations/04_交流手势/General Conversation.vrma",
+    "standUp": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+    "sitDown": "animations/06_坐姿/Standing To Sitting Transition.vrma"
+  },
+  "mic": {
+    "asset": "accessories/microphone.glb",
+    "bone": "rightHand",
+    "position": [
+      0.0,
+      0.05,
+      0.02
+    ],
+    "rotationEulerYXZ": [
+      90.0,
+      0.0,
+      0.0
+    ],
+    "scale": 1.0,
+    "perModel": {}
+  }
+}

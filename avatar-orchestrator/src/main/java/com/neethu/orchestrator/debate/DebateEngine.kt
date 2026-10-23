@@ -61,6 +61,7 @@ class DebateEngine(
     private var balances = mutableMapOf<DebateTeam, Long>()
 
     private var activeTurn: ActiveTurn? = null
+    private val preparedTexts = mutableMapOf<Long, String>()
     /** 姿态门：等待 STAND 就绪的参与者（空集 = 门已通过）。 */
     private var posturePending = linkedSetOf<String>()
     private var audioStartedAtMs: Long? = null
@@ -170,7 +171,7 @@ class DebateEngine(
                     frozen.turn.turnId, posturePending.toList(), PostureAction.STAND,
                 ))
             } else {
-                scheduleTimer(TIMER_PREP, configSpeech().firstAudioTimeoutMs)
+                scheduleTimer(TIMER_PREP, preparationTimeoutMs())
                 beginAudio(frozen.turn, frozen.text, frozen.remainingMs)
             }
             frozen.remainingWallMs?.let { scheduleTimer(TIMER_WALL, it) }
@@ -192,6 +193,7 @@ class DebateEngine(
             recordTranscript(turn, TurnEndReason.MANUAL_END, consumedSoFar(turn), TranscriptStatus.INTERRUPTED)
         }
         activeTurn = null
+        preparedTexts.clear()
         frozenTurn = null
         posturePending.clear()
         if (matchState == MatchState.RUNNING || matchState == MatchState.PAUSED) {
@@ -329,7 +331,7 @@ class DebateEngine(
     private fun beginAudioGate(turn: ActiveTurn) {
         turn.stage = TurnStage.PREPARING_AUDIO
         val script = currentScript(turn)
-        scheduleTimer(TIMER_PREP, configSpeech().firstAudioTimeoutMs)
+        scheduleTimer(TIMER_PREP, preparationTimeoutMs())
         beginAudio(turn, script, turn.budgetMs)
     }
 
@@ -532,6 +534,8 @@ class DebateEngine(
         audioStartedAtMs = null
         pendingReasonOnComplete = null
         val text = currentScript(at)
+        // 事件收集者可能立即执行（Main.immediate）；先发布新回合再通知镜头。
+        publish()
         emit(DebateEvent.TurnStarted(at, text))
 
         val needsStand = configPosture().standWhenSpeaking
@@ -583,6 +587,7 @@ class DebateEngine(
         recordTranscript(turn, TurnEndReason.SKIPPED, consumedSoFar(turn), TranscriptStatus.SKIPPED)
         emit(DebateEvent.TurnEnded(turn.turnId, turn.speakerId, TurnEndReason.SKIPPED, 0L, null))
         activeTurn = null
+        preparedTexts.clear()
         frozenTurn = null
         posturePending.clear()
         wallExpiresAtMs = null
@@ -780,7 +785,20 @@ class DebateEngine(
         return (clock.nowMs() - started).coerceAtLeast(0L)
     }
 
+    /** AI 播放层确认实际台词；忽略取消/重载后的旧回调，导出记录与声音一致。 */
+    fun notifySpeechTextPrepared(epoch: Long, turnId: Long, text: String) = step {
+        val turn = activeTurn ?: return@step
+        if (epoch != this.epoch || turnId != turn.turnId || text.isBlank()) return@step
+        if (matchState != MatchState.RUNNING || frozenTurn != null || turn.stage != TurnStage.PREPARING_AUDIO) return@step
+        preparedTexts[turnId] = text
+    }
+
+    private fun preparationTimeoutMs(): Long = configSpeech().let {
+        it.firstAudioTimeoutMs + if (it.mode == "ai") it.generationTimeoutMs else 0L
+    }
+
     private fun currentScript(turn: ActiveTurn): String {
+        preparedTexts[turn.turnId]?.let { return it }
         val provider = scriptProvider ?: return ""
         return provider.scriptFor(turn.phase, turn.speakerId, turn.turnIndexInPhase)
     }
@@ -830,6 +848,7 @@ class DebateEngine(
             postureDirector?.onPostureCommand(PostureCommand(-1L, DebateIds.ALL, PostureAction.SIT))
         }
         activeTurn = null
+        preparedTexts.clear()
         frozenTurn = null
         posturePending.clear()
         audioStartedAtMs = null

@@ -1,0 +1,75 @@
+{
+  "requestId": "hall-ready-state",
+  "cmd": "state",
+  "status": "completed",
+  "detail": "状态快照",
+  "at": "21:32:00.853",
+  "extra": {
+    "timestamp": 1792330320853,
+    "matchState": "READY",
+    "epoch": 1,
+    "matchId": "debate-demo-001",
+    "phase": "HOST_OPENING",
+    "segment": "1\/7",
+    "legalSpeakers": [],
+    "postureWaiting": [],
+    "wallRemainingMs": null,
+    "lastError": null,
+    "participants": [
+      {
+        "id": "HOST",
+        "name": "主持人",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "PRO1",
+        "name": "正方一辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "PRO2",
+        "name": "正方二辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "PRO3",
+        "name": "正方三辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "PRO4",
+        "name": "正方四辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "CON1",
+        "name": "反方一辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "CON2",
+        "name": "反方二辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "CON3",
+        "name": "反方三辩",
+        "ready": true,
+        "failed": false
+      },
+      {
+        "id": "CON4",
+        "name": "反方四辩",
+        "ready": true,
+        "failed": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "requestId": "hall-smoke-4-1792330413424833061",
+  "exportedAt": 1792330413340,
+  "config": {
+    "schemaVersion": 1,
+    "matchId": "debate-demo-001",
+    "topic": "人工智能的发展是否更有利于人类创造力",
+    "sides": {
+      "PRO": "更有利于人类创造力",
+      "CON": "更不利于人类创造力"
+    },
+    "scene": {
+      "asset": "scene\/debate_hall.glb",
+      "layout": "layout_debate_hall_v1"
+    },
+    "rules": {
+      "template": "four_person_attack_v1",
+      "openingMs": 180000,
+      "crossRoundMs": 90000,
+      "questionMs": 10000,
+      "answerMs": 20000,
+      "crossSummaryMs": 90000,
+      "freeTeamMs": 240000,
+      "freeTurnMs": 30000,
+      "closingMs": 240000,
+      "freeFirstTeam": "PRO",
+      "hostSegmentMs": 30000
+    },
+    "speech": {
+      "mode": "fixed",
+      "generationTimeoutMs": 20000,
+      "firstAudioTimeoutMs": 10000,
+      "postureTimeoutMs": 3000,
+      "drainGraceMs": 600,
+      "failureRetries": 1
+    },
+    "camera": {
+      "mode": "auto",
+      "transitionMs": 350,
+      "minHoldMs": 3000
+    },
+    "posture": {
+      "default": "seated",
+      "standWhenSpeaking": true,
+      "micHand": "right"
+    },
+    "participants": [
+      {
+        "id": "HOST",
+        "name": "主持人",
+        "role": "host",
+        "model": "asset:vrms\/10.vrm",
+        "personality": "中立、清晰、严格按裁定串场",
+        "voice": "zh_male_m191_uranus_bigtts"
+      },
+      {
+        "id": "PRO1",
+        "name": "正方一辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 1,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "理性、善于定义概念",
+        "voice": "zh_female_vv_uranus_bigtts"
+      },
+      {
+        "id": "PRO2",
+        "name": "正方二辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 2,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "敏锐、善于追问",
+        "voice": "zh_female_xiaohe_uranus_bigtts"
+      },
+      {
+        "id": "PRO3",
+        "name": "正方三辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 3,
+        "model": "asset:vrms\/10.vrm",
+        "personality": "幽默、重视例证",
+        "voice": "zh_male_taocheng_uranus_bigtts"
+      },
+      {
+        "id": "PRO4",
+        "name": "正方四辩",
+        "role": "debater",
+        "team": "PRO",
+        "position": 4,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "沉稳、善于归纳",
+        "voice": "zh_female_sophie_uranus_bigtts"
+      },
+      {
+        "id": "CON1",
+        "name": "反方一辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 1,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "严谨、重视边界条件",
+        "voice": "zh_female_qingxinnvsheng_uranus_bigtts"
+      },
+      {
+        "id": "CON2",
+        "name": "反方二辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 2,
+        "model": "asset:vrms\/10.vrm",
+        "personality": "直接、善于拆解前提",
+        "voice": "zh_male_shaonianzixin_uranus_bigtts"
+      },
+      {
+        "id": "CON3",
+        "name": "反方三辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 3,
+        "model": "asset:vrms\/4705834820915235427.vrm",
+        "personality": "务实、重视反例",
+        "voice": "zh_female_meilinvyou_uranus_bigtts"
+      },
+      {
+        "id": "CON4",
+        "name": "反方四辩",
+        "role": "debater",
+        "team": "CON",
+        "position": 4,
+        "model": "asset:vrms\/FreeTestCharacterAsuna_1024.vrm",
+        "personality": "克制、擅长价值比较",
+        "voice": "zh_female_cancan_uranus_bigtts"
+      }
+    ],
+    "scripts": {}
+  },
+  "transcript": [
+    {
+      "turnId": 1,
+      "phase": "HOST_OPENING",
+      "speaker": "HOST",
+      "kind": "HOST",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 16651,
+      "text": "欢迎来到辩论赛现场。今天的辩题是「人工智能的发展是否更有利于人类创造力」。正方主张「更有利于人类创造力」，反方主张「更不利于人类创造力」。双方各有四位辩手，比赛马上开始。"
+    },
+    {
+      "turnId": 2,
+      "phase": "OPENING_STATEMENT",
+      "speaker": "PRO1",
+      "team": "PRO",
+      "kind": "STATEMENT",
+      "status": "PLAYED",
+      "endReason": "COMPLETED",
+      "consumedMs": 10552,
+      "text": "大家好，我是正方一辩。我方认为，人工智能的发展更有利于人类创造力。接下来我将从定义和标准两个层面展开论证。"
+    },
+    {
+      "turnId": 3,
+      "phase": "OPENING_STATEMENT",
+      "speaker": "CON1",
+      "team": "CON",
+      "kind": "STATEMENT",
+      "status": "INTERRUPTED",
+      "endReason": "PAUSED",
+      "consumedMs": 3610,
+      "text": "大家好，我是反方一辩。我方认为，人工智能的发展更不利于人类创造力。接下来我将从定义和标准两个层面展开论证。"
+    },
+    {
+      "turnId": 3,
+      "phase": "OPENING_STATEMENT",
+      "speaker": "CON1",
+      "team": "CON",
+      "kind": "STATEMENT",
+      "status": "INTERRUPTED",
+      "endReason": "PAUSED",
+      "consumedMs": 0,
+      "text": "大家好，我是反方一辩。我方认为，人工智能的发展更不利于人类创造力。接下来我将从定义和标准两个层面展开论证。"
+    }
+  ]
+}

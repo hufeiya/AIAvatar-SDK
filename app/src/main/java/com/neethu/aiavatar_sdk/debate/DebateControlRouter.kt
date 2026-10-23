@@ -65,6 +65,7 @@ class DebateControlRouter(
         val requestId = DebateFiles.sanitizeRequestId(extras.getStringExtra(EXTRA_REQUEST_ID))
         val params = mapOf(
             "config_file" to extras.getStringExtra(EXTRA_CONFIG_FILE),
+            "config_source" to extras.getStringExtra("config_source"),
             "speaker_id" to extras.getStringExtra(EXTRA_SPEAKER_ID),
             "shot" to extras.getStringExtra(EXTRA_SHOT),
             "target_id" to extras.getStringExtra(EXTRA_TARGET_ID),
@@ -111,12 +112,16 @@ class DebateControlRouter(
     private fun buildCommand(requestId: String, cmd: String, params: Map<String, String?>): Command {
         fun text(key: String): String = params[key]?.trim().orEmpty()
         val run: suspend () -> Outcome = when (cmd) {
-            "load" -> {{ loadCommand(text("config_file")) }}
+            "load" -> {{ loadCommand(text("config_file"), text("config_source") == "assets") }}
             "validate" -> {{ validateCommand(text("config_file")) }}
             "start" -> {{
                 withEngine("start") { engine ->
-                    engine.start()
-                    Outcome("completed", "开赛，状态=${engine.state.value.matchState}")
+                    val error = rigProvider()?.speechError?.value
+                    if (error != null) Outcome("rejected", error)
+                    else {
+                        engine.start()
+                        Outcome("completed", "开赛，状态=${engine.state.value.matchState}")
+                    }
                 }
             }}
             "pause" -> {{
@@ -182,7 +187,7 @@ class DebateControlRouter(
 
     // ── load / validate / camera / export ──────────────────────────────
 
-    private suspend fun loadCommand(file: String): Outcome {
+    private suspend fun loadCommand(file: String, fromAssets: Boolean = false): Outcome {
         if (file.isEmpty()) return Outcome("rejected", "load 缺 config_file")
         if (loading) return Outcome("rejected", "上一次装配仍在进行，拒绝并发 load")
         val rig = withTimeoutOrNull(10_000L) {
@@ -192,7 +197,8 @@ class DebateControlRouter(
         if (rig.engine.state.value.matchState == MatchState.RUNNING) {
             return Outcome("rejected", "比赛中禁止重载，请先暂停或停止")
         }
-        val text = DebateFiles.readConfigText(context, file)
+        val text = (if (fromAssets) DebateFiles.readAssetConfigText(context, file)
+            else DebateFiles.readConfigText(context, file))
             ?: return Outcome("rejected", "配置文件不存在或不可读: $file")
         val dto = try {
             DebateConfigParser.parseAndValidate(text).getOrThrow()
@@ -201,7 +207,7 @@ class DebateControlRouter(
         } catch (e: Exception) {
             return Outcome("rejected", "配置解析失败: ${e.message}")
         }
-        val layoutDto = loadLayout(dto) ?: return Outcome("rejected", "布局文件缺失: ${dto.scene.layout}")
+        val layoutDto = loadLayout(dto, fromAssets) ?: return Outcome("rejected", "布局文件缺失: ${dto.scene.layout}")
         loading = true
         try {
             val ok = rig.rebuild(dto, layoutDto)
@@ -230,12 +236,13 @@ class DebateControlRouter(
         }
     }
 
-    private fun loadLayout(dto: DebateConfigDto): DebateLayoutDto? {
+    private fun loadLayout(dto: DebateConfigDto, fromAssets: Boolean = false): DebateLayoutDto? {
         val rawName = dto.scene.layout.ifBlank { "layout_home_debate_v1" }
         // 布局引用允许不带扩展名（约定 .json）
         val layoutName = if (rawName.endsWith(".json")) rawName else "$rawName.json"
         if (layoutName.isBlank()) return DebateLayoutDto(layoutId = "default")
-        val text = DebateFiles.readConfigText(context, layoutName) ?: return null
+        val text = (if (fromAssets) DebateFiles.readAssetConfigText(context, layoutName)
+            else DebateFiles.readConfigText(context, layoutName)) ?: return null
         return runCatching { DebateFiles.parseLayout(text) }
             .onFailure { Log.e(TAG, "布局解析失败: $layoutName (${it.message})") }
             .getOrNull()
