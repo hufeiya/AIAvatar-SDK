@@ -103,6 +103,22 @@ data class AiChatPrefs(
      * 会刷屏，且部分特效带真灯有帧预算，用户显式开启。身份签名刻意不含。
      */
     val fxTools: Boolean = false,
+    /**
+     * 自主生命体总开关（docs/autonomy-feasibility.md）：FSM 在没人理的时候
+     * 自己走动/坐躺/看窗外（决策零 LLM，确定性作息表+加权随机）。默认开。
+     * 身份签名刻意不含（不改对话能力面，不轮换上下文）。
+     */
+    val autonomy: Boolean = true,
+    /**
+     * 自主问候子开关（§5）：不定时主动开口（25min 最小间隔+泊松随机、
+     * 23:00-08:00 安静时段硬门、每日上限 3 次、phase≠IDLE 推迟）。默认开。
+     */
+    val greetings: Boolean = true,
+    /**
+     * 思考气泡子开关（§6）：头顶云朵内心独白（状态转移/长停留尾段/问候
+     * 前奏），≤20 字、不出声。默认开。
+     */
+    val thoughtBubble: Boolean = true,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -203,6 +219,9 @@ private const val KEY_AI_MEMORY = "ai_agent_memory"
 private const val KEY_AI_MEMORY_AUTO_EXTRACT = "ai_memory_auto_extract"
 private const val KEY_AI_ACCESSORY_TOOLS = "ai_accessory_tools"
 private const val KEY_AI_FX_TOOLS = "ai_fx_tools"
+private const val KEY_AI_AUTONOMY = "ai_autonomy"
+private const val KEY_AI_GREETINGS = "ai_greetings"
+private const val KEY_AI_THOUGHT_BUBBLE = "ai_thought_bubble"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -242,6 +261,9 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         memoryAutoExtract = getBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, true),
         accessoryTools = getBoolean(KEY_AI_ACCESSORY_TOOLS, true),
         fxTools = getBoolean(KEY_AI_FX_TOOLS, false),
+        autonomy = getBoolean(KEY_AI_AUTONOMY, true),
+        greetings = getBoolean(KEY_AI_GREETINGS, true),
+        thoughtBubble = getBoolean(KEY_AI_THOUGHT_BUBBLE, true),
     )
 }
 
@@ -269,6 +291,9 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, p.memoryAutoExtract)
         .putBoolean(KEY_AI_ACCESSORY_TOOLS, p.accessoryTools)
         .putBoolean(KEY_AI_FX_TOOLS, p.fxTools)
+        .putBoolean(KEY_AI_AUTONOMY, p.autonomy)
+        .putBoolean(KEY_AI_GREETINGS, p.greetings)
+        .putBoolean(KEY_AI_THOUGHT_BUBBLE, p.thoughtBubble)
         .apply()
 }
 

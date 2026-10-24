@@ -1,0 +1,16 @@
+{
+  "comment": "自主生命体作息先验表（docs/autonomy-feasibility.md §4.2）：hour→状态权重乘子。from 含 to 舍；weights 缺省 1。quietHours 同时是深夜判定（躺卧时长加长）与问候静默的参考。",
+  "weights": {
+    "IDLE_STAND": 1.0,
+    "WANDER": 1.2,
+    "LOOKING": 1.0,
+    "SITTING": 1.6,
+    "LYING": 1.0
+  },
+  "hours": [
+    { "from": 0, "to": 6, "weights": { "LYING": 5.0, "SITTING": 0.5 } },
+    { "from": 9, "to": 17, "weights": { "SITTING": 3.0 } },
+    { "from": 18, "to": 23, "weights": { "LOOKING": 2.0 } }
+  ],
+  "quietHours": { "from": 23, "to": 8, "enabled": true }
+}

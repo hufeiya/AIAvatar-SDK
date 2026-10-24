@@ -586,6 +586,25 @@ internal fun SettingsScreen(
                                 checked = aiPrefs.llmMove
                             ) { onAiPrefsChange(aiPrefs.copy(llmMove = it)) }
 
+                            // ── 自主生命体（docs/autonomy-feasibility.md）──
+                            // 三开关都刻意不进会话身份：只切 app 层 FSM 挂载/
+                            // 问候调度/气泡显示，不重建会话（接线在 MainActivity）。
+                            SettingsSwitchRow(
+                                title = s.autonomyTitle,
+                                subtitle = s.autonomySubtitle,
+                                checked = aiPrefs.autonomy
+                            ) { onAiPrefsChange(aiPrefs.copy(autonomy = it)) }
+                            SettingsSwitchRow(
+                                title = s.greetingsTitle,
+                                subtitle = s.greetingsSubtitle,
+                                checked = aiPrefs.greetings
+                            ) { onAiPrefsChange(aiPrefs.copy(greetings = it)) }
+                            SettingsSwitchRow(
+                                title = s.thoughtBubbleTitle,
+                                subtitle = s.thoughtBubbleSubtitle,
+                                checked = aiPrefs.thoughtBubble
+                            ) { onAiPrefsChange(aiPrefs.copy(thoughtBubble = it)) }
+
                             // ── 长期记忆（docs/memory-feasibility.md §4.7）──
                             // 两开关都刻意不进会话身份（observeCamera 先例）：
                             // 切换走 register/unregister + 协调器 flag，不重建

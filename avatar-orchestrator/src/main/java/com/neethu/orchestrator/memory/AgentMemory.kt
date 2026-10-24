@@ -75,6 +75,9 @@ object MemorySources {
     const val TOOL = "tool"
     const val AUTO = "auto"
     const val MANUAL = "manual"
+
+    /** 自主问候回执（docs/autonomy-feasibility.md §5：主动发言要有回执）。 */
+    const val GREETING = "greeting"
 }
 
 /** 全场统一的内容长度约束（提炼 parser / remember 工具 / 管理面板共用）。 */

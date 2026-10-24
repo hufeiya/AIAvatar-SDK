@@ -137,6 +137,16 @@ internal class AiChatDebugHooks(
     val session: () -> AvatarSession? = { null },
     /** 场景交互就位链（ai_cmd interact/pose_state/pose_clear/interactions 用）。 */
     val interaction: InteractionCoordinator? = null,
+    /** ai_cmd autonomy_state：自主 FSM 状态快照（状态/锚点/下次决策倒计时/问候调度）。 */
+    val autonomyState: () -> String = { "autonomy not wired in this screen" },
+    /** ai_cmd autonomy_log：最近 20 条自主转移记录。 */
+    val autonomyLog: () -> String = { "autonomy not wired in this screen" },
+    /** ai_cmd autonomy on|off（无参=翻转）：自主生命体运行时开关。 */
+    val autonomyToggle: (String?) -> String = { _ -> "autonomy not wired in this screen" },
+    /** ai_cmd autonomy_greet：立刻问候（测试入口，绕开间隔/安静门，日上限仍守）。 */
+    val autonomyGreet: () -> String = { "autonomy not wired in this screen" },
+    /** ai_cmd autonomy_think：立刻弹一条思考气泡（气泡渲染验收入口；挂起=查记忆素材）。 */
+    val autonomyThink: suspend () -> String = { "autonomy not wired in this screen" },
 )
 
 /**
@@ -209,6 +219,16 @@ internal suspend fun executeAiCommand(
                 if (gamepad == null) throw IllegalStateException("gamepad hub not wired in this screen")
                 gamepad.executeCommand(command)
             }
+            "autonomy_state" -> chat?.autonomyState?.invoke()
+                ?: "autonomy not wired in this screen"
+            "autonomy_log" -> chat?.autonomyLog?.invoke()
+                ?: "autonomy not wired in this screen"
+            "autonomy" -> chat?.autonomyToggle?.invoke(command.arg)
+                ?: "autonomy not wired in this screen"
+            "autonomy_greet" -> chat?.autonomyGreet?.invoke()
+                ?: "autonomy not wired in this screen"
+            "autonomy_think" -> chat?.autonomyThink?.invoke()
+                ?: "autonomy not wired in this screen"
             "anchors" -> anchorsCommand(chat)
             "interactions" -> interactionsCommand(chat)
             "interact" -> interactCommand(controller, chat, command.arg)

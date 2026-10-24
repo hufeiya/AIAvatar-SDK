@@ -3341,6 +3341,32 @@ internal class SoulLinkRenderer(
         return Triple(eye, target, up)
     }
 
+    // ── 头顶锚点与屏幕投影（思考气泡跟随，docs/autonomy-feasibility.md §6.2/§6.3）──
+
+    /**
+     * 头顶世界坐标（头骨实体推导，缺骨按比例兜底）；无模型 null。
+     * 气泡跟随的世界坐标源——坐/躺姿势变化天然正确（头骨随姿势动）。
+     */
+    fun headWorldPosition(): FloatArray? {
+        if (modelViewer.asset == null) return null
+        return boneAnchor(headEntity, HEAD_FALLBACK_Y)
+    }
+
+    /**
+     * 世界坐标 → 归一化屏幕坐标 `[u, v]`（u 左→右、v 上→下，各 0..1）；
+     * 背对相机或视锥外 null（调用方隐藏）。矩阵每帧从 Filament camera 现取
+     * （分辨率变化/运镜中天然正确，不缓存）；线程语义同 [cameraLookAt]。
+     */
+    fun projectToScreen(x: Float, y: Float, z: Float): FloatArray? {
+        if (modelViewer.asset == null) return null
+        val view = FloatArray(16)
+        modelViewer.camera.getViewMatrix(view)
+        val proj = DoubleArray(16)
+        modelViewer.camera.getProjectionMatrix(proj)
+        val projF = FloatArray(16) { proj[it].toFloat() }
+        return ScreenProjector.project(x, y, z, view, projF)
+    }
+
     // ── Camera Shots (smooth preset framing) ─────────────────────────────
 
     /**

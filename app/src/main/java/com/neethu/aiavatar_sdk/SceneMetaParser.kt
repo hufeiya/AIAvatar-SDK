@@ -3,6 +3,7 @@ package com.neethu.aiavatar_sdk
 import android.content.Context
 import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.WalkBounds
+import com.neethu.orchestrator.autonomy.AutonomySchedule
 import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.locomotion.parseMoveAnchors
 import kotlinx.serialization.json.Json
@@ -87,6 +88,7 @@ internal fun sceneInteractionsAssetName(sceneFile: String): String =
 
 /** 锚点表资产路径兜底（场景没有专属 .anchors.json 时退回 home 的词表）。 */
 private const val ANCHORS_ASSET_FALLBACK = "scene/home.anchors.json"
+private const val AUTONOMY_SCHEDULE_ASSET = "autonomy/autonomy.schedule.json"
 
 /**
  * 读锚点表（`<move:>` 词表与 move_to 工具共用）；文件缺失/坏 JSON = 空表
@@ -124,4 +126,16 @@ internal fun loadInteractionAnchors(context: Context, sceneFile: String?): List<
             .use { it.readBytes().toString(Charsets.UTF_8) }
     }.getOrNull() ?: return emptyList()
     return parseInteractionAnchors(json)
+}
+
+/**
+ * 读自主作息表（`assets/autonomy/autonomy.schedule.json`，docs/autonomy-feasibility.md
+ * §4.2）；文件缺失/脏 JSON 回落内置默认表（深夜爱躺、白天爱坐、傍晚爱看）。
+ */
+internal fun loadAutonomySchedule(context: Context): AutonomySchedule {
+    val json = runCatching {
+        context.assets.open(AUTONOMY_SCHEDULE_ASSET)
+            .use { it.readBytes().toString(Charsets.UTF_8) }
+    }.getOrNull() ?: return AutonomySchedule.DEFAULT
+    return AutonomySchedule.parse(json)
 }

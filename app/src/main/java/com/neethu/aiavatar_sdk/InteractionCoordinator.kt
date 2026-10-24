@@ -73,6 +73,18 @@ internal class InteractionCoordinator(
         return "standing up (pose was ${state.kind})"
     }
 
+    /**
+     * 取消在跑的就位链并停步（自主 FSM 冻结让路用）：走动车道立即腾出，
+     * 走位目标的转向/定姿/视线尾段一并作废。外部工具链不会被这里叫停
+     * （FSM 只在自主 GoTo 未完成时发 StopWalking）。
+     */
+    fun cancelChain() {
+        job?.cancel()
+        job = null
+        sessionProvider()?.locomotionDriver?.stopWalking()
+        controller.stopWalk()
+    }
+
     /** ai_cmd pose_state 用的一行快照。 */
     fun stateText(): String {
         val pose = controller.getContactPoseState()

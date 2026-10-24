@@ -1055,6 +1055,23 @@ class AvatarController : AvatarActor {
         return renderer?.cameraLookAt()
     }
 
+    // ── Public API: Head Anchor & Screen Projection（思考气泡跟随）───────
+
+    /**
+     * 头顶世界坐标（米，头骨推导，缺骨比例兜底）；无模型/无视图 null。
+     * 思考气泡锚点源（docs/autonomy-feasibility.md §6.3 API①）——与
+     * [projectToScreen] 配对逐帧取用，坐/躺姿势变化天然正确。
+     */
+    fun getHeadWorldPosition(): FloatArray? = renderer?.headWorldPosition()
+
+    /**
+     * 世界坐标 → 归一化屏幕坐标 `[u, v]`（u 左→右、v 上→下，各 0..1）；
+     * 点在相机背后或视锥外返回 null（调用方应隐藏）。每帧现取，线程语义同
+     * [getCameraLookAt]（主线程）。docs/autonomy-feasibility.md §6.3 API②。
+     */
+    fun projectToScreen(x: Float, y: Float, z: Float): FloatArray? =
+        renderer?.projectToScreen(x, y, z)
+
     // ── Public API: Camera Shots (preset framing) ────────────────────────
 
     /**

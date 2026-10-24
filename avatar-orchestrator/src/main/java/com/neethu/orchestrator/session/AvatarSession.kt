@@ -900,6 +900,36 @@ class AvatarSession(
     }
 
     /**
+     * 自主问候的回执写入长期记忆（docs/autonomy-feasibility.md §5，airi 教训
+     * 「主动发言要有回执」）：问候不进对话历史，但落一条 event 类记忆——下次
+     * 对话的记忆提炼/检索能引用「上次主动问候过什么」。无记忆库/no-op，失败
+     * 静默（回执是增强，永不影响问候主链）。
+     */
+    fun writeAutonomyReceipt(content: String) {
+        val store = memoryStore ?: return
+        scope.launch {
+            runCatching {
+                val now = System.currentTimeMillis()
+                store.add(
+                    com.neethu.orchestrator.memory.AgentMemory(
+                        id = java.util.UUID.randomUUID().toString().replace("-", "").take(12),
+                        content = content.take(com.neethu.orchestrator.memory.MemoryLimits.CONTENT_MAX_CHARS),
+                        category = com.neethu.orchestrator.memory.MemoryCategories.EVENT,
+                        importance = 5,
+                        source = com.neethu.orchestrator.memory.MemorySources.GREETING,
+                        createdAt = now,
+                        updatedAt = now,
+                        lastAccessedAt = now,
+                        embedding = com.neethu.orchestrator.memory.MemoryTools.embedSafely(
+                            content, embeddingAdapter, { embeddingConfig?.invoke() },
+                        ),
+                    ),
+                )
+            }.onFailure { Log.w("AvatarSession", "autonomy receipt failed: ${it.message}") }
+        }
+    }
+
+    /**
      * Speak [text] directly, without an LLM turn — character-card greetings,
      * announcements. The text goes through the same tag extractor → chunker
      * → TTS → ordered playback pipeline as LLM turns (inline tags — emotion,

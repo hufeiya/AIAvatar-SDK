@@ -341,6 +341,20 @@ class Strings(val lang: Lang) {
         zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",
             "Let the model walk to room anchors with <move:…> tags (\"go to the window\"…); the move_to tool comes with it; a scene must be loaded first")
 
+    // ── 自主生命体（docs/autonomy-feasibility.md）────────────────────────
+    val autonomyTitle: String get() = zh("自主生命体", "Autonomous life")
+    val autonomySubtitle: String get() =
+        zh("没人理的时候虚拟人自己也活着：自己决定在房间里走动、坐下、躺下、看窗外（本地决策，不调大模型）",
+            "The avatar keeps living when nobody is talking: it walks, sits, lies down and looks around on its own (local decisions, no LLM calls)")
+    val greetingsTitle: String get() = zh("主动问候", "Spontaneous greetings")
+    val greetingsSubtitle: String get() =
+        zh("偶尔主动开口打招呼或想起你说过的事（间隔 25 分钟起、深夜静默、每天最多 3 次，克制不骚扰）",
+            "Occasionally greets you or brings up something you mentioned (25min+ spacing, quiet at night, max 3 per day)")
+    val thoughtBubbleTitle: String get() = zh("思考气泡", "Thought bubble")
+    val thoughtBubbleSubtitle: String get() =
+        zh("头顶飘出云朵内心独白（「先把昨天那章看完…」），走动坐躺时跟着头顶移动",
+            "A cloud with inner thoughts floats above the head (\"finish that chapter first…\"), following while moving or sitting")
+
     // ── 长期记忆（docs/memory-feasibility.md）─────────────────────────────
     val memoryTitle: String get() = zh("长期记忆", "Long-term memory")
     val memorySubtitle: String get() =

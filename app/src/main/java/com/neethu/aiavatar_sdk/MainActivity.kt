@@ -92,6 +92,7 @@ import com.neethu.aiavatar_sdk.multiavatar.MultiAvatarActivity
 import com.neethu.aiavatar_sdk.ui.OnboardingGuideSheet
 import com.neethu.aiavatar_sdk.ui.MemoryPanel
 import com.neethu.aiavatar_sdk.ui.GuideVariant
+import com.neethu.aiavatar_sdk.ui.ThoughtBubbleOverlay
 import com.neethu.aiavatar_sdk.ui.SettingsScreen
 import com.neethu.aiavatar_sdk.ui.onboardingGuideVariant
 import com.neethu.aiavatar_sdk.ui.withOnboardingAsr
@@ -1208,6 +1209,9 @@ private fun DemoScreen(
     }
 
     var chatPhase by remember { mutableStateOf(ConversationPhase.IDLE) }
+    // 自主生命体的「用户刚说话」钩子（问候冷却重置）：rig 在下方
+    // interactionCoordinator 之后创建，先占位后回填（docs/autonomy-feasibility.md §5）。
+    var autonomyUserSpokeHook by remember { mutableStateOf<(() -> Unit)?>(null) }
     // 对话字幕面板：用户消息在上、虚拟人回复在下，可滚动回看、自动贴底。
     // 所有发送入口（打字/按住/自由说话/ai_cmd）都经 [pushUserLine] 记录。
     val chatLines = remember { mutableStateListOf<ChatLine>() }
@@ -1215,6 +1219,7 @@ private fun DemoScreen(
         val next = ChatTranscript.cap(ChatTranscript.append(chatLines.toList(), ChatRole.USER, text))
         chatLines.clear()
         chatLines.addAll(next)
+        autonomyUserSpokeHook?.invoke()
     }
     var chatError by remember { mutableStateOf<String?>(null) }
 
@@ -1605,6 +1610,28 @@ private fun DemoScreen(
         InteractionCoordinator(controller, { session }, scope)
     }
     interactionCoordinator.anchors = interactionAnchors
+
+    // ── 自主生命体（docs/autonomy-feasibility.md）：大脑（orchestrator autonomy/）×
+    //    身体（就位链/视线/speak）。词汇表按场景注入（换场景=换注入，FSM 零改动），
+    //    作息表读 assets/autonomy/autonomy.schedule.json（脏配置回落默认）。
+    val autonomyRig = remember {
+        AutonomyRig(scope, controller, { session }, interactionCoordinator) { aiChat.memoryStore }
+    }
+    autonomyUserSpokeHook = { autonomyRig.onUserSpoke() }
+    LaunchedEffect(interactionAnchors, uiState.lang) {
+        autonomyRig.setVocabulary(interactionAnchors, loadAutonomySchedule(context), uiState.lang)
+    }
+    // 挂载：会话就绪 + 设置开关（默认开）；子开关变化只同步 flags 不重挂
+    LaunchedEffect(
+        uiState.aiPrefs.autonomy, uiState.aiPrefs.greetings, uiState.aiPrefs.thoughtBubble,
+        session != null,
+    ) {
+        autonomyRig.setMounted(
+            enabled = uiState.aiPrefs.autonomy && session != null,
+            greeting = uiState.aiPrefs.greetings,
+            bubble = uiState.aiPrefs.thoughtBubble,
+        )
+    }
     LaunchedEffect(session, uiState.aiPrefs.llmMove, uiState.lang, walkAnchors, interactionAnchors) {
         val s = session ?: return@LaunchedEffect
         s.locomotionAnchors = if (uiState.aiPrefs.llmMove) walkAnchors else emptyList()
@@ -1804,6 +1831,9 @@ private fun DemoScreen(
     // ── 系统内置语音识别（免费无 Key，海外用户主场景；SystemAsr.kt）────────
     // 与 freeSpeech（云端链路采音+VAD）互斥运行：freeTalk 引擎=SYSTEM 时用它
     val systemAsr = remember { SystemAsrController(context) }
+    // 自主仲裁的「用户正在说话」探针（docs/autonomy-feasibility.md §10.6）：
+    // 输入侧信号不只看会话 phase——自由说话聆听中/系统 ASR 识别中都算活跃
+    autonomyRig.userSpeakingProbe = { freeSpeech.running || systemAsr.running }
     // 识别语言/错误文案随界面语言（SYSTEM 偏好 = 跟随系统默认识别语言）
     LaunchedEffect(uiState.lang, uiState.appLangPref) {
         systemAsr.texts = Strings(uiState.lang)
@@ -2643,6 +2673,11 @@ private fun DemoScreen(
             },
             session = { session },
             interaction = interactionCoordinator,
+            autonomyState = { autonomyRig.stateLine() },
+            autonomyLog = { autonomyRig.logDump() },
+            autonomyToggle = { arg -> autonomyRig.toggle(arg) },
+            autonomyGreet = { autonomyRig.forceGreet() },
+            autonomyThink = { autonomyRig.forceThink() },
         )
     }
 
@@ -2667,6 +2702,16 @@ private fun DemoScreen(
 
         LaunchedEffect(uiState.isDragMode) {
             controller.setDragMode(uiState.isDragMode)
+        }
+
+        // 思考气泡（docs/autonomy-feasibility.md §6）：头顶云朵逐帧跟随，
+        // 状态转移/问候前奏时由 AutonomyRig 触发；开关关 = 整层不进组合
+        if (uiState.aiPrefs.thoughtBubble) {
+            ThoughtBubbleOverlay(
+                controller = controller,
+                state = autonomyRig.bubble,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
         // FPS counter badge (top-right), toggled from the settings screen
