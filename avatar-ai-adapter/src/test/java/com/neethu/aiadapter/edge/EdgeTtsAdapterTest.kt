@@ -37,7 +37,8 @@ private fun audioFrame(payload: ByteArray): ByteString {
 /**
  * MockWebServer 的 WebSocket 升级扮演 Edge 朗读服务端，逐条校验客户端协议序
  * （speech.config → ssml → 收音频分片 → turn.end）与鉴权/文本预处理。
- * Sec-MS-GEC 的已知答案向量由 python hashlib 按 edge-tts drm.py 算法独立算出。
+ * Sec-MS-GEC 的已知答案向量由上游 edge-tts master 的 drm.py（v2 双摘要算法）
+ * 在本机独立算出。
  */
 class EdgeTtsAdapterTest {
 
@@ -64,26 +65,33 @@ class EdgeTtsAdapterTest {
         server.shutdown()
     }
 
-    // ── Sec-MS-GEC token（对齐 drm.py 的已知答案向量）────────────────────
+    // ── Sec-MS-GEC v2 token（对齐 drm.py 的已知答案向量）──────────────────
 
     @Test
-    fun `sec-ms-gec token matches independently computed known answers`() {
-        // unix=0 → ticks=116444736000000000 → sha256("…token") 大写
+    fun `sec-ms-gec v2 token matches independently computed known answers`() {
+        // 已知答案由上游 edge-tts master（ba61d944，generate_sec_ms_gec_v2）
+        // 在本机独立算出："<16hex CS64>-<64hex SHA256>" 双段格式。
+        // unix=0 → ticks=116444736000000000
         assertEquals(
-            "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C",
+            "52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6",
             EdgeTtsDrm.generateSecMsGec(0),
         )
         // unix=1234567890 → 5 分钟向下取整 → ticks=128790414000000000
         assertEquals(
-            "581B1D01526D49A559443E5ACAF8D930550151E2C7028166DAA567921BE87886",
+            "BA405D1577B8E0CE-61F01E88539977A1A1E969572D82EECFA45FB1E5DEBD122D6ACBAF0054F959E5",
             EdgeTtsDrm.generateSecMsGec(1_234_567_890),
+        )
+        // unix=1700000000（单测固定时钟）
+        assertEquals(
+            "2CD23A2CA0B2595A-F3C846C370E05F9CC83ACC5F995C5F5D87A4D0F14CE8936A0F902E64099E38A2",
+            EdgeTtsDrm.generateSecMsGec(1_700_000_000),
         )
     }
 
     @Test
     fun `token is stable within the same 5 minute bucket`() {
         // 桶边界算术：ts=1700000000 落在 (…34600, …34900] 桶内（+WIN_EPOCH 后 mod 300 = 200），
-        // 同桶上限 1700000099，1700000100 起进下一桶
+        // 同桶上限 1700000099，1700000100 起进下一桶（v2 已知答案同样满足）
         val a = EdgeTtsDrm.generateSecMsGec(1_700_000_000)
         val b = EdgeTtsDrm.generateSecMsGec(1_700_000_099) // 同一 300s 桶
         val c = EdgeTtsDrm.generateSecMsGec(1_700_000_100) // 下一桶

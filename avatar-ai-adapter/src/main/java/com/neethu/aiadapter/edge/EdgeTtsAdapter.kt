@@ -16,7 +16,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.io.IOException
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -28,12 +27,13 @@ import java.util.concurrent.TimeUnit
  * 语义：每次 [synthesize] 开一条连接、发 SSML、收齐音频分片后关闭。
  * SpeechPipeline 的句级并发（≤4）原样适用。
  *
- * 协议逐字对齐开源实现 edge-tts（python，rany2/edge-tts）——特别是 2024 年起
- * 必需的 `Sec-MS-GEC` 鉴权参数（SHA-256 DRM token，见 [EdgeTtsDrm]，**勿凭记忆
- * 改算法，对齐 drm.py**）：
+ * 协议逐字对齐开源实现 edge-tts（python，rany2/edge-tts）——特别是 `Sec-MS-GEC`
+ * 鉴权参数（SHA-256 DRM token，见 [EdgeTtsDrm]，**勿凭记忆改算法，对齐 drm.py**）：
  * - 握手 URL：`{endpoint}?TrustedClientToken=…&ConnectionId=…&Sec-MS-GEC=…&Sec-MS-GEC-Version=…`
- *   （token 5 分钟一档：Windows file time 向下取整到 300s ×10⁷ 后拼 TrustedClientToken
- *   求 SHA-256 大写十六进制；设备时钟偏移时按服务端 Date 头校偏并重试一次）
+ *   （**v2 token**：2026-10 微软强制升级，v1 纯 SHA-256 一律 403——格式
+ *   `<16hex CS64>-<64hex SHA256>`，5 分钟一档：Windows file time 向下取整到 300s
+ *   ×10⁷ 后拼 TrustedClientToken 过自定义 SHA-256+CS64 双摘要；上游 2026-10-13
+ *   `ba61d944` 落地 v2；设备时钟偏移时按服务端 Date 头校偏并重试一次）
  * - 文本消息 1：`Path:speech.config`（JSON，声明 outputFormat）
  * - 文本消息 2：`Path:ssml`（X-RequestId + SSML；XML 转义、控制字符清洗、
  *   超过 4096 字节按词界/UTF-8 边界/实体边界切分，每段独立连接）
@@ -324,14 +324,19 @@ class EdgeTtsAdapter(
 
 /**
  * Sec-MS-GEC DRM token 与请求常量——逐行对齐 edge-tts 的 drm.py + constants.py
- * （2026-10-05 抓取的 master 源码），勿凭记忆"优化"。
+ * （2026-10-24 抓取的 master 源码，v2 token，上游提交 ba61d944），勿凭记忆"优化"。
  *
- * token 算法（drm.py generate_sec_ms_gec）：
+ * 历史：v1（2024-11 起）= ticks+token 过**标准 SHA-256** 取大写 hex；2026-10 微软
+ * 服务端强制升级 v2 并全面拒绝 v1（一律 403，PyPI edge-tts 7.2.8 亦中招），上游
+ * 同月适配。v2 = 自定义 SHA-256 变体（前 7 字节过自定义调度表揉出初始状态）+ 自定义
+ * CS64 校验和，token 格式 `<16hex CS64>-<64hex SHA256>`。
+ *
+ * token 时间档位与 v1 相同（drm.py generate_sec_ms_gec_v2）：
  * 1. 当前 Unix 时间（+ 时钟偏移）
  * 2. 换到 Windows file time 纪元（+11644473600 秒，1601-01-01）
  * 3. 向下取整到 5 分钟（300 秒）
  * 4. ×10⁷（换 100 纳秒 tick）
- * 5. 拼接 TrustedClientToken 求 SHA-256，大写十六进制
+ * 5. 拼接 TrustedClientToken 过 [sha256Digest]+[cs64Digest] 双摘要
  */
 internal object EdgeTtsDrm {
     /** Edge 浏览器公开的 TrustedClientToken（constants.py，全网通用非机密）。 */
@@ -343,26 +348,282 @@ internal object EdgeTtsDrm {
     /** 与 edge-tts 同步的 Chromium 版本（constants.py CHROMIUM_FULL_VERSION）；
      *  官方实现会随版本更新，403 长期出现时先回来对齐这里。 */
     const val CHROMIUM_FULL_VERSION = "143.0.3650.75"
-    const val SEC_MS_GEC_VERSION = "1-$CHROMIUM_FULL_VERSION"
+
+    /** v2 起版本串前缀为 2-（constants.py SEC_MS_GEC_VERSION）。 */
+    const val SEC_MS_GEC_VERSION = "2-$CHROMIUM_FULL_VERSION"
 
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
 
-    private const val TICKS_PER_SECOND_NS_DIV_100 = 10_000_000L // 1e9 / 100
+    private const val TICKS_PER_SECOND = 10_000_000L
 
-    /** 生成 Sec-MS-GEC token；[unixSecondsWithSkew] = 当前 Unix 秒 + 时钟偏移。 */
+    /** 生成 v2 Sec-MS-GEC token；[unixSecondsWithSkew] = 当前 Unix 秒 + 时钟偏移。 */
     fun generateSecMsGec(unixSecondsWithSkew: Long): String {
         var ticks = unixSecondsWithSkew + WIN_EPOCH_SECONDS
         ticks -= ticks % 300
-        ticks *= TICKS_PER_SECOND_NS_DIV_100
-        val toHash = "$ticks$TRUSTED_CLIENT_TOKEN"
-        val digest = MessageDigest.getInstance("SHA-256").digest(toHash.toByteArray(Charsets.US_ASCII))
-        return digest.joinToString("") { "%02X".format(it) }
+        ticks *= TICKS_PER_SECOND
+        val toHash = "$ticks$TRUSTED_CLIENT_TOKEN".toByteArray(Charsets.US_ASCII)
+        val digest = sha256Digest(toHash)
+        val (cs64Lo, cs64Hi) = cs64Digest(toHash, digest)
+        val cs64 = hexWordLe(cs64Lo) + hexWordLe(cs64Hi)
+        val sha = digest.joinToString("") { "%02X".format(it) }
+        return "$cs64-$sha"
     }
 
     /** 随机 MUID（drm.py generate_muid：32 个大写十六进制字符）。 */
     fun generateMuid(): String = UUID.randomUUID().toString().replace("-", "").uppercase(Locale.US)
+
+    // ── 自定义 SHA-256 变体（drm.py _sha256_digest/_sha256_init/_sha256_rounds）──
+    // 前 7 字节过自定义调度表算出块压缩的初始状态（见 [sha256Init]），之后每个 64
+    // 字节块的轮函数是标准 FIPS 180-4；但填充的长度字段按 57+len(data) 计（非标准）。
+
+    private fun sha256Digest(data: ByteArray): ByteArray {
+        require(data.size >= 7) { "Token salt must contain at least seven bytes" }
+        val length = 57 + data.size
+        val zeroCount = ((55 - length) % 64 + 64) % 64 // Python % 语义：结果非负
+        val padded = ByteArray(data.size - 7 + 1 + zeroCount + 8)
+        data.copyInto(padded, 0, 7)
+        padded[data.size - 7] = 0x80.toByte()
+        val bits = length.toLong() * 8
+        for (i in 0 until 8) padded[padded.size - 8 + i] = (bits ushr ((7 - i) * 8)).toByte()
+
+        var state = sha256Init(data.copyOfRange(0, 7))
+        var offset = 0
+        while (offset < padded.size) {
+            val words = IntArray(64)
+            for (j in 0 until 16) {
+                val at = offset + j * 4
+                words[j] = ((padded[at].toInt() and 0xFF) shl 24) or
+                    ((padded[at + 1].toInt() and 0xFF) shl 16) or
+                    ((padded[at + 2].toInt() and 0xFF) shl 8) or
+                    (padded[at + 3].toInt() and 0xFF)
+            }
+            expandSha256Schedule(words, 16)
+            val working = sha256Rounds(state, words, firstRound = 0)
+            // 前馈加法（drm.py：state = (x + y) & mask for zip(state, working)）
+            state = IntArray(8) { state[it] + working[it] }
+            offset += 64
+        }
+        return ByteArray(32) { i -> (state[i / 4] ushr (24 - (i % 4) * 8)).toByte() }
+    }
+
+    /** drm.py _sha256_init：用前 7 字节 + 自定义调度表算出块压缩的自定义初始状态。 */
+    private fun sha256Init(seven: ByteArray): IntArray {
+        val words = IntArray(64)
+        words[14] = ((seven[0].toInt() and 0xFF) shl 16) or
+            ((seven[1].toInt() and 0xFF) shl 8) or
+            (seven[2].toInt() and 0xFF)
+        words[15] = ((seven[3].toInt() and 0xFF) shl 24) or
+            ((seven[4].toInt() and 0xFF) shl 16) or
+            ((seven[5].toInt() and 0xFF) shl 8) or
+            (seven[6].toInt() and 0xFF)
+        for (index in 16 until 30) {
+            var value = SHA256_SCHEDULE[index - 16]
+            if (index - 2 >= 14) {
+                value += if (index == 16) sigma1(words[index - 2]) xor SHA256_SIGMA1_ADJUSTMENT
+                else sigma1(words[index - 2])
+            }
+            if (index - 7 >= 14) value += words[index - 7]
+            if (index - 15 >= 14) {
+                value += if (index == 29) sigma0(words[index - 15]) xor SHA256_SIGMA0_ADJUSTMENT
+                else sigma0(words[index - 15])
+            }
+            words[index] = value
+        }
+        words[30] = sigma1(words[28]) + words[23] + sigma0(words[15]) + words[14] +
+            SHA256_ADJUSTMENT - SHA256_ROUND_CONSTANTS[14]
+        expandSha256Schedule(words, 31)
+        val working = sha256Rounds(SHA256_STATE, words, firstRound = 14)
+        return IntArray(8) { SHA256_INITIAL[it] + working[it] }
+    }
+
+    /** 标准 FIPS 180-4 轮函数；firstRound=14 时轮常量 K[14] 换成 [SHA256_ADJUSTMENT]。 */
+    private fun sha256Rounds(state: IntArray, words: IntArray, firstRound: Int): IntArray {
+        var a = state[0]; var b = state[1]; var c = state[2]; var d = state[3]
+        var e = state[4]; var f = state[5]; var g = state[6]; var h = state[7]
+        for (index in firstRound until 64) {
+            val k = if (index == 14 && firstRound == 14) SHA256_ADJUSTMENT else SHA256_ROUND_CONSTANTS[index]
+            val t1 = h + (e.rotateRight(6) xor e.rotateRight(11) xor e.rotateRight(25)) +
+                (g xor (e and (f xor g))) + k + words[index]
+            val t2 = (a.rotateRight(2) xor a.rotateRight(13) xor a.rotateRight(22)) +
+                ((a and b) or (c and (a or b)))
+            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2
+        }
+        return intArrayOf(a, b, c, d, e, f, g, h)
+    }
+
+    /** 标准 SHA-256 消息扩展（drm.py _expand_sha256_schedule）。 */
+    private fun expandSha256Schedule(words: IntArray, firstWord: Int) {
+        for (index in firstWord until 64) {
+            val x = words[index - 2]
+            val y = words[index - 15]
+            words[index] = sigma1(x) + words[index - 7] + sigma0(y) + words[index - 16]
+        }
+    }
+
+    /**
+     * SHA-256 小 σ 函数——⚠ drm.py 的实现**不是**标准 ROTR 组合：左移项是 Python
+     * 无界大整数直接参与异或、最后才截断 32 位（DRM 故意混淆），必须用 Long 复刻
+     * "无界左移→异或→截断"语义，rotateRight 组合会得出不同值。
+     */
+    private fun sigma0(value: Int): Int {
+        val v = value.toLong() and 0xFFFFFFFFL
+        return ((v shr 7) xor (v shl 25) xor (v shr 18) xor (v shl 14) xor (v shr 3)).toInt()
+    }
+
+    private fun sigma1(value: Int): Int {
+        val v = value.toLong() and 0xFFFFFFFFL
+        return ((v shr 17) xor (v shl 15) xor (v shr 19) xor (v shl 13) xor (v shr 10)).toInt()
+    }
+
+    // ── CS64 校验和（drm.py _cs64_digest/_rol16/_words_le4_even）──────────────
+
+    private fun cs64Digest(data: ByteArray, digest: ByteArray): Pair<Int, Int> {
+        val keyA = leIntAt(digest, 0) or 1
+        val keyB = leIntAt(digest, 4) or 1
+        val factorA = keyA * CS64_FACTOR
+        val factorB = keyB * CS64_FACTOR
+
+        val baseTerms = IntArray(CS64_COEFFICIENTS.size / 2)
+        val baseOffsets = IntArray(CS64_COEFFICIENTS.size / 2)
+        for (i in baseTerms.indices) {
+            baseTerms[i] = CS64_COEFFICIENTS[2 * i] * (if (i % 2 == 0) factorA else factorB)
+            baseOffsets[i] = CS64_COEFFICIENTS[2 * i + 1]
+        }
+
+        // b"\x00" + data → 小端 u32 词表，词数补齐到偶数（_words_le4_even）
+        val prefixed = ByteArray(data.size + 1)
+        data.copyInto(prefixed, 1)
+        val wordCount = (prefixed.size + 3) / 4
+        val evenWords = (wordCount + 1) / 2 * 2
+        val terms = baseTerms + IntArray(evenWords)
+        val offsets = baseOffsets + IntArray(evenWords)
+        for (index in 0 until evenWords) {
+            var word = 0
+            for (j in 0 until 4) {
+                val at = index * 4 + j
+                if (at < prefixed.size) word = word or ((prefixed[at].toInt() and 0xFF) shl (8 * j))
+            }
+            var term = word * (if (index % 2 == 0) keyA else keyB)
+            var offset = rotl16(word) *
+                (if (index % 2 == 0) 0xEF0569FB.toInt() else 0xC31713DB.toInt())
+            if (index == 0) {
+                term += CS64_ADJUSTMENT0 * factorA
+                offset += CS64_ADJUSTMENT1
+            }
+            terms[baseTerms.size + index] = term
+            offsets[baseOffsets.size + index] = offset
+        }
+
+        var swapAcc = 0
+        var swapLast = 0
+        var state = 0
+        var acc = 0
+        var index = 0
+        while (index < terms.size) {
+            val x = terms[index]
+            val y = terms[index + 1]
+            var t = rotl16(offsets[index] + x)
+            var q = t * 0x76F50F34.toInt()
+            swapAcc += rotl16(q) * 0xC3EFEA97.toInt() + q
+            t = rotl16(offsets[index + 1] + y)
+            q = t * 0x1881CE3C
+            swapLast = rotl16(q) * 0x35BD1EC9.toInt() + q
+            swapAcc += swapLast
+
+            state = state * keyA + x
+            state = rotl16(state) * 0xCF98B111.toInt()
+            state = rotl16(state) * 0x87085B9F.toInt()
+            state = rotl16(state) * 0x12CEB96D
+            state = rotl16(state) * 0x257E1D83
+            acc += state
+            t = state * keyB + y
+            t = rotl16(t) * 0xA27416F5.toInt()
+            t = rotl16(t) * 0xD38396FF.toInt()
+            state = rotl16(rotl16(t) * 0x7C932B89) * 0xBFA49F69.toInt()
+            acc += state
+            index += 2
+        }
+        return (swapLast xor state) to (swapAcc xor acc)
+    }
+
+    /** 32 位左旋 16 位（= 高低半字交换，drm.py _rol16）。 */
+    private fun rotl16(value: Int): Int = (value shl 16) or (value ushr 16)
+
+    /** 小端读 u32（struct.unpack("<I")）。 */
+    private fun leIntAt(bytes: ByteArray, at: Int): Int =
+        (bytes[at].toInt() and 0xFF) or
+            ((bytes[at + 1].toInt() and 0xFF) shl 8) or
+            ((bytes[at + 2].toInt() and 0xFF) shl 16) or
+            ((bytes[at + 3].toInt() and 0xFF) shl 24)
+
+    /** u32 的小端十六进制（struct.pack("<I").hex().upper()）。 */
+    private fun hexWordLe(word: Int): String = "%02X%02X%02X%02X".format(
+        word and 0xFF,
+        (word shr 8) and 0xFF,
+        (word shr 16) and 0xFF,
+        (word shr 24) and 0xFF,
+    )
+
+    // ── 常量表（drm.py 逐值抄录；≥0x80000000 的字面量需显式 .toInt() 保位模式）──
+
+    private val SHA256_INITIAL = intArrayOf(
+        0x6A09E667, 0xBB67AE85.toInt(), 0x3C6EF372, 0xA54FF53A.toInt(),
+        0x510E527F, 0x9B05688C.toInt(), 0x1F83D9AB, 0x5BE0CD19,
+    )
+    private val SHA256_STATE = intArrayOf(
+        0xFD9FBEA2.toInt(), 0x91243CE7.toInt(), 0xBE499094.toInt(), 0xCD2E1E0A.toInt(),
+        0x6C006F49, 0x04BD35AB, 0xFEB0A7E4.toInt(), 0x03EFFBD2,
+    )
+    private val SHA256_SCHEDULE = intArrayOf(
+        0xEB24BF9E.toInt(), 0x1558691F, 0xA0C09EE2.toInt(), 0x0CFA32BA,
+        0xA622EE8C.toInt(), 0xD1DD9491.toInt(), 0xC0DD25A0.toInt(), 0xF9E70AB6.toInt(),
+        0xF0C31573.toInt(), 0x7058CE4E, 0x7188E606, 0x00E5AB33,
+        0xD258B060.toInt(), 0x72766564,
+    )
+    private val SHA256_ROUND_CONSTANTS = intArrayOf(
+        0x428A2F98.toInt(), 0x71374491, 0xB5C0FBCF.toInt(), 0xE9B5DBA5.toInt(),
+        0x3956C25B, 0x59F111F1, 0x923F82A4.toInt(), 0xAB1C5ED5.toInt(),
+        0xD807AA98.toInt(), 0x12835B01, 0x243185BE, 0x550C7DC3,
+        0x72BE5D74, 0x80DEB1FE.toInt(), 0x9BDC06A7.toInt(), 0xC19BF174.toInt(),
+        0xE49B69C1.toInt(), 0xEFBE4786.toInt(), 0x0FC19DC6, 0x240CA1CC,
+        0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
+        0x983E5152.toInt(), 0xA831C66D.toInt(), 0xB00327C8.toInt(), 0xBF597FC7.toInt(),
+        0xC6E00BF3.toInt(), 0xD5A79147.toInt(), 0x06CA6351, 0x14292967,
+        0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13,
+        0x650A7354, 0x766A0ABB, 0x81C2C92E.toInt(), 0x92722C85.toInt(),
+        0xA2BFE8A1.toInt(), 0xA81A664B.toInt(), 0xC24B8B70.toInt(), 0xC76C51A3.toInt(),
+        0xD192E819.toInt(), 0xD6990624.toInt(), 0xF40E3585.toInt(), 0x106AA070,
+        0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5, 0x391C0CB3,
+        0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3, 0x748F82EE,
+        0x78A5636F, 0x84C87814.toInt(), 0x8CC70208.toInt(), 0x90BEFFFA.toInt(),
+        0xA4506CEB.toInt(), 0xBEF9A3F7.toInt(), 0xC67178F2.toInt(),
+    )
+    private const val SHA256_ADJUSTMENT = 0xC9DC06A7.toInt()
+    private const val SHA256_SIGMA0_ADJUSTMENT = 0x059C0B80
+    private const val SHA256_SIGMA1_ADJUSTMENT = 0x000B92C0
+
+    /** (coefficient, offset) 扁平交替存放，drm.py _CS64_COEFFICIENTS。 */
+    private val CS64_COEFFICIENTS = intArrayOf(
+        0xE82E91B1.toInt(), 0xB32700D0.toInt(),
+        0x44DE24C6.toInt(), 0x88DFF51D.toInt(),
+        0x3BEB65BC, 0x29514038,
+        0xC89C5933.toInt(), 0xB328CBDF.toInt(),
+        0x8D1EC211.toInt(), 0xD405B4D5.toInt(),
+        0x314EF5D5, 0x26E55F3C,
+        0xE92491B1.toInt(), 0x607801C6,
+        0xF0A5B9D5.toInt(), 0x82B2C1FB.toInt(),
+        0x06064CF3, 0xFA51A3DA.toInt(),
+        0xDA79FA60.toInt(), 0x207CC464,
+        0xBED20560.toInt(), 0x3C3C74F3,
+        0x89F9C9F8.toInt(), 0xD2D14B61.toInt(),
+        0x35FA38C6, 0xBB04A2C1.toInt(),
+        0xCB49E3C6.toInt(), 0xC5626167.toInt(),
+    )
+    private const val CS64_FACTOR = 0x82893933.toInt()
+    private const val CS64_ADJUSTMENT0 = 0xF2F90B1A.toInt()
+    private const val CS64_ADJUSTMENT1 = 0x0B1A0000
 }
 
 // ── 文本预处理（对齐 edge-tts communicate.py 的清洗/转义/切分三步）────────
