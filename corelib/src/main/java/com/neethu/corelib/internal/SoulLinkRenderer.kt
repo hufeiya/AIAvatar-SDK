@@ -540,6 +540,10 @@ internal class SoulLinkRenderer(
         // private kZoomSpeed so programmatic zoom scales identically to fingers.
         private const val ZOOM_SPEED_PER_PIXEL = 0.1f
 
+        // 走动停滞看门狗：WALKING 相位 5s 净位移 <0.15m 即判停滞
+        private const val WALK_STALL_TIMEOUT_MS = 5_000L
+        private const val WALK_STALL_MAX_RETRIES = 2
+
         // Material name hints for applyMaterialEnhancements (VRM/glTF conventions)
         private val EYE_NAME_HINTS = listOf("eye", "目", "瞳")
         private val SKIN_NAME_HINTS = listOf("skin", "face", "body", "顔", "脸", "肌")
@@ -3070,7 +3074,31 @@ internal class SoulLinkRenderer(
         updateLookAxis(dtSeconds)
         updateDriveAxes(mat)
         val external = activeGait?.extractor != null
-        val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14], external)
+        // 方案 C 每帧自愈：走动中步态槽的提取链断供（base 被手势/待机/停步
+        // 淡入时序顶掉成无提取器剪辑，或播放被停）= 提取位移恒 0 而状态机
+        // 照常 WALKING → 原地冻结（真机 2026-10-24 遥测实锤）。起步 crossfade
+        // 的 0.25s 是合法窗口（isExtractionHealthy 放行步态 overlay 淡入）。
+        // 同帧重载步态（fade=0 直切，姿态已是行走无需混合）。
+        if (external && locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
+            vrmaEngine?.isExtractionHealthy() != true
+        ) {
+            val gait = activeGait
+            android.util.Log.w(
+                "SoulLinkRenderer",
+                "gait extraction dead mid-walk (vrma[${vrmaEngine?.debugState() ?: "n/a"}]) — reloading gait",
+            )
+            if (gait != null && loadVrmaAnimation(gait.clipAssetPath)) {
+                playVrmaAnimationInternal(
+                    loop = true,
+                    speed = walkSpeed / gait.baseSpeed,
+                    fadeSeconds = 0f,
+                    extractor = gait.extractor,
+                )
+            }
+        }
+        val motion = locomotionEngine.update(
+            dtSeconds, mat[12], mat[13], mat[14], external, rootHeadingRad(mat),
+        )
         if (motion != null) {
             rotateRootAroundY(mat, motion.dHeadingRad)
             mat[12] += motion.dx
@@ -3081,6 +3109,9 @@ internal class SoulLinkRenderer(
             if (external && startClipDeadlineNanos == 0L) {
                 vrmaEngine?.setPlaybackSpeed(motion.commandedSpeedMps / (activeGait?.baseSpeed ?: 1f))
             }
+            updateWalkStallWatchdog(mat)
+        } else {
+            resetWalkStallWatchdog()
         }
         // 方案 C 回灌：步态/起步剪辑提取的前向位移映到世界。⚠骨骼写入的
         // 位移被 root→hips 链路缩放（renderScale）放大，root 平移列不在放大
@@ -3185,6 +3216,75 @@ internal class SoulLinkRenderer(
     private fun rootHeadingRad(mat: FloatArray): Float {
         val sign = if (isVrm0) -1f else 1f
         return atan2(sign * mat[8], sign * mat[10])
+    }
+
+    // ── 走动停滞看门狗 ────────────────────────────────────────────────
+    // WALKING 相位而净位移≈0（蛇形极限环/提取回灌失效的兜底）：5s 无进展
+    // 重发同腿起步（重新对齐朝向 + ease 重爬，即「重发即可」的自动化），
+    // 两次重发仍停滞 = 强制到步（walk_state 恢复 IDLE，交互链的
+    // awaitStandstill 30s 超时不再整链静默 abort）。位移每帧以 root 矩阵
+    // 为权威，看门狗只读不动矩阵，force-arrive 走引擎的 stopWalk 语义。
+
+    private var stallCheckX = Float.NaN
+    private var stallCheckZ = Float.NaN
+    private var stallSinceMs = 0L
+    private var stallRetries = 0
+
+    private fun updateWalkStallWatchdog(mat: FloatArray) {
+        val snap = locomotionEngine.snapshot()
+        if (snap.phase != com.neethu.corelib.WalkPhase.WALKING) {
+            resetWalkStallWatchdog()
+            return
+        }
+        val nowMs = SystemClock.elapsedRealtime()
+        if (stallCheckX.isNaN()) {
+            stallCheckX = mat[12]; stallCheckZ = mat[14]; stallSinceMs = nowMs
+            return
+        }
+        val moved = kotlin.math.hypot((mat[12] - stallCheckX).toDouble(), (mat[14] - stallCheckZ).toDouble())
+        if (moved >= 0.15) {
+            stallCheckX = mat[12]; stallCheckZ = mat[14]; stallSinceMs = nowMs
+            return
+        }
+        if (nowMs - stallSinceMs < WALK_STALL_TIMEOUT_MS) return
+        val target = kotlin.math.hypot(
+            (snap.targetX - snap.x).toDouble(), (snap.targetZ - snap.z).toDouble(),
+        )
+        if (stallRetries < WALK_STALL_MAX_RETRIES && target > LocomotionEngine.ARRIVE_EPS * 2) {
+            stallRetries++
+            android.util.Log.w(
+                "SoulLinkRenderer",
+                "walk stalled %.2fm from target for %dms — forcing gait reload (retry %d, vrma[%s])"
+                    .format(target, WALK_STALL_TIMEOUT_MS, stallRetries, vrmaEngine?.debugState() ?: "n/a"),
+            )
+            // 确定性重载（不走 startWalk——它的 sameGaitPlaying 短路会跳过重载，
+            // stop 后 idle 自动续播反而掩护死链）：直载步态挂回提取器 + 引擎级
+            // 重起步（重对齐朝向）。每帧自愈是第一道防线，这里是保险丝。
+            val gait = activeGait ?: walkGait
+            if (gait != null && loadVrmaAnimation(gait.clipAssetPath)) {
+                playVrmaAnimationInternal(
+                    loop = true,
+                    speed = walkSpeed / gait.baseSpeed,
+                    fadeSeconds = 0f,
+                    extractor = gait.extractor,
+                )
+            }
+            locomotionEngine.startWalk(snap.targetX, snap.targetZ, walkSpeed, scenePlacement?.bounds)
+        } else {
+            android.util.Log.w(
+                "SoulLinkRenderer",
+                "walk stalled %.2fm from target after %d retries — forcing stop (vrma[%s])"
+                    .format(target, stallRetries, vrmaEngine?.debugState() ?: "n/a"),
+            )
+            stopWalk()
+        }
+        stallCheckX = mat[12]; stallCheckZ = mat[14]; stallSinceMs = nowMs
+    }
+
+    private fun resetWalkStallWatchdog() {
+        stallCheckX = Float.NaN
+        stallCheckZ = Float.NaN
+        stallRetries = 0
     }
 
     /**

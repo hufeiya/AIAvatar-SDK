@@ -855,7 +855,25 @@ internal class AvatarRuntime(
         val mat = FloatArray(16)
         tm.getTransform(instance, mat)
         val external = activeGait?.extractor != null
-        val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14], external)
+        // 方案 C 每帧自愈（单虚拟人同款）：走动中提取链断供（base 被手势/
+        // 待机顶掉成无提取器剪辑）= 位移恒 0 而状态机照常 WALKING → 原地冻结。
+        if (external && locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
+            vrmaEngine?.isExtractionHealthy() != true
+        ) {
+            val gait = activeGait
+            Log.w(TAG, "gait extraction dead mid-walk — reloading gait")
+            if (gait != null && loadVrmaAnimation(gait.clipAssetPath)) {
+                playVrmaAnimationInternal(
+                    loop = true,
+                    speed = walkSpeed / gait.baseSpeed,
+                    fadeSeconds = 0f,
+                    extractor = gait.extractor,
+                )
+            }
+        }
+        val motion = locomotionEngine.update(
+            dtSeconds, mat[12], mat[13], mat[14], external, rootHeadingRad(mat),
+        )
         if (motion != null) {
             rotateRootAroundY(mat, motion.dHeadingRad)
             mat[12] += motion.dx
@@ -917,6 +935,12 @@ internal class AvatarRuntime(
             mat[i] = c * x + s * z
             mat[i + 2] = -s * x + c * z
         }
+    }
+
+    /** Root matrix → belly heading（弧度，带 VRM0 翻转符号；单虚拟人同款）。 */
+    private fun rootHeadingRad(mat: FloatArray): Float {
+        val sign = if (isVrm0) -1f else 1f
+        return kotlin.math.atan2(sign * mat[8], sign * mat[10])
     }
 
     // ── 内置动画 API ─────────────────────────────────────────────────────

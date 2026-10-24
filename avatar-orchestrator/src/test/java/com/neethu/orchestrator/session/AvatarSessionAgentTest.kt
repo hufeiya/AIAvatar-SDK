@@ -538,6 +538,64 @@ class AvatarSessionAgentTest {
     }
 
     @Test
+    fun `pseudo tool call text triggers required retry on raw round text`() = runTest {
+        val llm = ScriptedLlm()
+        val tts = FakeTts()
+        val session = newSession(llm, tts = tts)
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "t", voice = "v")
+        var executedArgs: String? = null
+        session.tools.register(toolSpec) { executedArgs = it; ToolResult("结果数据") }
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        // DeepSeek 实测形态（2026-10-24 E1/B1）：自造 XML 写进正文、无原生调用。
+        // ⚠伪标签被提取器从 clean 文本剥掉，检测必须跑在 raw 上。
+        llm.scripts += listOf(
+            llm.text("<get_time>\n<parameter name=\"tz\">UTC+8</parameter>\n</get_time>"),
+            llm.finish(),
+        )
+        llm.scripts += listOf(llm.finish(toolCall("call_p")))
+        llm.scripts += listOf(llm.text("好，到啦。"), llm.finish())
+        session.send("去地毯那边")
+        runCurrent()
+
+        assertEquals(3, llm.requests.size)
+        assertEquals("required", llm.requests[1].second.toolChoice)
+        assertTrue("executor not invoked", executedArgs != null)
+        // 伪 XML 不进 TTS/历史
+        assertTrue(tts.synthesized.none { it.contains("<get_time") })
+        assertTrue(events.any { it is AvatarEvent.TurnCompleted && !it.interrupted })
+    }
+
+    @Test
+    fun `pseudo tool call text in continuation round also triggers retry`() = runTest {
+        val llm = ScriptedLlm()
+        val tts = FakeTts()
+        val session = newSession(llm, tts = tts)
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "t", voice = "v")
+        session.tools.register(toolSpec) { ToolResult("结果数据") }
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        // E1 形态：round0 原生调了 move_to，续答轮里又把 interact_with 写成文本
+        llm.scripts += listOf(llm.finish(toolCall("call_m")))
+        llm.scripts += listOf(
+            llm.text("窗边看过了。<get_time>\n<parameter name=\"tz\">UTC+8</parameter>\n</get_time>"),
+            llm.finish(),
+        )
+        llm.scripts += listOf(llm.finish(toolCall("call_i")))
+        llm.scripts += listOf(llm.text("坐好啦。"), llm.finish())
+        session.send("先去窗边然后坐床上")
+        runCurrent()
+
+        assertEquals(4, llm.requests.size)
+        assertEquals("required", llm.requests[2].second.toolChoice)
+        assertTrue(events.any { it is AvatarEvent.TurnCompleted && !it.interrupted })
+    }
+
+    @Test
     fun `retry with still no call finishes with the original reply`() = runTest {
         val llm = ScriptedLlm()
         val store = InMemoryConversationStore()

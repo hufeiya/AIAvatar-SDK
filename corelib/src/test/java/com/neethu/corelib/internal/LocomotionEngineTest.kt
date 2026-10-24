@@ -377,4 +377,75 @@ class LocomotionEngineTest {
         engine.update(1f / 60f, 0f, 0f, 0f)
         assertEquals(WalkPhase.TURNING, engine.snapshot().phase)
     }
+
+    /**
+     * 朝向权威读数：外部旋转（turnTo/定姿恢复/出生点）之后无需 resync，
+     * 每帧传入 root 矩阵读出的 belly heading 即自动对齐——程序位移模式
+     * 从背对目标起步也能直线收敛（路径长 ≈ 直线距离，无蛇形绕行）。
+     * 2026-10-24 真机蛇形/永不到达（waypoint 多段腿冻结 0.8m）的回归锁。
+     */
+    @Test
+    fun `root朝向读数是权威 外部旋转后自动对齐直线收敛`() {
+        val engine = LocomotionEngine()
+        engine.startWalk(0f, 5f, 1.0f, null)
+        // 外部把 root 转到背对目标（facing π），引擎不知情也无 resync
+        var facing = Math.PI.toFloat()
+        var x = 0f
+        var z = 0f
+        var path = 0f
+        val dt = 1f / 60f
+        var t = 0f
+        while (t < 30f && engine.snapshot().phase != WalkPhase.IDLE) {
+            val m = engine.update(dt, x, 0f, z, externalGait = false, rootHeadingRad = facing)
+            if (m != null) {
+                facing += m.dHeadingRad
+                val step = kotlin.math.hypot(m.dx.toDouble(), m.dz.toDouble()).toFloat()
+                x += kotlin.math.sin(facing) * step
+                z += kotlin.math.cos(facing) * step
+                path += step
+            }
+            t += dt
+        }
+        assertTrue("walk did not arrive", t < 30f)
+        assertEquals(0f, x, LocomotionEngine.ARRIVE_EPS)
+        assertEquals(5f, z, LocomotionEngine.ARRIVE_EPS)
+        assertTrue(
+            "path serpentine: $path for 5m straight (external rotation must resync via readback)",
+            path <= 5f * 1.5f + 0.5f,
+        )
+    }
+
+    /**
+     * 方案 C 同款回归：位移由提取回灌沿真实朝向走（引擎平移恒 0），从
+     * 背对目标起步——朝向读数同步后追 bearing 单调收敛，不再逐帧反向
+     * 过冲（真机实测路径 3~5 倍的根因形态）。
+     */
+    @Test
+    fun `方案C背对目标起步 朝向同步后收敛不蛇形`() {
+        val engine = LocomotionEngine()
+        engine.startWalk(0f, 5f, 1.0f, null)
+        var facing = Math.PI.toFloat()
+        var x = 0f
+        var z = 0f
+        var path = 0f
+        val dt = 1f / 60f
+        var t = 0f
+        while (t < 30f && engine.snapshot().phase != WalkPhase.IDLE) {
+            val m = engine.update(dt, x, 0f, z, externalGait = true, rootHeadingRad = facing)
+                ?: break
+            facing += m.dHeadingRad
+            val step = m.commandedSpeedMps * dt
+            x += kotlin.math.sin(facing) * step
+            z += kotlin.math.cos(facing) * step
+            path += step
+            t += dt
+        }
+        assertTrue("walk did not arrive", t < 30f)
+        assertEquals(0f, x, LocomotionEngine.ARRIVE_EPS)
+        assertEquals(5f, z, LocomotionEngine.ARRIVE_EPS)
+        assertTrue(
+            "path serpentine: $path for 5m straight (方案C extraction must follow synced heading)",
+            path <= 5f * 1.6f + 0.5f,
+        )
+    }
 }

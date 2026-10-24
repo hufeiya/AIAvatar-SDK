@@ -168,7 +168,7 @@ internal class InteractionCoordinator(
      * 站定判定：walkState IDLE 且 driver 无排队腿，连续两拍（事件序不定，
      * 采样去抖）。[driver] 为 null（直线走位/转身）只看 walkState。
      */
-    private suspend fun awaitStandstill(driver: LocomotionDriver?, timeoutMs: Long = 30_000): Boolean {
+    private suspend fun awaitStandstill(driver: LocomotionDriver?, timeoutMs: Long = 45_000): Boolean {
         delay(250) // startWalk 起步帧之前 phase 仍是 IDLE，先让起步发生
         val deadline = System.currentTimeMillis() + timeoutMs
         var stable = 0

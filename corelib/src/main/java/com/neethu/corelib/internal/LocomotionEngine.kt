@@ -182,6 +182,16 @@ internal class LocomotionEngine {
      * itself, so drags and programmatic moves can't desync it). Returns the
      * motion to apply, or `null` when idle/arrived this frame.
      *
+     * [rootHeadingRad] is the belly heading read back from the actual root
+     * matrix（renderer.rootHeadingRad，带 VRM0 翻转符号）——与 rootX/Z 同为
+     * 每帧权威读数。NaN（旧调用方/单测）= 保持内部状态。⚠heading 曾经只
+     * 是内部状态、依赖 resyncHeadingRad 手动同步：任何没走该缝的外部旋转
+     * （turnTo/定姿恢复/出生点/拖拽）都让内部朝向与真实朝向脱钩——方案 C
+     * 下位移沿真实朝向回灌、朝向修正却按陈旧状态计算，追 bearing 逐帧反
+     * 向过冲 = 蛇形绕行（路径 3~5 倍）乃至永不到达的极限环（真机 2026-10-24
+     * 实测，waypoint 多段腿中途冻结 0.8m 即此因）。与位置同一哲学：矩阵
+     * 是唯一权威，内部状态只是缓存。
+     *
      * [externalGait]（方案 C，P2）：步态素材自带位移（提取器逐帧回灌），本引擎
      * 只管朝向/到达/速度策略——平移恒 0，[FrameMotion.commandedSpeedMps] 交给
      * 渲染层设步态 playbackSpeed（提取位移随播放头走，制动/ease 自动生效）。
@@ -192,9 +202,11 @@ internal class LocomotionEngine {
         rootY: Float,
         rootZ: Float,
         externalGait: Boolean = false,
+        rootHeadingRad: Float = Float.NaN,
     ): FrameMotion? {
         lastX = rootX
         lastZ = rootZ
+        if (!rootHeadingRad.isNaN()) headingRad = rootHeadingRad
         if (phase == WalkPhase.IDLE || dtSeconds <= 0f) return null
 
         if (turnOnly) {

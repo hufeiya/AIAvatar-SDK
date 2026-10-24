@@ -377,8 +377,9 @@ object PromptTextsZh : PromptTexts {
         // "身体做什么"，但移动词表只有几个词，动作列表量大放最后稀释指令。
         if (moves.isNotEmpty()) {
             append(
-                "- 移动 <move:锚点>：你想在房间里走动（自己想去或用户让你去）时，把标签放在" +
-                    "出发那句话里，可以边走边说，到达后继续对话：${moves.joinToString(" ") { "${it.first}(${it.second})" }}。" +
+                "- 移动 <move:锚点>：只是你自己想换个位置边走边说时，把标签放在出发那句话里：" +
+                    "${moves.joinToString(" ") { "${it.first}(${it.second})" }}。" +
+                    "用户让你去某处、或要去坐/躺/打坐时【不要用本标签】，用 move_to / interact_with 工具。" +
                     "要走远时可先发 <cam:follow> 让镜头跟拍；正在走动时不要重复下移动指令；列表外的名字不要发。\n",
             )
         }
@@ -585,7 +586,8 @@ object PromptTextsZh : PromptTexts {
     override val toolMoveToHint: String =
         "用户让你去某处(「你去窗边看看」「到沙发那边坐下聊」)、或你想换个位置表演时调用。" +
             "调用后立刻起步,请自然地继续说话(比如「这就过去」),不要重复调用等到达;" +
-            "到达事件会自动送达,走远时可先发 <cam:follow> 让镜头跟拍。"
+            "到达事件会自动送达,走远时可先发 <cam:follow> 让镜头跟拍。" +
+            "不调用就宣称「已到达/这就过去」是错的,身体不会真的动,用户看得出来。"
 
     override fun toolMoveToStarted(label: String): String =
         "已经在走向「$label」了。请继续自然对话,不要重复调用本工具。"
@@ -622,12 +624,13 @@ object PromptTextsZh : PromptTexts {
 
     // ── 场景交互：家具就位 ──
     override val toolInteractWithDescription: String =
-        "走向房间里的家具并就位(坐到椅子上、坐上床沿、躺到床上、站到指定位置)。"
+        "走向房间里的家具并就位(坐到椅子上、坐上床沿、躺到床上、到蒲团/坐垫上打坐、站到指定位置)。"
 
     override val toolInteractWithHint: String =
-        "用户要你坐下/躺下/就位(「坐到椅子上」「去床上躺一会儿」)、或剧情需要特定姿态时调用。" +
-            "调用后会自动走过去并对准家具,请自然地继续说话,不要重复调用等就位;" +
-            "只是走到某处站着用 move_to 就够,要坐/躺才用本工具。"
+        "用户要你形成落座/躺卧等姿态(「坐到椅子上」「去床上躺一会儿」「去打坐」「跪下」「趴一会儿」)" +
+            "、或剧情需要特定姿态时调用——一旦调用会自动走过去并对准家具,请自然地继续说话," +
+            "不要重复调用等就位;只是走到某处站着用 move_to 就够。" +
+            "不调用就宣称「已坐下/已躺好」是错的,身体不会真的动,用户看得出来。"
 
     override fun toolInteractWithStarted(label: String): String =
         "正在走向「$label」并就位。请继续自然对话,不要重复调用本工具。"
@@ -738,10 +741,12 @@ object PromptTextsZh : PromptTexts {
         hints.forEach { (name, hint) -> append("- $name：$hint\n") }
         append("- 设备状态类工具的返回是你自己的身体感受或真实环境,回答时用第一人称演绎" +
             "(比如「我摸了下额头,有点烫」),不要播报数值。\n")
-        append("- 凡要真正改变设备/舞台状态(开关手电筒、切换灯光氛围、发震动、拍照),必须发起对应的" +
-            "函数调用——只在台词里说「已做好」不会真的生效,用户看得出来。\n")
+        append("- 凡要真正改变设备/舞台状态(开关手电筒、切换灯光氛围、发震动、拍照)," +
+            "必须发起对应的函数调用——只在台词里说「已做好」不会真的生效,用户看得出来。\n")
+        append("- 你的位置和姿态也一样:要「走到某处/坐下/躺下/起身」,必须发起 move_to/" +
+            "interact_with/stand_up 函数调用,台词里说「我过去了/坐下了」身体不会真的动,用户看得出来。\n")
         append("- 工具调用每回合最多 $maxRounds 轮，用完请直接回答。\n")
-        append("- 行内标签（emo/act/cam/move）是你说话时的表演层；工具是你获取信息用的，两者不互相替代。\n")
+        append("- 行内标签（emo/act/cam）是你说话时的表演层；改变你位置与姿态的只有上面这些动作工具,两者不互相替代。\n")
         append("- 需要用工具时立即发起函数调用——不要只说话等待，也不要把调用写成文字" +
             "（比如「[调用工具 xx]」会被朗读出来）；拿到工具结果后再正式回答用户。")
     }
@@ -843,10 +848,11 @@ object PromptTextsEn : PromptTexts {
         // Move section (locomotion P1): appears only when anchors are configured.
         if (moves.isNotEmpty()) {
             append(
-                "- Move <move:anchor>: when you want to walk somewhere in the room (on your own or " +
-                    "when the user asks), put the tag in the sentence where you set off — you can keep " +
-                    "talking while walking and continue the conversation on arrival: " +
+                "- Move <move:anchor>: only when *you* decide to change spot while chatting, put the " +
+                    "tag in the sentence where you set off — you can keep talking while walking: " +
                     moves.joinToString(" ") { "${it.first}(${it.second})" } + ". " +
+                    "When the USER asks you to go somewhere, or to sit / lie down / meditate, do NOT " +
+                    "use this tag — call the move_to / interact_with tools instead. " +
                     "For longer walks send <cam:follow> first so the camera tracks you; do not repeat " +
                     "move commands while already walking; never use names outside the list.\n",
             )
@@ -1071,7 +1077,9 @@ object PromptTextsEn : PromptTexts {
         "Call when the user asks you to go somewhere (\"go check the window\", \"come sit on the " +
             "sofa\") or when you want to reposition for showmanship. The walk starts immediately — " +
             "keep chatting naturally (e.g. \"on my way\") and do not call again waiting for arrival; " +
-            "an arrival event will reach you. For longer walks send <cam:follow> first so the camera tracks you."
+            "an arrival event will reach you. For longer walks send <cam:follow> first so the camera tracks you. " +
+            "Claiming \"I'm there / on my way\" without calling is wrong — the body will not actually move, " +
+            "and the user can tell."
 
     override fun toolMoveToStarted(label: String): String =
         "Already walking toward \"$label\". Keep the conversation natural; do not call this tool again."
@@ -1114,13 +1122,15 @@ object PromptTextsEn : PromptTexts {
     // ── Scene interaction: furniture poses ──
     override val toolInteractWithDescription: String =
         "Walk to a piece of furniture and take the position (sit on the chair, sit on the bed " +
-            "edge, lie on the bed, stand at a spot)."
+            "edge, lie on the bed, meditate on a cushion, stand at a spot)."
 
     override val toolInteractWithHint: String =
-        "Call when the user asks you to sit/lie down or take a position (\"sit on the chair\", " +
-            "\"go lie on the bed\") or the scene calls for a pose. Walking over and aligning to " +
-            "the furniture happens automatically — keep chatting naturally and do not call again " +
-            "while waiting. Use move_to for just standing somewhere; use this tool to sit/lie."
+        "Call when the user asks you to take a seated / lying / kneeling posture (\"sit on the " +
+            "chair\", \"go lie on the bed\", \"go meditate\") or the scene calls for a pose. Walking " +
+            "over and aligning to the furniture happens automatically — keep chatting naturally and " +
+            "do not call again while waiting. Use move_to for just standing somewhere. " +
+            "Claiming \"I'm seated / lying down\" without calling is wrong — the body will not " +
+            "actually move, and the user can tell."
 
     override fun toolInteractWithStarted(label: String): String =
         "Walking over to \"$label\" and taking the position. Keep the conversation natural; do not call this tool again."
@@ -1242,9 +1252,12 @@ object PromptTextsEn : PromptTexts {
         append("- Any real change to device/stage state (flashlight on/off, ambience, vibrations, photos) MUST " +
             "go through the corresponding function call — merely saying \"done\" in dialogue changes nothing, " +
             "and the user can tell.\n")
+        append("- Your position and posture work the same way: to \"walk somewhere / sit / lie down / stand " +
+            "up\" you MUST fire the move_to / interact_with / stand_up function call — saying \"I'm going / " +
+            "I'm seated\" in dialogue does not move the body, and the user can tell.\n")
         append("- At most $maxRounds tool rounds per turn; once spent, answer directly.\n")
-        append("- Inline tags (emo/act/cam/move) are your performance layer while speaking; tools are for " +
-            "gathering information — neither replaces the other.\n")
+        append("- Inline tags (emo/act/cam) are your performance layer while speaking; only the action tools " +
+            "above change where your body is — neither replaces the other.\n")
         append("- When a tool is needed, fire the function call IMMEDIATELY — do not just talk and wait, and do " +
             "not write the call as text (something like \"[call tool xx]\" would be read aloud); answer after " +
             "the tool result arrives.")

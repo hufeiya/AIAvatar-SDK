@@ -22,18 +22,58 @@ import com.neethu.aiadapter.model.ToolCallRequest
 private val BRIDGE_VERBS = listOf("看看", "瞧瞧", "瞅瞅", "查看", "查查", "观察", "找找", "查一下")
 
 /**
+ * 悬空「动作承诺句」cue（模型的「我这就去坐/这就过去」形态）：坐/躺/走动类
+ * 动作只有工具能执行，承诺了却不调用 = 身体不动（2026-10-24 真机基线实测
+ * DeepSeek-flash 坐躺指令的残余形态之一）。cue 都是完整短语，散文里偶然
+ * 出现「马上/过去」单字不会命中。required 重试对它同样安全：重试仍无调用
+ * 就按原回复收尾，只多花一轮静默请求。
+ */
+private val COMMITMENT_CUES = listOf(
+    "这就去", "这就来", "这就过去", "这就到", "这就坐", "这就躺",
+    "去坐下", "去躺", "这就走", "马上来", "马上到", "马上过去", "我这就",
+)
+
+/**
  * 回合可见回复是否是「悬空衔接句」：很短、含看/查类动词、没有向用户提问——
  * 典型如「让我看看……」。长回复或带问号（已在反问互动）不判悬空。
  * 「让我看看你那边——嗯……画面里好像只有你房间的」这类**长错误回答**与
  * 「[调用工具 xx]」**文本式自造格式**不在此列（后者长度超限，二者都接不住，
  * 属已知残余，见矩阵文档）。
+ * 2026-10-24 扩展：动作承诺句（[COMMITMENT_CUES]）同判悬空——坐/躺/走动
+ * 只能走工具通道，承诺不调用 = 动作必不发生，required 重试是唯一自动补救。
  */
 fun isDanglingBridgeReply(cleanText: String): Boolean {
     val t = cleanText.trim()
     if (t.isEmpty() || t.length > 24) return false
     if ('？' in t || '?' in t) return false
-    return BRIDGE_VERBS.any { it in t }
+    return BRIDGE_VERBS.any { it in t } || COMMITMENT_CUES.any { it in t }
 }
+
+/**
+ * 仅动作承诺句（[COMMITMENT_CUES]）：与会话层「本轮已有 move/act 标签分派」
+ * 的互斥判定配合使用——模型用 `<move:sword_approach>` 标签起步再说「这就过去」
+ * 是**正常搭配**（2026-10-24 真机 B2 实测：标签已执行走动，承诺句再触发
+ * required 重试反而把好回合炸成 400）。标签通道没干活时的承诺才是悬空。
+ * 检查口径与 [isDanglingBridgeReply] 一致（≤24 字、无问号）。
+ */
+fun isActionCommitmentReply(cleanText: String): Boolean {
+    val t = cleanText.trim()
+    if (t.isEmpty() || t.length > 24) return false
+    if ('？' in t || '?' in t) return false
+    return COMMITMENT_CUES.any { it in t }
+}
+
+/**
+ * 回复文本里是否写着「伪工具调用」——把工具名当标签/自造 XML 吐出来
+ * （2026-10-24 真机 DeepSeek 实测形态：`<interact_with><anchor>bed_sit</anchor>
+ * </interact_with>` 整段进正文，被 MALFORMED 过滤器拦住不朗读，但动作丢了）。
+ * 文本不是工具通道（坑 26 纪律：不执行），但它是明确的调用意图信号——命中
+ * 后走 required 静默重试一轮，把意图送回原生通道。
+ * 只认 `<工具名` 前缀形态：散文里裸提工具名（「调用 interact_with」）不算。
+ * 工具名都含下划线且 ≥8 字符，无误伤面。
+ */
+fun isPseudoToolCallText(cleanText: String, toolNames: List<String>): Boolean =
+    toolNames.any { cleanText.contains("<$it", ignoreCase = true) }
 
 /** 合成的调用 id（模板文本没有服务端 id；assistant/tool 消息对内自洽即可）。 */
 private const val TEMPLATE_CALL_ID_PREFIX = "textcall_"

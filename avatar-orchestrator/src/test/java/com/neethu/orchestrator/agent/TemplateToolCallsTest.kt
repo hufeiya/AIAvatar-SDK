@@ -17,11 +17,32 @@ class TemplateToolCallsTest {
         assertTrue(isDanglingBridgeReply("让我看看呀～"))
         assertTrue(isDanglingBridgeReply("我查一下哈"))
         assertTrue(isDanglingBridgeReply("稍等,我观察一下"))
+        // 动作承诺句（2026-10-24 扩展）：坐/躺/走动只能走工具通道，
+        // 承诺不调用 = 动作必不发生，同判悬空让 required 重试补救
+        assertTrue(isDanglingBridgeReply("好，我这就去床边坐下"))
+        assertTrue(isDanglingBridgeReply("这就过去"))
+        assertTrue(isDanglingBridgeReply("好呀，我这就躺下"))
+        assertTrue(isDanglingBridgeReply("马上到"))
         // 长回复/反问/空串不判悬空
         assertFalse(isDanglingBridgeReply("让我看看你那边——嗯……画面里好像只有你房间的东西"))
         assertFalse(isDanglingBridgeReply("你猜猜我在看什么？"))
         assertFalse(isDanglingBridgeReply("哈哈哈"))
         assertFalse(isDanglingBridgeReply(""))
+        // 散文里偶然带「马上/过去」单字不命中（cue 是完整短语）
+        assertFalse(isDanglingBridgeReply("马上就好啦，别急嘛"))
+        assertFalse(isDanglingBridgeReply("上周我们聊到过去的事"))
+    }
+
+    @Test
+    fun `pseudo tool call text detection`() {
+        val tools = listOf("interact_with", "move_to", "stand_up")
+        // DeepSeek 实测形态：自造 XML 整段写进正文
+        assertTrue(isPseudoToolCallText("我去窗边看一眼。\n<interact_with>\n<anchor>bed_sit</anchor>\n</interact_with>", tools))
+        assertTrue(isPseudoToolCallText("<move_to>carpet</move_to>", tools))
+        // 散文裸提工具名（无 < 前缀）不算
+        assertFalse(isPseudoToolCallText("我调用 interact_with 帮你坐下", tools))
+        assertFalse(isPseudoToolCallText("窗边风很好", tools))
+        assertFalse(isPseudoToolCallText("窗边风很好", emptyList()))
     }
 
     @Test

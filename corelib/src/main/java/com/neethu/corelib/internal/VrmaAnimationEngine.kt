@@ -415,8 +415,46 @@ internal class VrmaAnimationEngine(
         return pending
     }
 
+    /**
+     * 走动停滞诊断快照（看门狗触发时打一行，非热路径）：双槽/提取/播放头
+     * 一览。方案 C 下位移全靠 base 槽的提取器逐帧回灌——base 无提取器
+     * （被不含 extractor 的 play 顶掉）、isPlaying=false、或 fade 卡死不晋升
+     * 都会让位移恒 0 而走动状态机照常 WALKING（= 原地冻结）。
+     */
+    fun debugState(): String {
+        val b = base
+        val ov = overlay
+        return "playing=$isPlaying" +
+            " base=" + (b != null) +
+            " baseExtractor=" + (b?.extractor != null) +
+            " baseSpeed=" + (b?.speed ?: 0f) +
+            " loop=" + (b?.looping ?: false) +
+            " playhead=" + (b?.playheadSeconds ?: 0f) +
+            " freezeBase=$freezeBase" +
+            " overlay=" + (ov != null) +
+            " overlayWeight=$overlayWeight" +
+            " fadeSeconds=$fadeSeconds" +
+            " overlayMask=" + (ov?.boneMask != null) +
+            " pendingExtracted=$pendingExtracted" +
+            " idleTakeover=$idleTakeover"
+    }
+
     /** 当前提取前向方向（模型空间 XZ 单位向量）；无提取器时 null。 */
     fun extractorForwardDir(): FloatArray? = base?.extractor?.forwardDir
+
+    /**
+     * 方案 C 提取链当前是否在产位移：base 带提取器，或步态正作为 overlay
+     * 淡入（起步 crossfade 的 0.25s 内 base 还是 idle——合法窗口，不算断供）。
+     * 走动停滞自愈的判据：步态槽被手势/待机/停步淡入时序顶掉（base 无提取器
+     * 且没有步态 overlay 在淡入）= 提取位移恒 0 而走动状态机照常 WALKING，
+     * 即原地冻结（2026-10-24 真机遥测实锤 baseExtractor=false）。
+     */
+    fun isExtractionHealthy(): Boolean {
+        val b = base ?: return false
+        if (b.extractor != null) return true
+        val ov = overlay
+        return ov != null && ov.extractor != null && overlayTarget == 1f
+    }
 
     /** One-shot→idle transition happened since the last call (renderer resets spring bones). */
     fun consumeIdleSwap(): Boolean {

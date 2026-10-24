@@ -26,7 +26,9 @@ import com.neethu.corelib.Lang
 import com.neethu.orchestrator.agent.AgentToolCatalog
 import com.neethu.orchestrator.agent.ToolExecutor
 import com.neethu.orchestrator.agent.ToolRegistry
+import com.neethu.orchestrator.agent.isActionCommitmentReply
 import com.neethu.orchestrator.agent.isDanglingBridgeReply
+import com.neethu.orchestrator.agent.isPseudoToolCallText
 import com.neethu.orchestrator.agent.parseTemplateToolCalls
 import com.neethu.orchestrator.i18n.PromptTexts
 import com.neethu.orchestrator.i18n.promptTextsOf
@@ -676,6 +678,7 @@ class AvatarSession(
                 while (true) {
                     val roundTextStart = replyBuffer.length
                     val roundCleanStart = cleanBuffer.length
+                    embodimentDispatchedThisRound = false
                     val useTools = options.agentToolsEnabled &&
                         !toolsDisabledModels.contains(modelKey(llmCfg)) &&
                         !tools.isEmpty()
@@ -721,22 +724,60 @@ class AvatarSession(
                     // 静默重试一轮（textSink 静默——required 下服务端可能把 Qwen 模板
                     // 的 <tool_call> 文本当 delta 吐出，绝不能进 TTS），原生调用与
                     // 模板文本解析双路兜底；重试仍无调用则按原回复正常收尾。
-                    if (toolCalls.isEmpty() && useTools && round == 0 &&
-                        isDanglingBridgeReply(cleanBuffer.substring(roundCleanStart))
+                    // 2026-10-24 扩展三类命中：动作承诺句（「我这就去坐」——坐/躺只有
+                    // 工具能执行；⚠本轮标签通道已分派身体动作则不算悬空——「<move:x>
+                    // 这就过去」是正常搭配，B2 教训）、伪工具调用文本（「<interact_with>
+                    // …」写进正文，⚠必须查 raw——MALFORMED 伪标签已被提取器从 clean
+                    // 文本剥掉；任何轮都可能发生——E1 实测出现在工具轮之后的续答轮）。
+                    embodimentDispatchedThisRound = false
+                    val roundRaw = replyBuffer.substring(roundTextStart)
+                    if (toolCalls.isEmpty() && useTools &&
+                        ((round == 0 && isDanglingBridgeReply(cleanBuffer.substring(roundCleanStart))) ||
+                            (!embodimentDispatchedThisRound &&
+                                isActionCommitmentReply(cleanBuffer.substring(roundCleanStart))) ||
+                            isPseudoToolCallText(roundRaw, tools.list().map { it.name }))
                     ) {
                         Log.i(
                             PROMPT_TAG,
                             "$STREAM_PREFIX dangling bridge reply, retrying with tool_choice=required",
                         )
                         val retryText = StringBuilder()
-                        val retryFinish = streamRound(
-                            llmAdapter, messages, roundCfg.copy(toolChoice = "required"), ttsCfg, round,
-                            onFirstDelta = {}, onToolCall = {}, textSink = retryText,
-                        )
-                        val retryCalls = retryFinish.toolCalls.ifEmpty {
+                        val retryFinish = try {
+                            streamRound(
+                                llmAdapter, messages, roundCfg.copy(toolChoice = "required"), ttsCfg, round,
+                                onFirstDelta = {}, onToolCall = {}, textSink = retryText,
+                            )
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (t: Throwable) {
+                            // required 并非家家支持（DeepSeek 思考模式实测 400
+                            // 「Thinking mode does not support this tool_choice」）：
+                            // 降级为**不带 tool_choice 的静默普通重试**再给模型一次
+                            // 原生调用的机会（同一上下文再采样，宣布不调用的形态
+                            // 基线实测约 2/3 能在重试中补上调）。仍失败才按原回复收尾。
+                            Log.w(
+                                "AvatarSession",
+                                "$STREAM_PREFIX required retry rejected (${t.message}), retrying plain",
+                            )
+                            try {
+                                streamRound(
+                                    llmAdapter, messages, roundCfg, ttsCfg, round,
+                                    onFirstDelta = {}, onToolCall = {}, textSink = retryText,
+                                )
+                            } catch (e2: CancellationException) {
+                                throw e2
+                            } catch (t2: Throwable) {
+                                Log.w(
+                                    "AvatarSession",
+                                    "$STREAM_PREFIX plain retry also failed (${t2.message}), keeping original reply",
+                                )
+                                null
+                            }
+                        }
+                        val retryCalls = retryFinish?.toolCalls.orEmpty().ifEmpty {
                             parseTemplateToolCalls(retryText.toString())
                         }
-                        if (retryCalls.isNotEmpty()) {
+                        if (retryCalls.isNotEmpty() && retryFinish != null) {
                             finish = retryFinish
                             usage = retryFinish.usage
                             toolCalls = retryCalls
@@ -1079,6 +1120,7 @@ class AvatarSession(
                     val entry = registry.actions.getValue(cue.name)
                     if (gestureDriver?.play(entry.tag) == true) {
                         actionStartedThisTurn = true
+                        embodimentDispatchedThisRound = true
                         previousAction = entry.tag
                         emit(AvatarEvent.ActionStarted(cue.name, entry.label))
                     } else rejectTag(rawCue, TagCapabilityRegistry.Reason.RESOURCE_LOAD_FAILED)
@@ -1096,7 +1138,10 @@ class AvatarSession(
                     val anchor = driver?.find(cue.name)
                     if (driver == null || anchor == null) rejectTag(rawCue, TagCapabilityRegistry.Reason.UNAVAILABLE)
                     else when (driver.walkTo(anchor)) {
-                        LocomotionDriver.Outcome.STARTED -> emit(AvatarEvent.WalkStarted(anchor.name, anchor.x, anchor.z))
+                        LocomotionDriver.Outcome.STARTED -> {
+                            embodimentDispatchedThisRound = true
+                            emit(AvatarEvent.WalkStarted(anchor.name, anchor.x, anchor.z))
+                        }
                         LocomotionDriver.Outcome.ALREADY_WALKING, LocomotionDriver.Outcome.MIMIC_ACTIVE ->
                             rejectTag(rawCue, TagCapabilityRegistry.Reason.BUSY)
                         LocomotionDriver.Outcome.LOAD_FAILED -> rejectTag(rawCue, TagCapabilityRegistry.Reason.RESOURCE_LOAD_FAILED)
@@ -1203,6 +1248,14 @@ class AvatarSession(
     }
 
     private var actionStartedThisTurn = false
+
+    /**
+     * 本工具轮内已通过标签通道分派了身体动作（move 标签起步 / act 标签开播）。
+     * 悬空「动作承诺句」判定用它做互斥：模型用 `<move:x>` 起步再说「这就过去」
+     * 是正常搭配（2026-10-24 真机 B2 实测，配套承诺句再触发 required 重试反而
+     * 把好回合炸成 400），承诺没兑现才算悬空。每轮开头重置。
+     */
+    private var embodimentDispatchedThisRound = false
     private var candidateInput = ""
     private var previousAction: String? = null
     private var turnPreviousAction: String? = null
