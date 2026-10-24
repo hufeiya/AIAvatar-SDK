@@ -789,10 +789,71 @@ class AvatarController : AvatarActor {
     }
 
     /**
+     * Turn in place to an absolute world yaw in degrees (0 = +Z, toward the
+     * camera; scene asset convention). Arrival flows out through
+     * [walkFinished]. Refused while a contact pose is engaged.
+     */
+    fun turnTo(yawDeg: Float): Boolean = renderer?.turnTo(yawDeg) ?: false
+
+    /**
      * Locomotion state snapshot (phase / position / heading / target / speed),
      * for diagnostics and UI.
      */
     override fun getWalkState(): WalkSnapshot? = renderer?.walkSnapshot()
+
+    // ── Public API: Scene Interaction（场景交互定姿）─────────────────────
+
+    /**
+     * Engage a furniture contact pose (sit on a chair/bed edge, lie on a bed)
+     * at an interaction anchor's contact point. Walk the avatar to the
+     * anchor's approach point first ([startWalk] or the locomotion driver) —
+     * this layer then turns the body into the contact orientation, plays the
+     * requested transition/loop clips and aligns the hips bone onto the
+     * contact surface.
+     *
+     * Refused while walking ([ContactPoseResult.WALKING]) or when a pose is
+     * already engaged ([ContactPoseResult.BUSY]); stand back up with
+     * [clearContactPose].
+     */
+    fun applyContactPose(request: ContactPoseRequest): ContactPoseResult {
+        return renderer?.applyContactPose(request) ?: ContactPoseResult.NO_MODEL
+    }
+
+    /** Stand back up from the current contact pose (see [applyContactPose]). */
+    fun clearContactPose(): Boolean = renderer?.clearContactPose() ?: false
+
+    /** Current contact pose state (phase / kind / aligned), for diagnostics. */
+    fun getContactPoseState(): ContactPoseSnapshot? =
+        renderer?.contactPoseSnapshot()?.takeIf { it.phase != ContactPosePhase.NONE }
+
+    /**
+     * Teleport the avatar root to a world position + absolute yaw (scene
+     * spawn placement / calibration probes). Stops any walk, clears hips
+     * drag offsets and resyncs the locomotion heading.
+     */
+    fun setAvatarWorldPosition(x: Float, y: Float, z: Float, yawDeg: Float): Boolean {
+        return renderer?.setAvatarWorldPosition(x, y, z, yawDeg) ?: false
+    }
+
+    // ── Public API: Scene Occlusion（墙体自动剖切）───────────────────────
+
+    /**
+     * Toggle the scene occlusion auto-hide: when the orbit camera sits
+     * outside a closed room, walls (and glass/ceiling/backdrop) blocking the
+     * sight line to the avatar hide automatically and restore ~0.25 s after
+     * the camera moves clear. Discovered per scene from node-name prefixes
+     * (WALL_/GLASS_/CUTAWAY_/CEILING/FOREST_); furniture never hides.
+     * Default: enabled (inert for scenes without those node names).
+     */
+    fun setOcclusionEnabled(enabled: Boolean) {
+        renderer?.setOcclusionEnabled(enabled)
+    }
+
+    /** Whether scene occlusion auto-hide is on (default true). */
+    fun isOcclusionEnabled(): Boolean = renderer?.isOcclusionEnabled() ?: false
+
+    /** Occlusion diagnostics (candidate/hidden counts + hidden node names). */
+    fun getOcclusionDebugInfo(): String? = renderer?.occlusionDebugString()
 
     // ── Public API: Render Settings ──────────────────────────────────────
 

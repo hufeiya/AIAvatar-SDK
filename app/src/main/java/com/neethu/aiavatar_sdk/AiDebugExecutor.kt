@@ -135,6 +135,8 @@ internal class AiChatDebugHooks(
     },
     /** 会话直取缝（ai_cmd anchors / walk_to <锚点名> 等 P1 走动调试命令用）；null = 无会话。 */
     val session: () -> AvatarSession? = { null },
+    /** 场景交互就位链（ai_cmd interact/pose_state/pose_clear/interactions 用）。 */
+    val interaction: InteractionCoordinator? = null,
 )
 
 /**
@@ -200,6 +202,11 @@ internal suspend fun executeAiCommand(
             "walk_overlay" -> walkOverlayCommand(controller, command.arg)
             "walk_extract" -> walkExtractCommand(controller, command.arg)
             "anchors" -> anchorsCommand(chat)
+            "interactions" -> interactionsCommand(chat)
+            "interact" -> interactCommand(controller, chat, command.arg)
+            "pose_state" -> poseStateCommand(controller, chat)
+            "pose_clear" -> poseClearCommand(chat)
+            "occlusion" -> occlusionCommand(controller, command.arg)
             "walk_transit" -> walkTransitCommand(controller, command.arg)
             "scene_offset" -> scenePlacementCommand(controller, uiState, command, rotate = false)
             "scene_rot" -> scenePlacementCommand(controller, uiState, command, rotate = true)
@@ -755,6 +762,7 @@ private fun walkToCommand(
         WalkStartResult.NO_SCENE -> throw IllegalStateException("no scene loaded — walking without a room means walking on air; run load_scene first")
         WalkStartResult.NO_GAIT -> throw IllegalStateException("walk gait not configured")
         WalkStartResult.MIMIC_ACTIVE -> throw IllegalStateException("mimic engaged — run `mimic_force off` first")
+        WalkStartResult.POSE_ACTIVE -> throw IllegalStateException("contact pose active — run `pose_clear` first")
         WalkStartResult.LOAD_FAILED -> throw IllegalStateException("walk gait clip failed to load")
         WalkStartResult.NO_RENDERER -> throw IllegalStateException("renderer not attached")
     }
@@ -866,6 +874,65 @@ private fun anchorsCommand(chat: AiChatDebugHooks?): String {
         "- ${a.name} → (${a.x}, ${a.z})" +
             if (a.links.isNotEmpty()) " ⇄ ${a.links.joinToString(",")}" else ""
     }
+}
+
+/** ai_cmd interactions：当前场景的交互点表（interact_with 工具白名单同源）。 */
+private fun interactionsCommand(chat: AiChatDebugHooks?): String {
+    val coordinator = chat?.interaction
+        ?: return "AI chat not wired in this screen"
+    if (coordinator.anchors.isEmpty()) {
+        return "no interaction anchors for this scene (assets/scene/<scene>.interactions.json missing)"
+    }
+    return coordinator.anchors.joinToString("\n") { a ->
+        "- ${a.id} [${a.kind}]" +
+            (a.approach?.let { " via $it" } ?: "") +
+            " yaw=${a.yawDeg}" +
+            " — ${a.label}"
+    }
+}
+
+/**
+ * ai_cmd interact <锚点id>：就位链（走位→转向→坐/躺接触对齐），异步起步
+ * ——链路在 InteractionCoordinator 的 coroutine 里跑完，命令立即回显状态。
+ */
+private fun interactCommand(
+    controller: AvatarController,
+    chat: AiChatDebugHooks?,
+    arg: String?,
+): String {
+    val coordinator = chat?.interaction
+        ?: throw IllegalStateException("AI chat not wired in this screen")
+    if (arg.isNullOrBlank()) {
+        throw IllegalArgumentException("interact expects an anchor id — run `interactions` for the table")
+    }
+    val result = coordinator.interact(arg.trim().lowercase())
+    if (result.startsWith("unknown")) throw IllegalArgumentException(result)
+    return "$result; pair with `camera_shot follow` for a tracking camera"
+}
+
+/** ai_cmd pose_state：接触定姿状态 + 防遮挡诊断。 */
+private fun poseStateCommand(controller: AvatarController, chat: AiChatDebugHooks?): String {
+    val poseLine = chat?.interaction?.stateText() ?: "pose=none (coordinator not wired)"
+    return "$poseLine\nocclusion: ${controller.getOcclusionDebugInfo() ?: "n/a"}"
+}
+
+/** ai_cmd pose_clear：起身（结束坐/躺姿）。 */
+private fun poseClearCommand(chat: AiChatDebugHooks?): String {
+    val coordinator = chat?.interaction
+        ?: throw IllegalStateException("AI chat not wired in this screen")
+    return coordinator.clearPose()
+}
+
+/** ai_cmd occlusion on|off|state：墙体自动剖切开关（防遮挡 A/B 用）。 */
+private fun occlusionCommand(controller: AvatarController, arg: String?): String {
+    when (arg?.lowercase()) {
+        null, "state", "status" -> {}
+        "on", "true", "1" -> controller.setOcclusionEnabled(true)
+        "off", "false", "0" -> controller.setOcclusionEnabled(false)
+        else -> throw IllegalArgumentException("occlusion expects on|off|state")
+    }
+    return "occlusion ${if (controller.isOcclusionEnabled()) "on" else "off"} — " +
+        (controller.getOcclusionDebugInfo() ?: "no scene")
 }
 
 /**

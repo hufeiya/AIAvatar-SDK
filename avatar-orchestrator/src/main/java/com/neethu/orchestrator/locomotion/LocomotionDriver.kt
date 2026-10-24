@@ -46,12 +46,15 @@ open class LocomotionDriver(private val controller: AvatarActor) {
         /** 「模仿我」引擎占用骨骼，走动被拒。 */
         MIMIC_ACTIVE,
 
-        /** 渲染层缺失（无视图挂载）。 */
-        NO_RENDERER,
+    /** 渲染层缺失（无视图挂载）。 */
+    NO_RENDERER,
 
-        /** 步态剪辑加载失败（同名后果不同归因的缝：NO_GAIT=没配置）。 */
-        LOAD_FAILED,
-    }
+    /** 步态剪辑加载失败（同名后果不同归因的缝：NO_GAIT=没配置）。 */
+    LOAD_FAILED,
+
+    /** 场景交互定姿（坐/躺）占用 root 动画车道——先起身再走。 */
+    POSE_ACTIVE,
+}
 
     /** 当前锚点表（协议块词表与解析共用同一份，会话内不变）。 */
     var anchors: List<MoveAnchor> = emptyList()
@@ -111,6 +114,7 @@ open class LocomotionDriver(private val controller: AvatarActor) {
             WalkStartResult.MIMIC_ACTIVE -> Outcome.MIMIC_ACTIVE
             WalkStartResult.LOAD_FAILED -> Outcome.LOAD_FAILED
             WalkStartResult.NO_RENDERER -> Outcome.NO_RENDERER
+            WalkStartResult.POSE_ACTIVE -> Outcome.POSE_ACTIVE
         }
         if (outcome != Outcome.STARTED) {
             Log.w(TAG, "walk to '${anchor.name}' rejected: $result")

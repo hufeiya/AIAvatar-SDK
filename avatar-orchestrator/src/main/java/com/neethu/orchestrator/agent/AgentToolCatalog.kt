@@ -569,6 +569,8 @@ object AgentToolCatalog {
                             ToolResult(texts.toolMoveToNoGait, isError = true)
                         LocomotionDriver.Outcome.MIMIC_ACTIVE ->
                             ToolResult(texts.toolMoveToMimicActive, isError = true)
+                        LocomotionDriver.Outcome.POSE_ACTIVE ->
+                            ToolResult(texts.toolInteractWithBusy, isError = true)
                         LocomotionDriver.Outcome.UNKNOWN_ANCHOR ->
                             ToolResult(texts.toolEnumArgInvalid("move_to", raw, d.anchors.map { it.name }), isError = true)
                         LocomotionDriver.Outcome.NO_RENDERER, LocomotionDriver.Outcome.LOAD_FAILED ->
@@ -602,6 +604,104 @@ object AgentToolCatalog {
                 d.stopWalking()
                 ToolResult(texts.toolStopMovingDone)
             }
+        }
+        return spec to executor
+    }
+
+    // ── 场景交互（家具就位：dream_bedroom 交互点）──────────────────────
+
+    /**
+     * `interact_with` 锚点快照：app 层交互点表的投影（orchestrator 不感知
+     * app 的解析类型，只收 id + 本地化标签）。schema 的 enum 白名单从它
+     * 生成（注册时快照一次——锚点表随场景切换重注入，工具跟随重注册）。
+     */
+    data class InteractionChoice(val id: String, val label: String)
+
+    /** [interactWith] 执行结果（app 就位链的异步起步语义归因）。 */
+    enum class InteractOutcome { STARTED, BUSY, UNKNOWN_ANCHOR, FAILED }
+
+    /**
+     * `interact_with`（场景交互）：走向交互点并就位（坐/躺/站到指定朝向）。
+     * 与 move_to 同为异步起步语义——起步即返回确认文案，走过去+转身+接触
+     * 对齐由 app 的就位链后台完成（ToolRegistry 10s 超时下阻塞等待必炸，
+     * 坑 24 同源）。
+     */
+    fun interactWith(
+        texts: PromptTexts,
+        choices: () -> List<InteractionChoice>,
+        start: (id: String) -> InteractOutcome,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val current = choices()
+        val spec = ToolSpec(
+            name = "interact_with",
+            description = texts.toolInteractWithDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "anchor",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { current.forEach { add(JsonPrimitive(it.id)) } })
+                                put("description", "交互点 id（见列表，不要发明）")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("anchor")) })
+            },
+            systemHint = texts.toolInteractWithHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "anchor")?.lowercase().orEmpty()
+            val known = current.any { it.id.equals(raw, ignoreCase = true) }
+            when {
+                raw.isEmpty() || !known -> ToolResult(
+                    texts.toolEnumArgInvalid("interact_with", raw, current.map { it.id }),
+                    isError = true,
+                )
+                else -> when (start(raw)) {
+                    InteractOutcome.STARTED ->
+                        ToolResult(
+                            texts.toolInteractWithStarted(
+                                current.first { it.id.equals(raw, ignoreCase = true) }.label,
+                            ),
+                        )
+                    InteractOutcome.BUSY -> ToolResult(texts.toolInteractWithBusy)
+                    InteractOutcome.UNKNOWN_ANCHOR ->
+                        ToolResult(
+                            texts.toolEnumArgInvalid("interact_with", raw, current.map { it.id }),
+                            isError = true,
+                        )
+                    InteractOutcome.FAILED -> ToolResult(texts.toolInteractWithFailed, isError = true)
+                }
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `stand_up`：结束坐姿/躺姿回到站立（与 interact_with 配对注册；走动
+     * 通道也会在 app 层自动先起身，本工具供显式起身指令使用）。
+     */
+    fun standUp(
+        texts: PromptTexts,
+        standUp: () -> Boolean,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "stand_up",
+            description = texts.toolStandUpDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject { })
+            },
+            systemHint = texts.toolStandUpHint,
+        )
+        val executor = ToolExecutor { _ ->
+            if (standUp()) ToolResult(texts.toolStandUpDone)
+            else ToolResult(texts.toolStandUpDone) // 无姿可起 = 已站着，正常结果
         }
         return spec to executor
     }

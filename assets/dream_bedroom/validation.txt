@@ -1,0 +1,8 @@
+Dream bedroom validation: PASS
+GLB SHA-256: 770657ee7d5b716330f6fcdca00a275ffcf6ea1fa58cf5d4fcfc39ba44abdb52
+Counts: {"sceneNodes": 101, "meshes": 27, "primitives": 129, "triangles": 245128, "materials": 28, "embeddedImages": 6, "furnitureRoots": 15, "interactionAnchors": 18, "navigableAnchors": 12, "undirectedEdges": 11}
+Coordinate tolerance: 2e-05 m; navigation radius: 0.22 m
+
+LIMITATION: Geometry validation only: no Android/Filament device rendering or avatar pose fitting was performed.
+LIMITATION: Navigation checks cover declared graph edges against the eight listed furniture obstacles; they do not implement runtime collision avoidance.
+LIMITATION: Walking sidecar contains XZ only; arrival yaw, vertical rug compensation, sitting, lying and hand IK need host logic.

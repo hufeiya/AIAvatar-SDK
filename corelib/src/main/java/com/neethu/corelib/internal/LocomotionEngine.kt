@@ -146,6 +146,17 @@ internal class LocomotionEngine {
     }
 
     /**
+     * Re-derive the internal heading after an external root rotation (scene
+     * contact pose / spawn placement rotate the root matrix directly, which
+     * this engine can't see — position stays authoritative per-frame, heading
+     * is internal state and would go stale). [rad] is the belly heading read
+     * back from the actual root matrix.
+     */
+    fun resyncHeadingRad(rad: Float) {
+        headingRad = rad
+    }
+
+    /**
      * 原地转向（多虚拟人 P3 对谈位互相对着）：目标是一个世界点，engine 只转
      * 朝向不产生平移，|朝向误差| ≤ 容差即到达。bounds clamp 与 startWalk 同款。
      * 走动中调用被忽略（调用方先停步——防抖纪律同坑 9，这里不静默改目标）。

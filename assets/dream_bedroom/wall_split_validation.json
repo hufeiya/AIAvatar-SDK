@@ -1,0 +1,345 @@
+{
+  "status": "PASS",
+  "baselineDir": "/tmp/dream_bedroom_wall_split_baseline",
+  "interactionToleranceMeters": 1e-06,
+  "anchors": [
+    {
+      "node": "ANCHOR_AISLE_EAST_LOWER",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_AISLE_EAST_UPPER",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_AISLE_SOUTH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_BED_APPROACH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_BED_HEAD",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_BED_LIE",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_BED_SIT",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_DESK_APPROACH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_DESK_SEAT",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_ENTRY",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_GAME_APPROACH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_GAME_PICKUP",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_READING_APPROACH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_READING_SEAT",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_RUG_WATCH_TV",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_SPAWN",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_TV_APPROACH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "ANCHOR_WINDOW_VIEW",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    }
+  ],
+  "objects": [
+    {
+      "node": "FURN_BED",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_BOOKCASE",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_CHAIR_DESK",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_CHAIR_READING",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_DESK",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_GAME_CONSOLE",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_MEDIA_CONSOLE",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_NIGHTSTAND",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_RUG",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_SIDE_TABLE",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "FURN_TV",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "GLASS_PANORAMA_EAST",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "GLASS_PANORAMA_NORTH",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "PORTAL_ENTRY",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    },
+    {
+      "node": "PROP_CONTROLLER",
+      "positionErrorMeters": 0.0,
+      "forwardVectorError": 0.0,
+      "manifestRecordUnchanged": true
+    }
+  ],
+  "cutawayGroups": [
+    {
+      "node": "WALL_NORTH",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "GLASS_PANORAMA_NORTH_GEOMETRY",
+        "WALL_NORTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_SOUTH",
+      "renderableCount": 4,
+      "renderableNodes": [
+        "CUTAWAY_FRONT_WALL_GEOMETRY",
+        "FURN_TV_GEOMETRY",
+        "PORTAL_ENTRY_GEOMETRY",
+        "WALL_SOUTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_EAST",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "GLASS_PANORAMA_EAST_GEOMETRY",
+        "WALL_EAST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_WEST",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "WALL_WEST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "CEILING",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "CEILING_OPTIONAL_GEOMETRY"
+      ]
+    }
+  ],
+  "errors": [],
+  "validationStatus": "PASS",
+  "newCounts": {
+    "sceneNodes": 101,
+    "meshes": 27,
+    "primitives": 129,
+    "triangles": 245128,
+    "materials": 28,
+    "embeddedImages": 6,
+    "furnitureRoots": 15,
+    "interactionAnchors": 18,
+    "navigableAnchors": 12,
+    "undirectedEdges": 11
+  },
+  "baseline": {
+    "sha256": "5e5b5bcce2a7509d276cb04b8b8f8385f5bd9fa028b8c6aeedef57cb955bdbf6",
+    "byteLength": 14206668,
+    "counts": {
+      "sceneNodes": 91,
+      "meshes": 23,
+      "primitives": 114,
+      "triangles": 245128,
+      "materials": 28,
+      "embeddedImages": 6,
+      "furnitureRoots": 15,
+      "interactionAnchors": 18,
+      "navigableAnchors": 12,
+      "undirectedEdges": 11
+    }
+  },
+  "export": {
+    "sha256": "770657ee7d5b716330f6fcdca00a275ffcf6ea1fa58cf5d4fcfc39ba44abdb52",
+    "byteLength": 13730080,
+    "counts": {
+      "sceneNodes": 101,
+      "meshes": 27,
+      "primitives": 129,
+      "triangles": 245128,
+      "materials": 28,
+      "embeddedImages": 6,
+      "furnitureRoots": 15,
+      "interactionAnchors": 18,
+      "navigableAnchors": 12,
+      "undirectedEdges": 11
+    }
+  },
+  "geometryComparison": {
+    "triangleCountUnchanged": true,
+    "objectBoundsMaxErrorMeters": 0.0
+  },
+  "sidecarsUnchanged": [
+    "dream_bedroom.meta.json",
+    "dream_bedroom.anchors.json"
+  ],
+  "preservedInteractionFields": [
+    "objects",
+    "anchors",
+    "coordinateSystem",
+    "room",
+    "sdkPlacement",
+    "poseContract",
+    "navigation"
+  ],
+  "checks": {
+    "uniqueNodeNames": 1,
+    "cutawaySchema": 13,
+    "cutawayGroups": 1,
+    "cutawayFloor": 8,
+    "cutawayNodeExists": 5,
+    "cutawayRenderables": 10,
+    "cutawayDisjointness": 10,
+    "cutawayBounds": 10,
+    "cutawayAliases": 6,
+    "cutawaySidecar": 7,
+    "sdkPlacement": 4,
+    "nodeExists": 58,
+    "worldPosition": 33,
+    "sdkWorldPosition": 33,
+    "declaredForward": 33,
+    "nodeForward": 33,
+    "facingDirection": 18,
+    "anchorExtras": 54,
+    "lookTargetPosition": 7,
+    "furnitureBounds": 15,
+    "walkingSidecar": 13,
+    "walkingBounds": 12,
+    "walkingLinks": 45,
+    "graphConnectivity": 1,
+    "navigationBounds": 176,
+    "edgeClearance": 2,
+    "embeddedTextures": 6
+  },
+  "limitations": [
+    "This report checks asset structure, transforms and metadata; no SDK auto-hide runtime or Android rendering was executed.",
+    "The full pre-split asset is retained only in the local temporary baseline directory."
+  ]
+}

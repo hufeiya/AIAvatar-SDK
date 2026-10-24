@@ -83,6 +83,13 @@ enum class WalkStartResult {
     /** The mimic ("imitate me") engine owns the bones — stop it first. */
     MIMIC_ACTIVE,
 
+    /**
+     * A scene contact pose (sit/lie) is engaged — clear it first
+     * ([AvatarController.clearContactPose]) so the root animation lanes
+     * don't fight over the root matrix.
+     */
+    POSE_ACTIVE,
+
     /** The gait clip failed to load/parse. */
     LOAD_FAILED,
 }

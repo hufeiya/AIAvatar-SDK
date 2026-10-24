@@ -44,6 +44,9 @@ import com.neethu.corelib.AvatarConfig
 import com.neethu.corelib.AvatarRenderSettings
 import com.neethu.corelib.BreathInfo
 import com.neethu.corelib.CameraShot
+import com.neethu.corelib.ContactPoseRequest
+import com.neethu.corelib.ContactPoseResult
+import com.neethu.corelib.ContactPoseSnapshot
 import com.neethu.corelib.LightingRig
 import com.neethu.corelib.LookAtInfo
 import com.neethu.corelib.MimicInfo
@@ -298,6 +301,49 @@ internal class SoulLinkRenderer(
     private var scenePlacement: ScenePlacement? = null
     private var sceneBaseMatrix: FloatArray? = null
 
+    // 防遮挡（场景墙体自动剖切）：相机在房间外时，挡住角色视线的墙/玻璃/
+    // 天花板自动隐藏（layerMask bit0 清零），移开后 0.25s 恢复。闭室 GLB
+    // （如 dream_bedroom）远距离环视的解法，docs/dream-bedroom-occlusion。
+    private val sceneOcclusion: SceneOcclusionController by lazy {
+        SceneOcclusionController(modelViewer.engine)
+    }
+    // 遮挡更新的抓拍缓冲（每帧零分配）
+    private val occlusionEye = FloatArray(3)
+    private val occlusionTarget = FloatArray(3)
+    private val occlusionUp = FloatArray(3)
+    private val occlusionBodyPoints = listOf(FloatArray(3), FloatArray(3), FloatArray(3))
+
+    // 场景交互定姿（坐/躺接触对齐）：走位到接近点后 hips 吸附到家具接触面。
+    private val contactPose: ContactPoseController by lazy {
+        ContactPoseController(
+            getRootMatrix = {
+                val asset = modelViewer.asset ?: return@ContactPoseController null
+                val tm = modelViewer.engine.transformManager
+                val instance = tm.getInstance(asset.root)
+                if (instance == 0) return@ContactPoseController null
+                tm.getTransform(instance, FloatArray(16))
+            },
+            getHipsWorld = {
+                val hips = boneAnchor(hipsEntity, HIPS_FALLBACK_Y)
+                floatArrayOf(hips[0], hips[1], hips[2])
+            },
+            playClip = { path, loop, fade ->
+                if (loadVrmaAnimation(path)) {
+                    playVrmaAnimationInternal(loop = loop, speed = 1f, fadeSeconds = fade, extractor = null)
+                    true
+                } else {
+                    false
+                }
+            },
+            isOneShotActive = { vrmaEngine?.isOneShotActive() == true },
+            headingOf = { rootHeadingRad(it) },
+            onReturnToStand = { standMat ->
+                locomotionEngine.resyncHeadingRad(rootHeadingRad(standMat))
+            },
+            onLog = { android.util.Log.i("SoulLinkRenderer", it) },
+        )
+    }
+
     // Locomotion（自由走动，P0）：纯数学状态机 + 走路步态，见
     // docs/locomotion-feasibility.md §4.2/§5 —— 原地步态素材继续播，
     // 引擎每帧推 root（合成 root motion），与 hips 局部动画正交。
@@ -544,6 +590,15 @@ internal class SoulLinkRenderer(
             // 写 root 变换与骨骼局部写入正交；放在动画/drag 钉层之后、蒙皮
             // 传播之前（程序化层的统一落点）。到达时由引擎切回 idle。
             updateLocomotion(gazeDt.coerceIn(0.001f, 0.05f))
+
+            // 场景交互定姿（坐/躺接触对齐）：root 动画与走动层互斥
+            // （applyContactPose 拒绝 WALKING），放在走动层之后的统一落点。
+            updateContactPose(gazeDt.coerceIn(0.001f, 0.05f))
+
+            // 防遮挡（墙体自动剖切）：相机→身体检测线，命中即隐藏（layerMask）。
+            // 放 updateCameraShot 之前——本帧运镜基向量刚写入 Manipulator，
+            // 遮挡判定用最新机位；TransformManager 已在本帧 commit。
+            updateSceneOcclusion(gazeDt.coerceIn(0.001f, 0.05f))
 
             // Breath overlay（呼吸）: spine/shoulder micro-rotation rides on
             // the animated pose — runs after the animation wrote bone locals
@@ -1148,6 +1203,7 @@ internal class SoulLinkRenderer(
         mimicEngine = null
         springBoneManager = null
         animator = null
+        contactPose.reset()
 
         // 配饰先于旧资产销毁：配饰 re-parent 在骨骼层级内，旧骨骼实体随
         // destroyModel 失效（对齐 AvatarRuntime 的换装顺序）。
@@ -1812,9 +1868,18 @@ internal class SoulLinkRenderer(
                     sceneResourceLoader?.asyncBeginLoad(asset)
                     asset.releaseSourceData()
                     sceneAsset = asset
+                    // 防遮挡候选：优先剖切 sidecar（<场景>.cutaway.json 声明组），
+                    // 缺失回退节点名前缀发现（墙体/玻璃/天花板/背景）
+                    val cutaway = runCatching {
+                        surfaceView.context.assets.open(
+                            assetsPath.substringBeforeLast('.') + ".cutaway.json",
+                        ).use { it.readBytes().toString(Charsets.UTF_8) }
+                    }.getOrNull()
+                    sceneOcclusion.attach(asset, cutaway)
                     applyScenePlacement()
                     android.util.Log.i("SoulLinkRenderer",
                         "Scene loaded: $assetsPath (${asset.entities.size} entities)" +
+                            ", occluders=${sceneOcclusion.occluderCount}" +
                             (placement?.let { ", placement(yaw=${it.yawDeg}, off=${it.offsetX}/${it.offsetY}/${it.offsetZ})" } ?: "")
                     )
                 } else {
@@ -1869,6 +1934,8 @@ internal class SoulLinkRenderer(
             mat[14] += p.offsetZ
         }
         tm.setTransform(instance, mat)
+        // 场景根动了 → 遮挡候选的世界 AABB 缓存全部失效
+        sceneOcclusion.invalidateWorldAabbs()
     }
 
     /**
@@ -1876,6 +1943,8 @@ internal class SoulLinkRenderer(
      */
     fun removeScene() {
         sceneAsset?.let { asset ->
+            // 先还原仍被隐藏的墙（layerMask/阴影），再摘实体销毁资产
+            sceneOcclusion.detach()
             sceneResourceLoader?.asyncCancelLoad()
             sceneResourceLoader?.evictResourceData()
             modelViewer.scene.removeEntities(asset.entities)
@@ -2487,6 +2556,7 @@ internal class SoulLinkRenderer(
         if (modelViewer.asset == null) return WalkStartResult.NO_MODEL
         if (sceneAsset == null) return WalkStartResult.NO_SCENE
         if (mimicInfo()?.engaged == true) return WalkStartResult.MIMIC_ACTIVE
+        if (contactPose.isActive) return WalkStartResult.POSE_ACTIVE
         val gait = (if (speed >= RUN_SPEED_MPS) walkRunGait else null) ?: walkGait
         ?: return WalkStartResult.NO_GAIT
         val prevGait = activeGait
@@ -2548,6 +2618,7 @@ internal class SoulLinkRenderer(
         if (modelViewer.asset == null) return WalkStartResult.NO_MODEL
         if (sceneAsset == null) return WalkStartResult.NO_SCENE
         if (mimicInfo()?.engaged == true) return WalkStartResult.MIMIC_ACTIVE
+        if (contactPose.isActive) return WalkStartResult.POSE_ACTIVE
         val gait = (if (left) strafeLeftGait else strafeRightGait) ?: return WalkStartResult.NO_GAIT
         clearHipsDragOffset()
         walkSpeed = speed
@@ -2631,6 +2702,94 @@ internal class SoulLinkRenderer(
     }
 
     fun walkSnapshot(): WalkSnapshot = locomotionEngine.snapshot()
+
+    /**
+     * Turn in place to an absolute world yaw (stand anchors of interaction
+     * anchors: arrival should end facing the furniture/TV/window). Uses the
+     * engine's turn-only mode against a synthetic target 1 m ahead of the
+     * body along the desired heading; arrival flows out via the regular
+     * walk-finished path (idle resumes).
+     */
+    fun turnTo(yawDeg: Float): Boolean {
+        if (contactPose.isActive) return false
+        val s = locomotionEngine.snapshot()
+        val rad = Math.toRadians(yawDeg.toDouble()).toFloat()
+        val tx = s.x + sin(rad) * 1f
+        val tz = s.z + cos(rad) * 1f
+        return locomotionEngine.startTurnTo(tx, tz, scenePlacement?.bounds)
+    }
+
+    // ── 场景交互定姿（坐/躺接触对齐）────────────────────────────────
+
+    /**
+     * Engage a contact pose (sit / lie) at a furniture contact point. The
+     * caller walks the avatar to the anchor's approach point first — walking
+     * mid-pose is refused ([ContactPoseResult.WALKING]); clear the pose to
+     * stand back up ([clearContactPose]).
+     */
+    fun applyContactPose(request: ContactPoseRequest): ContactPoseResult {
+        if (modelViewer.asset == null) return ContactPoseResult.NO_MODEL
+        if (mimicInfo()?.engaged == true) return ContactPoseResult.BUSY
+        if (locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE) {
+            return ContactPoseResult.WALKING
+        }
+        // 残留的 hips 拖拽偏移会把定姿整体带偏——定姿前清账（起步清偏移同款）
+        clearHipsDragOffset()
+        return contactPose.apply(request)
+    }
+
+    /** Stand back up (play the stand-up clip / roll upright, return to the
+     *  stand matrix captured at pose start). False when no pose is active. */
+    fun clearContactPose(): Boolean = contactPose.clear()
+
+    fun contactPoseSnapshot(): ContactPoseSnapshot = contactPose.snapshot()
+
+    /**
+     * Teleport the avatar root to a world position + absolute yaw (scene
+     * spawn placement / calibration probes). Stops any walk, clears hips
+     * drag offsets and resyncs the locomotion heading from the new matrix.
+     */
+    fun setAvatarWorldPosition(x: Float, y: Float, z: Float, yawDeg: Float): Boolean {
+        val asset = modelViewer.asset ?: return false
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return false
+        contactPose.reset()
+        stopWalk()
+        val mat = tm.getTransform(instance, FloatArray(16))
+        clearHipsDragOffset()
+        mat[12] = x
+        mat[13] = y
+        mat[14] = z
+        val yawRad = Math.toRadians(yawDeg.toDouble()).toFloat()
+        ContactPoseMath.rotateAroundY(mat, yawRad - rootHeadingRad(mat))
+        tm.setTransform(instance, mat)
+        locomotionEngine.resyncHeadingRad(rootHeadingRad(mat))
+        android.util.Log.i(
+            "SoulLinkRenderer",
+            "setAvatarWorldPosition (%.2f, %.2f, %.2f) yaw=%.0f".format(x, y, z, yawDeg),
+        )
+        return true
+    }
+
+    // ── 防遮挡（墙体自动剖切）开关 ──────────────────────────────────
+
+    fun setOcclusionEnabled(enabled: Boolean) {
+        sceneOcclusion.enabled = enabled
+        android.util.Log.i("SoulLinkRenderer", "scene occlusion = $enabled")
+    }
+
+    fun isOcclusionEnabled(): Boolean = sceneOcclusion.enabled
+
+    fun occlusionDebugString(): String {
+        cameraManipulator.getLookAt(occlusionEye, occlusionTarget, occlusionUp)
+        return "eye=(%.1f, %.1f, %.1f) target=(%.1f, %.1f, %.1f) occluders=%d hidden=%d%s".format(
+            occlusionEye[0], occlusionEye[1], occlusionEye[2],
+            occlusionTarget[0], occlusionTarget[1], occlusionTarget[2],
+            sceneOcclusion.occluderCount, sceneOcclusion.hiddenCount,
+            sceneOcclusion.hiddenNames().joinToString(prefix = " [", postfix = "]"),
+        )
+    }
 
     /** 方案 C 提取总开关（ai_cmd `walk_extract` A/B 用）。 */
     fun isExtractionEnabled(): Boolean = extractionEnabled
@@ -2757,6 +2916,44 @@ internal class SoulLinkRenderer(
             mat[i] = c * x + s * z
             mat[i + 2] = -s * x + c * z
         }
+    }
+
+    // ── 场景交互定姿（坐/躺接触对齐）─────────────────────────────────
+
+    private fun updateContactPose(dtSeconds: Float) {
+        val controller = contactPose
+        if (!controller.isActive) return
+        val asset = modelViewer.asset ?: return
+        val tm = modelViewer.engine.transformManager
+        val instance = tm.getInstance(asset.root)
+        if (instance == 0) return
+        val mat = controller.update(dtSeconds) ?: return
+        tm.setTransform(instance, mat)
+    }
+
+    // ── 防遮挡（墙体自动剖切）────────────────────────────────────────
+
+    private fun updateSceneOcclusion(dtSeconds: Float) {
+        if (sceneAsset == null || !sceneOcclusion.enabled) return
+        cameraManipulator.getLookAt(occlusionEye, occlusionTarget, occlusionUp)
+        val head = boneAnchor(headEntity, HEAD_FALLBACK_Y)
+        val chest = boneAnchor(chestEntity, CHEST_FALLBACK_Y)
+        val hips = boneAnchor(hipsEntity, HIPS_FALLBACK_Y)
+        occlusionBodyPoints[0][0] = head[0]; occlusionBodyPoints[0][1] = head[1]; occlusionBodyPoints[0][2] = head[2]
+        occlusionBodyPoints[1][0] = chest[0]; occlusionBodyPoints[1][1] = chest[1]; occlusionBodyPoints[1][2] = chest[2]
+        occlusionBodyPoints[2][0] = hips[0]; occlusionBodyPoints[2][1] = hips[1]; occlusionBodyPoints[2][2] = hips[2]
+        sceneOcclusion.update(occlusionEye, occlusionBodyPoints, dtSeconds)
+    }
+
+    /**
+     * Root matrix → locomotion heading (radians). Column 2 IS the belly
+     * direction for VRM 1.0, but VRM 0.x's baked Y-180 flip negates it — the
+     * engine tracks the belly heading ("heading 0 = +Z toward camera"), so
+     * extract with the flip sign.
+     */
+    private fun rootHeadingRad(mat: FloatArray): Float {
+        val sign = if (isVrm0) -1f else 1f
+        return atan2(sign * mat[8], sign * mat[10])
     }
 
     /**

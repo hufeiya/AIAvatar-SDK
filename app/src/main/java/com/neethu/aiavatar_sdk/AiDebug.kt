@@ -158,6 +158,15 @@ fun aiDebugHelp(): String = """
     |                           on | off | status (A/B on|off compares)
     |  anchors                  List the session's walk anchors (<move:> table;
     |                           ⇄ marks waypoint links)
+    |  interactions             List the scene's interaction anchors (dream
+    |                           bedroom furniture spots; interact_with table)
+    |  interact <arg>           Position the avatar at an interaction anchor
+    |                           (walk → turn → sit/lie contact alignment;
+    |                           async — poll `pose_state`)
+    |  pose_state               Contact pose + occlusion auto-hide diagnostics
+    |  pose_clear               Stand up (leave the sit/lie pose)
+    |  occlusion <arg>          Wall auto-hide toggle (on | off | state) —
+    |                           hides walls blocking the camera sight line
     |  walk_transit             Walk transition clips (P1 tier-1): none=dump |
     |                           off | start <assets/*.vrma> | stop <assets/*.vrma>
     |                           (one-shot clips; program motion held while the

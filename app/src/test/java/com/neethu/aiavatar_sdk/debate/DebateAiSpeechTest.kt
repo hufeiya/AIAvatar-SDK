@@ -81,12 +81,15 @@ class DebateAiSpeechTest {
         assertTrue(long.endsWith("。"))
     }
 
-    @Test fun `bundled AI show has nine different models and short fallback speeches`() {
+    @Test fun `bundled AI show has nine participants with valid models and short fallback speeches`() {
         for (file in listOf("debate_default", "debate_quick")) {
             val dto = DebateConfigParser.parseAndValidate(
                 File("src/main/assets/debate/$file.json").readText()).getOrThrow()
             assertEquals("ai", dto.speech.mode)
-            assertEquals(9, dto.participants.map { it.model }.toSet().size)
+            // 9 名辩手共用 3 个内置 VRM（资产只有 3 个模型文件）——锁「每人都
+            // 有有效模型 + 全场不止一个形象」，别锁「9 个全不同」（与数据漂移）
+            assertEquals(9, dto.participants.size)
+            assertTrue(dto.participants.map { it.model }.toSet().size >= 2)
             for (p in dto.participants) {
                 assertTrue(File("src/main/assets/" + p.model.removePrefix("asset:")).isFile)
                 val scripts = dto.scripts.getValue(p.id)

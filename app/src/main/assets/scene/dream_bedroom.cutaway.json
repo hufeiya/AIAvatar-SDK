@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "units": "meters",
+  "coordinateSystem": {
+    "handedness": "right",
+    "up": "+Y",
+    "defaultAvatarForward": "+Z",
+    "yaw": "degrees about +Y, positive turns +Z toward +X",
+    "blenderToGltf": "[x,y,z] -> [x,z,-y]",
+    "floorGltfY": 0
+  },
+  "sdkPlacement": {
+    "offsetX": 0,
+    "offsetY": -1,
+    "offsetZ": -4,
+    "yawDeg": 0,
+    "formula": "sdkWorld = gltfPosition + [0,-1,-4]"
+  },
+  "groups": [
+    {
+      "node": "WALL_NORTH",
+      "label": "北墙/全景窗",
+      "role": "wall",
+      "renderableNodes": [
+        "GLASS_PANORAMA_NORTH_GEOMETRY",
+        "WALL_NORTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0.0,
+        0.0,
+        -3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        -1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.1,
+          -0.0,
+          -3.7
+        ],
+        "max": [
+          4.1,
+          3.4,
+          -3.002
+        ]
+      }
+    },
+    {
+      "node": "WALL_SOUTH",
+      "label": "南墙/入口/壁挂电视",
+      "role": "wall",
+      "renderableNodes": [
+        "CUTAWAY_FRONT_WALL_GEOMETRY",
+        "FURN_TV_GEOMETRY",
+        "PORTAL_ENTRY_GEOMETRY",
+        "WALL_SOUTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0.0,
+        0.0,
+        3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.1,
+          0.0,
+          3.2845
+        ],
+        "max": [
+          4.1,
+          3.4,
+          3.7
+        ]
+      }
+    },
+    {
+      "node": "WALL_EAST",
+      "label": "东墙/侧窗",
+      "role": "wall",
+      "renderableNodes": [
+        "GLASS_PANORAMA_EAST_GEOMETRY",
+        "WALL_EAST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.75,
+          0.0,
+          -3.6
+        ],
+        "max": [
+          4.2,
+          3.4,
+          3.5
+        ]
+      }
+    },
+    {
+      "node": "WALL_WEST",
+      "label": "西墙/挂画",
+      "role": "wall",
+      "renderableNodes": [
+        "WALL_WEST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        -4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        -1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.2,
+          0.0,
+          -3.6
+        ],
+        "max": [
+          -3.855,
+          3.4,
+          3.6
+        ]
+      }
+    },
+    {
+      "node": "CEILING",
+      "label": "天花板/吊灯",
+      "role": "ceiling",
+      "renderableNodes": [
+        "CEILING_OPTIONAL_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0.0,
+        3.4,
+        0.0
+      ],
+      "outwardNormalGltf": [
+        0,
+        1,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.125,
+          2.3,
+          -3.625
+        ],
+        "max": [
+          4.125,
+          3.59,
+          3.625
+        ]
+      }
+    }
+  ],
+  "alwaysVisibleNodes": [
+    "FLOOR"
+  ],
+  "defaultVisibility": "all_visible",
+  "visibilityContract": "Group nodes are empty transforms. Hide/show every descendant renderable; GLB does not run camera-occlusion logic. All groups export visible.",
+  "planeMeaning": "Interior boundary planes, normal points outside. Apply scene world transform before testing camera and target; geometry bounds include trims/decorations."
+}

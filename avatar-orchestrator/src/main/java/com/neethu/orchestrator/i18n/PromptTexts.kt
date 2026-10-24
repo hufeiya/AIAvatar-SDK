@@ -197,6 +197,25 @@ interface PromptTexts {
     /** 停步成功的确认文案。 */
     val toolStopMovingDone: String
 
+    // ── 智能体工具（场景交互：家具就位，dream_bedroom 交互点）──────────
+    val toolInteractWithDescription: String
+    val toolInteractWithHint: String
+
+    /** 就位链（走过去+转身+坐/躺对齐）已启动的确认文案（[label] 本地化名）。 */
+    fun toolInteractWithStarted(label: String): String
+
+    /** 上一次就位链还在进行（防抖忽略）。 */
+    val toolInteractWithBusy: String
+
+    /** 就位链失败（位置缺失/渲染层不可用等）。 */
+    val toolInteractWithFailed: String
+
+    val toolStandUpDescription: String
+    val toolStandUpHint: String
+
+    /** 起身成功的确认文案。 */
+    val toolStandUpDone: String
+
     // ── 智能体工具（P2 配饰，docs/accessory-feasibility.md §5.6）────────
     val toolWearAccessoryDescription: String
     val toolWearAccessoryHint: String
@@ -587,6 +606,33 @@ object PromptTextsZh : PromptTexts {
 
     override val toolStopMovingDone: String =
         "已经停下脚步。请自然地继续对话。"
+
+    // ── 场景交互：家具就位 ──
+    override val toolInteractWithDescription: String =
+        "走向房间里的家具并就位(坐到椅子上、坐上床沿、躺到床上、站到指定位置)。"
+
+    override val toolInteractWithHint: String =
+        "用户要你坐下/躺下/就位(「坐到椅子上」「去床上躺一会儿」)、或剧情需要特定姿态时调用。" +
+            "调用后会自动走过去并对准家具,请自然地继续说话,不要重复调用等就位;" +
+            "只是走到某处站着用 move_to 就够,要坐/躺才用本工具。"
+
+    override fun toolInteractWithStarted(label: String): String =
+        "正在走向「$label」并就位。请继续自然对话,不要重复调用本工具。"
+
+    override val toolInteractWithBusy: String =
+        "上一次就位动作还在进行,这次调用被忽略了。请继续自然对话。"
+
+    override val toolInteractWithFailed: String =
+        "就位失败(没找到位置或渲染层不可用)。请口头向用户说明。"
+
+    override val toolStandUpDescription: String =
+        "站起来(结束坐姿/躺姿,回到站立)。"
+
+    override val toolStandUpHint: String =
+        "坐着/躺着而用户要你起身、或剧情需要站姿时调用。要走到别处也可以直接调 move_to,会自动先起身。"
+
+    override val toolStandUpDone: String =
+        "已经站起来了。请自然地继续对话。"
 
     // ── 配饰（P2，docs/accessory-feasibility.md §5.6）────────────────────
 
@@ -1032,6 +1078,36 @@ object PromptTextsEn : PromptTexts {
 
     override val toolStopMovingDone: String =
         "Stopped. Continue the conversation naturally."
+
+    // ── Scene interaction: furniture poses ──
+    override val toolInteractWithDescription: String =
+        "Walk to a piece of furniture and take the position (sit on the chair, sit on the bed " +
+            "edge, lie on the bed, stand at a spot)."
+
+    override val toolInteractWithHint: String =
+        "Call when the user asks you to sit/lie down or take a position (\"sit on the chair\", " +
+            "\"go lie on the bed\") or the scene calls for a pose. Walking over and aligning to " +
+            "the furniture happens automatically — keep chatting naturally and do not call again " +
+            "while waiting. Use move_to for just standing somewhere; use this tool to sit/lie."
+
+    override fun toolInteractWithStarted(label: String): String =
+        "Walking over to \"$label\" and taking the position. Keep the conversation natural; do not call this tool again."
+
+    override val toolInteractWithBusy: String =
+        "The previous positioning is still in progress, so this call was ignored. Keep chatting."
+
+    override val toolInteractWithFailed: String =
+        "Taking the position failed (spot unavailable or render layer down). Tell the user."
+
+    override val toolStandUpDescription: String =
+        "Stand up (leave the sit/lie pose and return to standing)."
+
+    override val toolStandUpHint: String =
+        "Call when seated/lying and the user asks you to get up, or the scene needs you standing. " +
+            "Walking elsewhere also works via move_to — it stands up automatically first."
+
+    override val toolStandUpDone: String =
+        "Standing up done. Continue the conversation naturally."
 
     // ── Accessories (P2, docs/accessory-feasibility.md §5.6) ────────────
 

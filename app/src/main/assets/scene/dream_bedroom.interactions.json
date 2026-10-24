@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "scene": "dream_bedroom.glb",
+  "title": "Forest Reverie / 森林梦境卧室",
+  "anchorCount": 16,
+  "anchors": [
+    {
+      "id": "spawn",
+      "label": "中央出生/站立点",
+      "labelEn": "spawn",
+      "kind": "stand",
+      "x": -0.1,
+      "y": -0.97,
+      "z": -3.35,
+      "yawDeg": 180
+    },
+    {
+      "id": "rug_watch_tv",
+      "label": "地毯观看电视",
+      "labelEn": "rug watch tv",
+      "kind": "stand",
+      "x": 0.0,
+      "y": -0.97,
+      "z": -2.9,
+      "yawDeg": 0,
+      "look": [
+        0.3,
+        0.55,
+        -0.7
+      ]
+    },
+    {
+      "id": "bed_approach",
+      "label": "床边站立点",
+      "labelEn": "bed approach",
+      "kind": "approach",
+      "x": -0.65,
+      "y": -0.97,
+      "z": -4.65,
+      "yawDeg": -90,
+      "look": [
+        -2.35,
+        -0.25,
+        -5.1
+      ]
+    },
+    {
+      "id": "bed_sit",
+      "label": "床沿坐姿接触点",
+      "labelEn": "bed sit",
+      "kind": "sit",
+      "x": -1.4,
+      "y": -0.30235,
+      "z": -4.8,
+      "yawDeg": 90,
+      "approach": "bed_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Sit With Fidgeting Feet.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma"
+    },
+    {
+      "id": "bed_lie",
+      "label": "床上躺卧髋部接触点",
+      "labelEn": "bed lie",
+      "kind": "lie",
+      "x": -2.86,
+      "y": -0.287596,
+      "z": -5.08,
+      "yawDeg": 180,
+      "approach": "bed_approach",
+      "hipsLift": 0.09
+    },
+    {
+      "id": "desk_approach",
+      "label": "书桌椅前站立点",
+      "labelEn": "desk approach",
+      "kind": "approach",
+      "x": 1.0,
+      "y": -1.0,
+      "z": -4.73,
+      "yawDeg": 180,
+      "look": [
+        1.0,
+        0.25,
+        -6.8
+      ]
+    },
+    {
+      "id": "desk_seat",
+      "label": "书桌椅座面中心",
+      "labelEn": "desk seat",
+      "kind": "sit",
+      "x": 1.0,
+      "y": -0.448501,
+      "z": -5.565,
+      "yawDeg": 180,
+      "approach": "desk_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+      "look": [
+        1.13,
+        0.25,
+        -6.78
+      ]
+    },
+    {
+      "id": "reading_approach",
+      "label": "阅读椅前站立点",
+      "labelEn": "reading approach",
+      "kind": "approach",
+      "x": 1.65,
+      "y": -1.0,
+      "z": -3.35,
+      "yawDeg": 115
+    },
+    {
+      "id": "reading_seat",
+      "label": "阅读椅座面中心",
+      "labelEn": "reading seat",
+      "kind": "sit",
+      "x": 2.802811,
+      "y": -0.438,
+      "z": -3.867321,
+      "yawDeg": -65,
+      "approach": "reading_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Elbows On Legs Leaning Forward.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma"
+    },
+    {
+      "id": "window_view",
+      "label": "窗前看森林",
+      "labelEn": "window view",
+      "kind": "stand",
+      "x": 3.35,
+      "y": -1.0,
+      "z": -5.25,
+      "yawDeg": 90,
+      "look": [
+        5.5,
+        1.2,
+        -5.25
+      ]
+    },
+    {
+      "id": "tv_approach",
+      "label": "电视柜前站立点",
+      "labelEn": "tv approach",
+      "kind": "approach",
+      "x": 0.25,
+      "y": -1.0,
+      "z": -1.72,
+      "yawDeg": 0,
+      "look": [
+        0.3,
+        0.55,
+        -0.7
+      ]
+    },
+    {
+      "id": "game_approach",
+      "label": "游戏机前站立点",
+      "labelEn": "game approach",
+      "kind": "approach",
+      "x": 1.12,
+      "y": -1.0,
+      "z": -1.72,
+      "yawDeg": 0,
+      "look": [
+        1.1,
+        -0.2,
+        -1.18
+      ]
+    },
+    {
+      "id": "entry",
+      "label": "门内入口点",
+      "labelEn": "entry",
+      "kind": "stand",
+      "x": -2.75,
+      "y": -1.0,
+      "z": -1.15,
+      "yawDeg": 180
+    },
+    {
+      "id": "aisle_south",
+      "label": "床尾通道",
+      "labelEn": "aisle south",
+      "kind": "waypoint",
+      "x": -1.8,
+      "y": -1.0,
+      "z": -2.35,
+      "yawDeg": 90
+    },
+    {
+      "id": "aisle_east_lower",
+      "label": "东侧通道转折",
+      "labelEn": "aisle east lower",
+      "kind": "waypoint",
+      "x": 1.8,
+      "y": -1.0,
+      "z": -4.7,
+      "yawDeg": 180
+    },
+    {
+      "id": "aisle_east_upper",
+      "label": "东侧窗边通道",
+      "labelEn": "aisle east upper",
+      "kind": "waypoint",
+      "x": 1.8,
+      "y": -1.0,
+      "z": -5.2,
+      "yawDeg": 90
+    }
+  ]
+}

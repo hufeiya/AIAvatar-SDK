@@ -1,0 +1,246 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1280" viewBox="0 0 1760 1280">
+<defs>
+  <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#ad7a35" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <pattern id="wood" width="25" height="90" patternUnits="userSpaceOnUse"><rect width="25" height="90" fill="#e7dbc4"/><path d="M0 0V90 M25 0V90 M0 45H25" fill="none" stroke="#cdbd9f" stroke-width=".7" opacity=".6"/><path d="M7 3Q13 23 7 42 M18 48Q13 68 19 85" fill="none" stroke="#d1c09f" stroke-width=".7" opacity=".6"/></pattern>
+  <pattern id="woven" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#f3eedc"/><path d="M0 1H6 M1 0V6" fill="none" stroke="#dbd2b4" stroke-width=".6"/></pattern>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#193d25" flood-opacity=".12"/></filter>
+</defs>
+<rect x="0" y="0" width="1760" height="1280" rx="0" fill="#f5f4ec" />
+<rect x="0" y="0" width="1760" height="9" rx="0" fill="#294d37" />
+<text x="72" y="66" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#7b8d72" text-anchor="start">FOREST REVERIE</text>
+<text x="72" y="122" font-family="Noto Sans CJK SC, sans-serif" font-size="42" font-weight="700" fill="#264634" text-anchor="start">森林梦境 · 卧室空间定位图</text>
+<text x="74" y="164" font-family="Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#6d7e6d" text-anchor="start">8.00 × 7.00 m  /  GLB · 米制 · Y 向上  /  虚拟人场景导入参考</text>
+<rect x="1426" y="62" width="260" height="68" rx="15" fill="#e7eddf" />
+<text x="1556" y="89" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="500" fill="#50684e" text-anchor="middle">空间原点：室内地面中心</text>
+<text x="1556" y="114" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="500" fill="#50684e" text-anchor="middle">56 m²   ·   净高约 3.4 m</text>
+<line x1="85" y1="196" x2="965" y2="196" stroke="#80917a" stroke-width="1" />
+<line x1="85" y1="189" x2="85" y2="203" stroke="#80917a" stroke-width="1" />
+<line x1="965" y1="189" x2="965" y2="203" stroke="#80917a" stroke-width="1" />
+<rect x="464" y="183" width="122" height="25" rx="0" fill="#f5f4ec" />
+<text x="525" y="202" font-family="Noto Sans CJK SC, sans-serif" font-size="18" font-weight="500" fill="#697d65" text-anchor="middle">8.00 m</text>
+<line x1="57" y1="218" x2="57" y2="988" stroke="#80917a" stroke-width="1" />
+<line x1="50" y1="218" x2="64" y2="218" stroke="#80917a" stroke-width="1" />
+<line x1="50" y1="988" x2="64" y2="988" stroke="#80917a" stroke-width="1" />
+<g transform="translate(44 603) rotate(-90)">
+<rect x="-60" y="-17" width="120" height="27" rx="0" fill="#f5f4ec" />
+<text x="0" y="2" font-family="Noto Sans CJK SC, sans-serif" font-size="18" font-weight="500" fill="#697d65" text-anchor="middle">7.00 m</text>
+</g>
+<rect x="85" y="218" width="880" height="770" rx="10" fill="url(#wood)" stroke="#31513c" stroke-width="9" />
+<circle cx="514.0" cy="674.5" r="176.0" fill="url(#woven)" stroke="#b8b995" stroke-width="2"/>
+<circle cx="514.0" cy="674.5" r="166.1" fill="none" stroke="#70815c" stroke-width="2"/>
+<circle cx="514.0" cy="674.5" r="160.6" fill="none" stroke="#70815c" stroke-width="1"/>
+<circle cx="514.0" cy="674.5" r="150.70000000000002" fill="none" stroke="#e1d9bd" stroke-width="2"/>
+<path d="M394.0 609.5 Q373.0 674.5 394.0 739.5" fill="none" stroke="#9da77d" stroke-width="2"/>
+<path d="M634.0 609.5 Q655.0 674.5 634.0 739.5" fill="none" stroke="#9da77d" stroke-width="2"/>
+<rect x="138.9" y="333.5" width="255.2" height="297.0" rx="12" fill="#b98d57" stroke="#806645" stroke-width="1.6" />
+<rect x="154.5" y="364.0" width="224" height="245" rx="12" fill="#f2ebd4" stroke="#d1c7a8" stroke-width="1" />
+<rect x="158.5" y="418.0" width="216" height="183" rx="10" fill="#8ca67a" stroke="#637d59" stroke-width="1" />
+<rect x="158.5" y="412.0" width="216" height="20" rx="4" fill="#e6e4cb" />
+<rect x="157.5" y="552.0" width="218" height="41" rx="4" fill="#4e7657" />
+<rect x="173.5" y="372.0" width="84" height="45" rx="12" fill="#f7f0da" stroke="#c8c8a8" stroke-width="1" />
+<rect x="184.5" y="394.0" width="62" height="40" rx="10" fill="#719664" stroke="#557b57" stroke-width="1" />
+<rect x="275.5" y="372.0" width="84" height="45" rx="12" fill="#f7f0da" stroke="#c8c8a8" stroke-width="1" />
+<rect x="286.5" y="394.0" width="62" height="40" rx="10" fill="#719664" stroke="#557b57" stroke-width="1" />
+<rect x="145.5" y="336.0" width="242" height="17" rx="5" fill="#927247" stroke="#755735" stroke-width="1" />
+<circle cx="186.5" cy="489.0" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="186.5" y="494.0" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">01</text>
+<text x="276.5" y="495.0" font-family="Noto Sans CJK SC, sans-serif" font-size="21" font-weight="600" fill="#24402f" text-anchor="middle">双人床</text>
+<line x1="266.5" y1="542.0" x2="266.5" y2="585.0" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="266.5" y="639.0" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="500" fill="#67715b" text-anchor="middle">床头 −Z  ·  床尾 +Z</text>
+<rect x="405.1" y="337.9" width="63.8" height="63.8" rx="8" fill="#be9d69" stroke="#8d7758" stroke-width="1.6" />
+<circle cx="437.0" cy="369.79999999999995" r="18" fill="#f7eed3" stroke="#aa8f58" stroke-width="2"/>
+<path d="M470 268.8 H800 V358.8 Q766 376.8 723 366.8 Q635 347.8 547 366.8 Q504 376.8 470 358.8 Z" fill="#bd945d" stroke="#886a44" stroke-width="2"/>
+<rect x="596" y="291.8" width="108" height="10" rx="3" fill="#263e36" />
+<rect x="608" y="322.8" width="67" height="23" rx="3" fill="#657568" stroke="#304d3f" stroke-width="1" />
+<circle cx="510" cy="309.8" r="20" fill="#ede7cf" stroke="#a78850" stroke-width="2"/>
+<circle cx="734" cy="332.8" r="8" fill="#fff9e9" stroke="#b9a47d" stroke-width="1"/>
+<circle cx="506" cy="344.8" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="506" y="349.8" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">06</text>
+<text x="698" y="324.8" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#503e29" text-anchor="middle">书桌</text>
+<line x1="809" y1="315.8" x2="809.0" y2="359.8" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="603" y="403.5" width="64" height="63" rx="10" fill="#ba9c6c" stroke="#856c45" stroke-width="2" />
+<rect x="607" y="406.5" width="56" height="47" rx="9" fill="#eee5ca" stroke="#b4ac8f" stroke-width="1" />
+<rect x="603" y="456.5" width="64" height="12" rx="5" fill="#917144" />
+<circle cx="678" cy="437.5" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="678" y="442.5" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">03</text>
+<line x1="635" y1="410.5" x2="635.0" y2="370.5" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<g transform="translate(836.3 616.2) rotate(65)">
+<rect x="-51" y="-50" width="102" height="103" rx="14" fill="#c9b796" stroke="#9b8a68" stroke-width="2" />
+<rect x="-43" y="-36" width="86" height="79" rx="15" fill="#f0e7ce" stroke="#c2b89b" stroke-width="1" />
+<rect x="-49" y="-53" width="98" height="23" rx="10" fill="#e7ddbe" stroke="#b8ac8b" stroke-width="1" />
+<rect x="-58" y="-38" width="20" height="88" rx="9" fill="#dfd3b3" stroke="#b8ac8b" stroke-width="1" />
+<rect x="38" y="-38" width="20" height="88" rx="9" fill="#dfd3b3" stroke="#b8ac8b" stroke-width="1" />
+<rect x="-30" y="-27" width="60" height="28" rx="7" fill="#7d9a6c" />
+</g>
+<circle cx="875.3" cy="567.2" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="875.3" y="572.2" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">04</text>
+<line x1="810.3" y1="629.2" x2="758.6404561389108" y2="653.2892409192199" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="779.3" y="710.2" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="500" fill="#66785f" text-anchor="middle">阅读 · −65°</text>
+<circle cx="871.5" cy="746.0" r="36.300000000000004" fill="#be9a65" stroke="#8b724e" stroke-width="2"/>
+<rect x="856.5" y="734.0" width="30" height="25" rx="2" fill="#6a805d" stroke="#455d42" stroke-width="1" />
+<rect x="104.24999999999997" y="707.5" width="40.7" height="156.2" rx="3" fill="#ac8757" stroke="#795d3b" stroke-width="1.6" />
+<rect x="110.59999999999997" y="718.6" width="29" height="7" rx="1" fill="#62755b" />
+<rect x="110.59999999999997" y="728.6" width="29" height="7" rx="1" fill="#8b5d40" />
+<rect x="110.59999999999997" y="738.6" width="29" height="7" rx="1" fill="#c5ad72" />
+<rect x="110.59999999999997" y="748.6" width="29" height="7" rx="1" fill="#596c70" />
+<rect x="110.59999999999997" y="758.6" width="29" height="7" rx="1" fill="#62755b" />
+<rect x="110.59999999999997" y="768.6" width="29" height="7" rx="1" fill="#8b5d40" />
+<rect x="110.59999999999997" y="778.6" width="29" height="7" rx="1" fill="#c5ad72" />
+<rect x="110.59999999999997" y="788.6" width="29" height="7" rx="1" fill="#596c70" />
+<rect x="110.59999999999997" y="798.6" width="29" height="7" rx="1" fill="#62755b" />
+<rect x="110.59999999999997" y="808.6" width="29" height="7" rx="1" fill="#8b5d40" />
+<rect x="110.59999999999997" y="818.6" width="29" height="7" rx="1" fill="#c5ad72" />
+<rect x="110.59999999999997" y="828.6" width="29" height="7" rx="1" fill="#596c70" />
+<rect x="110.59999999999997" y="838.6" width="29" height="7" rx="1" fill="#62755b" />
+<circle cx="172.59999999999997" cy="785.6" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="172.59999999999997" y="790.6" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">12</text>
+<text x="172.59999999999997" y="820.6" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="500" fill="#65735a" text-anchor="middle">书架</text>
+<rect x="412.25" y="903.3000000000001" width="291.5" height="57.2" rx="5" fill="#b9925c" stroke="#846944" stroke-width="1.6" />
+<rect x="450.0" y="965.5999999999999" width="216" height="14" rx="5" fill="#243d33" />
+<circle cx="425.0" cy="972.5999999999999" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="425.0" y="977.5999999999999" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">08</text>
+<line x1="498.0" y1="964.5999999999999" x2="498.0" y2="914.5999999999999" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="633.0" y="912.6" width="26" height="32" rx="4" fill="#f6f4e9" stroke="#77857a" stroke-width="1" />
+<rect x="643.0" y="915.6" width="6" height="27" rx="2" fill="#354339" />
+<line x1="643.0" y1="917.6" x2="643.0" y2="932.6" stroke="#7cc2bb" stroke-width="2" />
+<circle cx="682.0" cy="885.6" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="682.0" y="890.6" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">09</text>
+<line x1="672.0" y1="899.6" x2="654.0" y2="919.6" stroke="#7f8e77" stroke-width="1" />
+<path d="M570.5 919.4 Q585.5 911.4 600.5 919.4 L603.5 934.4 Q597.5 939.4 591.5 930.4 H579.5 Q573.5 939.4 567.5 934.4 Z" fill="#f4f1e4" stroke="#71826f" stroke-width="1.5"/>
+<circle cx="561.5" cy="863.4" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="561.5" y="868.4" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">10</text>
+<line x1="565.5" y1="878.4" x2="585.5" y2="915.4" stroke="#7f8e77" stroke-width="1" />
+<circle cx="426.0" cy="879.9000000000001" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="426.0" y="884.9000000000001" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">11</text>
+<line x1="437.0" y1="891.9000000000001" x2="450.0" y2="916.9000000000001" stroke="#7f8e77" stroke-width="1" />
+<line x1="90" y1="218" x2="960" y2="218" stroke="#285346" stroke-width="14" />
+<line x1="90" y1="218" x2="960" y2="218" stroke="#b6e2ce" stroke-width="7" />
+<line x1="963" y1="220" x2="963" y2="724" stroke="#285346" stroke-width="14" />
+<line x1="963" y1="220" x2="963" y2="724" stroke="#b6e2ce" stroke-width="7" />
+<rect x="368.0" y="211" width="6" height="16" rx="0" fill="#315344" />
+<rect x="670.5" y="211" width="6" height="16" rx="0" fill="#315344" />
+<rect x="956" y="484.5" width="15" height="6" rx="0" fill="#315344" />
+<circle cx="521" cy="239" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="521" y="244" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">05</text>
+<text x="556" y="245" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="500" fill="#3e715a" text-anchor="start">北侧全景玻璃</text>
+<line x1="521" y1="264" x2="521.0" y2="297.0" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<circle cx="930" cy="470" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="930" y="475" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">07</text>
+<text x="914" y="504" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="500" fill="#527b63" text-anchor="middle">东窗</text>
+<line x1="946" y1="546" x2="898.0" y2="546.0" stroke="#ad7a35" stroke-width="3" marker-end="url(#arrow)"/>
+<line x1="151" y1="988" x2="294" y2="988" stroke="#f5f4ec" stroke-width="13" />
+<line x1="151" y1="988" x2="151" y2="848" stroke="#8d977f" stroke-width="3" />
+<path d="M151 845 A143 143 0 0 1 294 988" fill="none" stroke="#8c987f" stroke-width="1.5" stroke-dasharray="6 6"/>
+<text x="222" y="1035" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="500" fill="#56714f" text-anchor="middle">入口 / ENTRY</text>
+<line x1="513" y1="603" x2="537" y2="603" stroke="#8a9b84" stroke-width="1.5" />
+<line x1="525" y1="591" x2="525" y2="615" stroke="#8a9b84" stroke-width="1.5" />
+<circle cx="525" cy="603" r="5" fill="#f5f4ec" stroke="#74896c" stroke-width="1.4"/>
+<text x="541" y="594" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" fill="#798d70" text-anchor="start">原点 (0,0,0)</text>
+<circle cx="514.0" cy="692.5" r="16" fill="#254936" stroke="#f7f4e8" stroke-width="2"/>
+<text x="514.0" y="697.5" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">02</text>
+<text x="514.0" y="728.5" font-family="Noto Sans CJK SC, sans-serif" font-size="23" font-weight="500" fill="#506547" text-anchor="middle">圆形地毯</text>
+<text x="514.0" y="756.5" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="400" fill="#7a8769" text-anchor="middle">Ø 3.20 m</text>
+<text x="80" y="1095" font-family="Noto Sans CJK SC, sans-serif" font-size="18" font-weight="600" fill="#36593e" text-anchor="start">GLB 世界坐标 / WORLD</text>
+<line x1="173" y1="1182" x2="254" y2="1182" stroke="#ad7a35" stroke-width="2.6" marker-end="url(#arrow)"/>
+<text x="264" y="1187" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#65775e" text-anchor="start">+X</text>
+<line x1="173" y1="1182" x2="173" y2="1118" stroke="#ad7a35" stroke-width="2.6" marker-end="url(#arrow)"/>
+<text x="145" y="1132" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#65775e" text-anchor="middle">−Z</text>
+<circle cx="173" cy="1182" r="7" fill="#f5f4ec" stroke="#526d49" stroke-width="1.5"/>
+<circle cx="173" cy="1182" r="2" fill="#526d49"/>
+<text x="80" y="1220" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="500" fill="#65775e" text-anchor="start">⊙ +Y 向上</text>
+<text x="350" y="1100" font-family="Noto Sans CJK SC, sans-serif" font-size="19" font-weight="600" fill="#36593e" text-anchor="start">朝向规则</text>
+<text x="350" y="1136" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#6c7d63" text-anchor="start">箭头表示家具正面 / 使用面；床箭头指向床尾。</text>
+<text x="350" y="1168" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#6c7d63" text-anchor="start">Yaw 以 +Z 为 0°；+90° 朝 +X，180° 朝 −Z。</text>
+<text x="350" y="1200" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#6c7d63" text-anchor="start">窗玻璃箭头指向室内；圆地毯的朝向无需限制。</text>
+<rect x="1030" y="218" width="658" height="824" rx="18" fill="#fbfaf5" stroke="#e0e4d6" stroke-width="1" />
+<text x="1060" y="263" font-family="Noto Sans CJK SC, sans-serif" font-size="27" font-weight="700" fill="#2d5038" text-anchor="start">物件位置与方向</text>
+<text x="1060" y="294" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#7a8b70" text-anchor="start">位置为 GLB 语义节点原点 (X, Y, Z)，单位：米</text>
+<text x="1060" y="323" font-family="Noto Sans CJK SC, sans-serif" font-size="14" font-weight="500" fill="#89977f" text-anchor="start">编号 / 物件</text>
+<text x="1333" y="323" font-family="Noto Sans CJK SC, sans-serif" font-size="14" font-weight="500" fill="#89977f" text-anchor="start">GLB 位置</text>
+<text x="1635" y="323" font-family="Noto Sans CJK SC, sans-serif" font-size="14" font-weight="500" fill="#89977f" text-anchor="end">Yaw</text>
+<line x1="1060" y1="339" x2="1658" y2="339" stroke="#dfe5d7" stroke-width="1" />
+<rect x="1047" y="346" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="366" r="13" fill="#e0e8d6"/>
+<text x="1072" y="370" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">01</text>
+<text x="1096" y="369" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">双人床</text>
+<text x="1096" y="388" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_BED</text>
+<text x="1315" y="370" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(−2.35, 0, −1.10)</text>
+<text x="1651" y="370" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">0°</text>
+<circle cx="1072" cy="421" r="13" fill="#e0e8d6"/>
+<text x="1072" y="425" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">02</text>
+<text x="1096" y="424" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">圆形地毯</text>
+<text x="1096" y="443" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_RUG</text>
+<text x="1315" y="425" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(−0.10, 0, +0.65)</text>
+<text x="1651" y="425" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">0°</text>
+<rect x="1047" y="456" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="476" r="13" fill="#e0e8d6"/>
+<text x="1072" y="480" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">03</text>
+<text x="1096" y="479" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">书桌椅</text>
+<text x="1096" y="498" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_CHAIR_DESK</text>
+<text x="1315" y="480" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+1.00, 0, −1.55)</text>
+<text x="1651" y="480" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">180°</text>
+<circle cx="1072" cy="531" r="13" fill="#e0e8d6"/>
+<text x="1072" y="535" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">04</text>
+<text x="1096" y="534" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">阅读休闲椅</text>
+<text x="1096" y="553" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_CHAIR_READING</text>
+<text x="1315" y="535" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+2.83, 0, +0.12)</text>
+<text x="1651" y="535" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">−65°</text>
+<rect x="1047" y="566" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="586" r="13" fill="#e0e8d6"/>
+<text x="1072" y="590" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">05</text>
+<text x="1096" y="589" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">北侧全景玻璃</text>
+<text x="1096" y="608" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">GLASS_PANORAMA_NORTH</text>
+<text x="1315" y="590" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(0, +0.70, −3.48)</text>
+<text x="1651" y="590" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">0°</text>
+<circle cx="1072" cy="641" r="13" fill="#e0e8d6"/>
+<text x="1072" y="645" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">06</text>
+<text x="1096" y="644" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">窗边弧形书桌</text>
+<text x="1096" y="663" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_DESK</text>
+<text x="1315" y="645" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+1.00, 0, −2.62)</text>
+<text x="1651" y="645" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">0°</text>
+<rect x="1047" y="676" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="696" r="13" fill="#e0e8d6"/>
+<text x="1072" y="700" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">07</text>
+<text x="1096" y="699" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">东侧全景玻璃</text>
+<text x="1096" y="718" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">GLASS_PANORAMA_EAST</text>
+<text x="1315" y="700" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+3.98, +0.70, −1.18)</text>
+<text x="1651" y="700" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">−90°</text>
+<circle cx="1072" cy="751" r="13" fill="#e0e8d6"/>
+<text x="1072" y="755" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">08</text>
+<text x="1096" y="754" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">电视</text>
+<text x="1096" y="773" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_TV</text>
+<text x="1315" y="755" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+0.30, +1.55, +3.36)</text>
+<text x="1651" y="755" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">180°</text>
+<rect x="1047" y="786" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="806" r="13" fill="#e0e8d6"/>
+<text x="1072" y="810" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">09</text>
+<text x="1096" y="809" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">游戏机</text>
+<text x="1096" y="828" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_GAME_CONSOLE</text>
+<text x="1315" y="810" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+1.10, +0.575, +2.96)</text>
+<text x="1651" y="810" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">180°</text>
+<circle cx="1072" cy="861" r="13" fill="#e0e8d6"/>
+<text x="1072" y="865" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">10</text>
+<text x="1096" y="864" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">游戏手柄</text>
+<text x="1096" y="883" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">PROP_CONTROLLER</text>
+<text x="1315" y="865" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+0.55, +0.60, +2.94)</text>
+<text x="1651" y="865" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">180°</text>
+<rect x="1047" y="896" width="625" height="52" rx="7" fill="#f0f3e8" />
+<circle cx="1072" cy="916" r="13" fill="#e0e8d6"/>
+<text x="1072" y="920" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">11</text>
+<text x="1096" y="919" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">电视矮柜</text>
+<text x="1096" y="938" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_MEDIA_CONSOLE</text>
+<text x="1315" y="920" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(+0.30, 0, +2.99)</text>
+<text x="1651" y="920" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">180°</text>
+<circle cx="1072" cy="971" r="13" fill="#e0e8d6"/>
+<text x="1072" y="975" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#3f6045" text-anchor="middle">12</text>
+<text x="1096" y="974" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">矮书架</text>
+<text x="1096" y="993" font-family="DejaVu Sans Mono, sans-serif" font-size="10" font-weight="500" fill="#83937b" text-anchor="start">FURN_BOOKCASE</text>
+<text x="1315" y="975" font-family="DejaVu Sans Mono, sans-serif" font-size="14" font-weight="400" fill="#586f51" text-anchor="start">(−3.64, 0, +1.66)</text>
+<text x="1651" y="975" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="600" fill="#9b773c" text-anchor="end">90°</text>
+<rect x="1030" y="1064" width="658" height="170" rx="16" fill="#e6ecdF" />
+<text x="1060" y="1102" font-family="Noto Sans CJK SC, sans-serif" font-size="20" font-weight="600" fill="#34563c" text-anchor="start">虚拟人接入说明</text>
+<text x="1060" y="1135" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#667c5d" text-anchor="start">坐下 / 躺下 / 站立请读取 interactions.json 中的锚点。</text>
+<text x="1060" y="1163" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#667c5d" text-anchor="start">此图标注家具原点；家具原点不等于脚底或骨盆落点。</text>
+<text x="1060" y="1191" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" fill="#667c5d" text-anchor="start">坐标换算：GLB (X,Y,Z) = Blender (X,Z,−Y)。</text>
+<text x="1060" y="1216" font-family="Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" fill="#839479" text-anchor="start">平面图为位置示意；实际几何边界与坐标以导出模型为准。</text>
+</svg>

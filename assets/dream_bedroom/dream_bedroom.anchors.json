@@ -1,0 +1,134 @@
+{
+  "anchors": [
+    {
+      "name": "spawn",
+      "x": -0.1,
+      "z": -3.35,
+      "label": "中央出生/站立点",
+      "labelEn": "spawn",
+      "links": [
+        "aisle_south",
+        "bed_approach",
+        "desk_approach",
+        "reading_approach",
+        "rug_watch_tv"
+      ]
+    },
+    {
+      "name": "rug_watch_tv",
+      "x": 0.0,
+      "z": -2.9,
+      "label": "地毯观看电视",
+      "labelEn": "rug watch tv",
+      "links": [
+        "spawn",
+        "tv_approach",
+        "game_approach"
+      ]
+    },
+    {
+      "name": "bed_approach",
+      "x": -0.65,
+      "z": -4.65,
+      "label": "床边站立点",
+      "labelEn": "bed approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "desk_approach",
+      "x": 1.0,
+      "z": -4.73,
+      "label": "书桌椅前站立点",
+      "labelEn": "desk approach",
+      "links": [
+        "spawn",
+        "aisle_east_lower"
+      ]
+    },
+    {
+      "name": "reading_approach",
+      "x": 1.65,
+      "z": -3.35,
+      "label": "阅读椅前站立点",
+      "labelEn": "reading approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "window_view",
+      "x": 3.35,
+      "z": -5.25,
+      "label": "窗前看森林",
+      "labelEn": "window view",
+      "links": [
+        "aisle_east_upper"
+      ]
+    },
+    {
+      "name": "tv_approach",
+      "x": 0.25,
+      "z": -1.72,
+      "label": "电视柜前站立点",
+      "labelEn": "tv approach",
+      "links": [
+        "rug_watch_tv"
+      ]
+    },
+    {
+      "name": "game_approach",
+      "x": 1.12,
+      "z": -1.72,
+      "label": "游戏机前站立点",
+      "labelEn": "game approach",
+      "links": [
+        "rug_watch_tv"
+      ]
+    },
+    {
+      "name": "entry",
+      "x": -2.75,
+      "z": -1.15,
+      "label": "门内入口点",
+      "labelEn": "entry",
+      "links": [
+        "aisle_south"
+      ]
+    },
+    {
+      "name": "aisle_south",
+      "x": -1.8,
+      "z": -2.35,
+      "label": "床尾通道",
+      "labelEn": "aisle south",
+      "links": [
+        "entry",
+        "spawn"
+      ]
+    },
+    {
+      "name": "aisle_east_lower",
+      "x": 1.8,
+      "z": -4.7,
+      "label": "东侧通道转折",
+      "labelEn": "aisle east lower",
+      "links": [
+        "desk_approach",
+        "aisle_east_upper"
+      ]
+    },
+    {
+      "name": "aisle_east_upper",
+      "x": 1.8,
+      "z": -5.2,
+      "label": "东侧窗边通道",
+      "labelEn": "aisle east upper",
+      "links": [
+        "aisle_east_lower",
+        "window_view"
+      ]
+    }
+  ]
+}

@@ -115,6 +115,7 @@ import com.neethu.aiavatar_sdk.i18n.resolveAppLang
 import com.neethu.aiadapter.model.LlmConfig
 import com.neethu.aiadapter.openai.OpenAiCompatibleLlmAdapter
 import com.neethu.orchestrator.agent.AgentToolCatalog
+import com.neethu.orchestrator.agent.ToolExecutor
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
 import com.neethu.orchestrator.card.SystemPromptAssembler
@@ -236,6 +237,9 @@ internal const val PREFS_NAME = "demo_settings"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 /** 场景选择持久化（空串 = 无场景，纯色背景）。 */
 private const val KEY_SELECTED_SCENE = "selected_scene"
+
+/** 升级首启的默认场景（存档缺失时）：闭室卧室=防遮挡+家具交互旗舰 demo。 */
+private const val DEFAULT_SCENE = "dream_bedroom.glb"
 /** 选中模型持久化（内置或导入，均按文件名）。 */
 private const val KEY_SELECTED_MODEL = "selected_model"
 /** 无持久化存档时的默认模型（assets/vrms 内置）。 */
@@ -482,12 +486,13 @@ internal class DemoUiState(context: Context) {
     /**
      * 场景选择：null = 无场景（纯色背景）。持久化（空串存档=null），面板「无」
      * 选项或 `ai_cmd load_scene none` 切换，写入口统一走 [setScene]。
-     * 判定用 [SharedPreferences.contains] 区分「无存档」（升级首启→默认第一个
-     * 场景）与「存档=无场景」（空串）——Elvis 兜底会把后者吞回第一个场景。
+     * 判定用 [SharedPreferences.contains] 区分「无存档」（升级首启→默认
+     * dream_bedroom，卧室闭室场景=防遮挡+家具交互的旗舰 demo）与「存档=
+     * 无场景」（空串）——Elvis 兜底会把后者吞回默认场景。
      */
     var selectedScene: String? by mutableStateOf(
         if (prefs.contains(KEY_SELECTED_SCENE)) prefs.getString(KEY_SELECTED_SCENE, null)?.ifEmpty { null }
-        else sceneFiles.firstOrNull()
+        else sceneFiles.firstOrNull { it == DEFAULT_SCENE } ?: sceneFiles.firstOrNull()
     )
         private set
 
@@ -991,17 +996,37 @@ private fun DemoScreen(
     }
 
     // Load the selected scene whenever it changes (null = 无场景，移除当前场景)
+    var spawnedForScene by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(uiState.selectedScene) {
         val scene = uiState.selectedScene
         if (scene != null) {
             // 场景对位 meta（自由走动 P0）：scene/<名>.meta.json 可选，缺省
             // 原样加载（历史行为）。标定流程见 SceneMetaParser 头注释。
-            val placement = runCatching {
+            val metaJson = runCatching {
                 context.assets.open(sceneMetaAssetName(scene)).use { it.readBytes().toString(Charsets.UTF_8) }
-            }.getOrNull()?.let { parseSceneMeta(it) }
+            }.getOrNull()
+            val placement = metaJson?.let { parseSceneMeta(it) }
             controller.loadScene("scene/$scene", placement)
         } else {
+            spawnedForScene = null
             controller.removeScene()
+        }
+    }
+
+    // 场景出生点（闭室场景如 dream_bedroom：地板不在 y=0，角色要落到房内
+    // SPAWN 交互点）。meta.spawn 可选；等模型 Ready 后应用（场景与模型加载
+    // 异步，任一先到都行），按场景只应用一次（换走再换回会重新落点）。
+    LaunchedEffect(state, uiState.selectedScene) {
+        val scene = uiState.selectedScene
+        if (state !is AvatarState.Ready || scene == null || spawnedForScene == scene) {
+            return@LaunchedEffect
+        }
+        spawnedForScene = scene
+        val spawn = runCatching {
+            context.assets.open(sceneMetaAssetName(scene)).use { it.readBytes().toString(Charsets.UTF_8) }
+        }.getOrNull()?.let { parseSceneSpawn(it) }
+        if (spawn != null) {
+            controller.setAvatarWorldPosition(spawn.x, spawn.y, spawn.z, spawn.yawDeg)
         }
     }
 
@@ -1490,24 +1515,63 @@ private fun DemoScreen(
     // P1 自由走动 AI 通道（docs/locomotion-feasibility.md §7.2/§7.3）：锚点表
     // 注入会话（<move:> 词表 + 协议块移动段）+ move_to/stop_moving 工具注册。
     // llmMove 关 = 摘工具 + 清锚点（协议块移动段随之消失，指纹机制自动重钉）。
-    // 锚点为空（用户删了 assets/scene/home.anchors.json）= 不注册，功能静默缺席。
+    // 锚点为空（场景没有专属 anchors 表且 home 兜底也缺）= 不注册，功能静默缺席。
     // 顺带把走动步态配好（ai_cmd walk_to 里同款常量）：LLM 第一次 <move:> 就能走。
-    val walkAnchors = remember { loadWalkAnchors(context) }
-    LaunchedEffect(session, uiState.aiPrefs.llmMove, uiState.lang) {
+    // ⚠按场景注入（dream_bedroom 接入教训：固定读 home.anchors.json 会让新
+    // 场景沿用旧房间词表），walkAnchors 进 effect 键 = 换场景自动重注入。
+    val walkAnchors = remember(uiState.selectedScene) { loadWalkAnchors(context, uiState.selectedScene) }
+    val interactionAnchors = remember(uiState.selectedScene) { loadInteractionAnchors(context, uiState.selectedScene) }
+    val interactionCoordinator = remember {
+        InteractionCoordinator(controller, { session }, scope)
+    }
+    interactionCoordinator.anchors = interactionAnchors
+    LaunchedEffect(session, uiState.aiPrefs.llmMove, uiState.lang, walkAnchors, interactionAnchors) {
         val s = session ?: return@LaunchedEffect
         s.locomotionAnchors = if (uiState.aiPrefs.llmMove) walkAnchors else emptyList()
-        val wantTools = uiState.aiPrefs.llmMove && walkAnchors.isNotEmpty()
-        if (wantTools && s.tools.find("move_to") == null) {
+        val wantMoveTools = uiState.aiPrefs.llmMove && walkAnchors.isNotEmpty()
+        if (wantMoveTools && s.tools.find("move_to") == null) {
             AgentToolCatalog.moveTo(promptTextsOf(uiState.lang)) { s.locomotionDriver }
-                .let { (spec, exec) -> s.tools.register(spec, exec) }
+                .let { (spec, exec) ->
+                    // 坐/躺中直接走动会被 POSE_ACTIVE 拒——move_to 自动先起身
+                    // （就位层明确语义：走动车道优先，接触定姿让路）
+                    s.tools.register(spec, ToolExecutor { args ->
+                        if (controller.getContactPoseState() != null) {
+                            controller.clearContactPose()
+                            delay(900)
+                        }
+                        exec.invoke(args)
+                    })
+                }
             AgentToolCatalog.stopMoving(promptTextsOf(uiState.lang)) { s.locomotionDriver }
                 .let { (spec, exec) -> s.tools.register(spec, exec) }
             if (!controller.isWalkGaitConfigured()) {
                 ensureWalkGaits(controller)
             }
-        } else if (!wantTools) {
+        } else if (!wantMoveTools) {
             s.tools.unregister("move_to")
             s.tools.unregister("stop_moving")
+        }
+        // 场景交互工具（interact_with + stand_up）：交互点表非空才注册；
+        // enum 白名单快照自当前表，换场景重注入时 effect 重跑（同名覆盖注册）
+        val wantInteractTools = uiState.aiPrefs.llmMove && interactionAnchors.isNotEmpty()
+        if (wantInteractTools) {
+            AgentToolCatalog.interactWith(
+                promptTextsOf(uiState.lang),
+                choices = { interactionAnchors.map { AgentToolCatalog.InteractionChoice(it.id, it.label) } },
+                start = { id ->
+                    val text = interactionCoordinator.interact(id)
+                    when {
+                        text.startsWith("interaction") -> AgentToolCatalog.InteractOutcome.STARTED
+                        text.startsWith("another") -> AgentToolCatalog.InteractOutcome.BUSY
+                        else -> AgentToolCatalog.InteractOutcome.FAILED
+                    }
+                },
+            ).let { (spec, exec) -> s.tools.register(spec, exec) }
+            AgentToolCatalog.standUp(promptTextsOf(uiState.lang)) { controller.clearContactPose() }
+                .let { (spec, exec) -> s.tools.register(spec, exec) }
+        } else {
+            s.tools.unregister("interact_with")
+            s.tools.unregister("stand_up")
         }
     }
 
@@ -2498,6 +2562,7 @@ private fun DemoScreen(
                 }
             },
             session = { session },
+            interaction = interactionCoordinator,
         )
     }
 

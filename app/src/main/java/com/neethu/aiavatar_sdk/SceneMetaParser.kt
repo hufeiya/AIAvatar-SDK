@@ -46,6 +46,20 @@ internal fun parseSceneMeta(json: String): ScenePlacement? = runCatching {
     )
 }.getOrNull()
 
+/**
+ * 场景出生点（可选 meta 字段 `spawn`）：闭室场景（如 dream_bedroom）的
+ * 地板不在 y=0，角色需要落到房间内的 SPAWN 交互点上，而不是世界原点。
+ * 模型就绪后经 [com.neethu.corelib.AvatarController.setAvatarWorldPosition]
+ * 应用（含朝向重同步）。
+ */
+internal data class SceneSpawn(val x: Float, val y: Float, val z: Float, val yawDeg: Float)
+
+internal fun parseSceneSpawn(json: String): SceneSpawn? = runCatching {
+    val s = Json.parseToJsonElement(json).jsonObject["spawn"]?.jsonObject ?: return@runCatching null
+    fun num(key: String): Float = s[key]?.jsonPrimitive?.floatOrNull ?: 0f
+    SceneSpawn(x = num("x"), y = num("y"), z = num("z"), yawDeg = num("yawDeg"))
+}.getOrNull()
+
 // ── 自由走动 AI 通道（P1，docs/locomotion-feasibility.md §7.2/§7.3）────────
 
 /** 默认步态（tools/walk-calib 实测：Female Normal Walk 步长 0.417m/周期 0.683s）。
@@ -60,14 +74,54 @@ const val DEFAULT_RUN_CLIP = "animations/Running Forward.vrma"
 const val DEFAULT_STRAFE_LEFT_CLIP = "animations/Walking Strafe To The Left.vrma"
 const val DEFAULT_STRAFE_RIGHT_CLIP = "animations/Walking Strafe To The Right.vrma"
 
-/** 锚点表资产路径（与场景对应；当前内置场景只有 home.glb）。 */
-private const val ANCHORS_ASSET = "scene/home.anchors.json"
+/**
+ * 按场景解析的 sidecar 资产名（dream_bedroom 接入教训：锚点/交互点表固定
+ * 读 home.* 会让换场景后仍用旧房间的词表——README「接入 AIAvatar-SDK」节
+ * 点名的问题，这里统一按场景名取）。
+ */
+internal fun sceneAnchorsAssetName(sceneFile: String): String =
+    "scene/" + sceneFile.substringBeforeLast('.') + ".anchors.json"
+
+internal fun sceneInteractionsAssetName(sceneFile: String): String =
+    "scene/" + sceneFile.substringBeforeLast('.') + ".interactions.json"
+
+/** 锚点表资产路径兜底（场景没有专属 .anchors.json 时退回 home 的词表）。 */
+private const val ANCHORS_ASSET_FALLBACK = "scene/home.anchors.json"
 
 /**
  * 读锚点表（`<move:>` 词表与 move_to 工具共用）；文件缺失/坏 JSON = 空表
  * （协议块无移动段，功能静默缺席——集成方没有摆锚点就不宣传走动）。
  * 坐标是真机 `walk_to` 踩点后写死的（§7.2），换场景/重新对位后要重标。
+ *
+ * [sceneFile] 非空时优先读 `scene/<场景名>.anchors.json`（dream_bedroom 的
+ * 12 锚点导航图），没有专属表再退回 home.anchors.json（home.glb 自身也是
+ * 走这条路径）。返回值随场景变化——MainActivity 的注入 effect 必须以场景
+ * 为键重跑，否则旧房间词表泄漏进新场景。
  */
-fun loadWalkAnchors(context: Context): List<MoveAnchor> = runCatching {
-    context.assets.open(ANCHORS_ASSET).use { it.readBytes().toString(Charsets.UTF_8) }
-}.getOrNull()?.let { parseMoveAnchors(it) } ?: emptyList()
+fun loadWalkAnchors(context: Context, sceneFile: String? = null): List<MoveAnchor> {
+    val candidates = listOfNotNull(
+        sceneFile?.let { sceneAnchorsAssetName(it) },
+        ANCHORS_ASSET_FALLBACK,
+    )
+    for (path in candidates) {
+        val json = runCatching {
+            context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
+        }.getOrNull() ?: continue
+        val anchors = runCatching { parseMoveAnchors(json) }.getOrNull() ?: emptyList()
+        if (anchors.isNotEmpty()) return anchors
+    }
+    return emptyList()
+}
+
+/**
+ * 读场景交互点表（`interact_with` 工具白名单与 ai_cmd `interact` 共用）；
+ * 文件缺失 = 空表（功能静默缺席，home.glb 没有交互点表）。
+ */
+internal fun loadInteractionAnchors(context: Context, sceneFile: String?): List<InteractionAnchor> {
+    if (sceneFile == null) return emptyList()
+    val json = runCatching {
+        context.assets.open(sceneInteractionsAssetName(sceneFile))
+            .use { it.readBytes().toString(Charsets.UTF_8) }
+    }.getOrNull() ?: return emptyList()
+    return parseInteractionAnchors(json)
+}

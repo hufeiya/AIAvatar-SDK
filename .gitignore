@@ -52,3 +52,4 @@ keystore.properties
 
 # Maven Central 发布凭据(tools/release.sh 与 publish-central.py 读取)
 central.properties
+assets/dream_bedroom/*.blend1
