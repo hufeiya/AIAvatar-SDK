@@ -59,6 +59,9 @@ object AgentToolCatalog {
     /** [playEffect] 的 `at` 位置参数白名单（语义见 schema description，锁单测）。 */
     internal val EFFECT_AT_OPTIONS = listOf("around_me", "stage_center", "camera_front")
 
+    /** [setSkybox] 的关闭哨兵（enum 里排在 id 之后，schema/执行/单测三方同源）。 */
+    internal const val SKYBOX_OFF = "off"
+
     /**
      * `play_effect`（P2 特效，docs/vfx-feasibility.md §六 P2）：放一段场景级
      * 特效（雪花/篝火/魔法阵/舞台灯等）。id 是 enum 白名单（目录定型，schema
@@ -155,6 +158,63 @@ object AgentToolCatalog {
         val executor = ToolExecutor { _ ->
             stop()
             ToolResult(texts.toolEffectStopped)
+        }
+        return spec to executor
+    }
+
+    /**
+     * `set_skybox`（docs/skybox.md）：切换 360° 全景天空盒（背景环境）。
+     * id 是 enum 白名单（assets/skybox 目录 + [SKYBOX_OFF] 哨兵，schema 注册
+     * 时生成一次、执行时再验——同 play_effect）。[set] 缝收 id（null =
+     * off 恢复纯色背景），返回 true = 已生效、false = 渲染层缺失/失败。
+     */
+    fun setSkybox(
+        texts: PromptTexts,
+        skyboxIds: () -> List<String>,
+        set: suspend (skybox: String?) -> Boolean,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val ids = skyboxIds()
+        val options = ids + SKYBOX_OFF
+        val spec = ToolSpec(
+            name = "set_skybox",
+            description = texts.toolSetSkyboxDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "skybox",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { options.forEach { add(JsonPrimitive(it)) } })
+                                put("description", "要切换的全景壁纸 id(见列表,不要发明);off=恢复纯色背景")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("skybox")) })
+            },
+            systemHint = texts.toolSetSkyboxHint,
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "skybox")?.lowercase().orEmpty()
+            when {
+                raw.isEmpty() || raw !in options -> ToolResult(
+                    texts.toolEnumArgInvalid("set_skybox", raw, options),
+                    isError = true,
+                )
+                raw == SKYBOX_OFF -> if (set(null)) {
+                    ToolResult(texts.toolSkyboxCleared)
+                } else {
+                    ToolResult(texts.toolSkyboxFailed, isError = true)
+                }
+                else -> if (set(raw)) {
+                    ToolResult(texts.toolSkyboxSet(raw))
+                } else {
+                    ToolResult(texts.toolSkyboxFailed, isError = true)
+                }
+            }
         }
         return spec to executor
     }

@@ -209,6 +209,37 @@ class AvatarStage internal constructor(
         _scenePath.value = null
     }
 
+    // ── 天空盒（360° 全景壁纸；docs/skybox.md）──────────────────────────
+
+    /** 全景壁纸挂天空盒（assets 相对路径，如 `skybox/beach.jpg`）。失败保留旧背景。 */
+    fun setSkybox(assetPath: String, yawDeg: Float = 0f): Boolean =
+        impl?.loadSkybox(assetPath, yawDeg) ?: false
+
+    /** 同 [setSkybox]，读本地存储绝对路径（运行时导入的全景）。 */
+    fun setSkyboxFromFile(filePath: String, yawDeg: Float = 0f): Boolean =
+        impl?.loadSkyboxFromFile(filePath, yawDeg) ?: false
+
+    /** 只调水平偏移角（度）：正 = 原画面右侧内容转到正前方。 */
+    fun setSkyboxYaw(yawDeg: Float): Boolean = impl?.setSkyboxYaw(yawDeg) ?: false
+
+    /**
+     * 全景亮度倍率（线性乘子，1.0 = 与原图逐像素一致；渲染器自动抵消 filament
+     * 的 IBL 天空盒衰减，docs/skybox.md）。范围 0.1–4；全景激活时后台重派生
+     * （约 0.7s），纯色模式只记参数返回 false。
+     */
+    fun setSkyboxBrightness(factor: Float): Boolean = impl?.setSkyboxBrightness(factor) ?: false
+
+    /** 当前亮度倍率（见 [setSkyboxBrightness]）。 */
+    val skyboxBrightness: Float get() = impl?.skyboxBrightness ?: 1f
+
+    /** 恢复纯色背景。 */
+    fun clearSkybox() {
+        impl?.clearSkybox()
+    }
+
+    /** 当前天空盒来源（assets 路径/绝对路径；null = 纯色背景）。 */
+    val skyboxSource: String? get() = impl?.skyboxSource
+
     // ── 渲染设置（舞台级，全演员共享）────────────────────────────────────
 
     fun applyRenderSettings(settings: AvatarRenderSettings) {

@@ -26,6 +26,11 @@ package com.neethu.corelib
  * @property iblPath Path to an IBL KTX file in assets; `null` (default) loads
  *   the SDK's built-in environment light, [IBL_NONE] disables IBL. The built-in
  *   and custom KTX come from Google Filament's env generator (Apache-2.0).
+ * @property skyboxPath Optional path to a 360° equirectangular panorama image
+ *   (JPG/PNG/WebP, aspect ≈ 2:1) in assets, rendered as the skybox at startup.
+ *   CPU-converted to a cubemap with IBL-coupled brightness compensation
+ *   (docs/skybox.md); `null` (default) keeps the [backgroundColor] solid
+ *   backdrop. Runtime switching goes through [AvatarController.setSkybox].
  * @property backgroundColor RGBA background color (range 0.0–1.0 each).
  * @property enableTouch Whether the user can rotate/pan the model by touch.
  * @property enableSpringBone Whether to enable spring bone physics for hair/clothing dynamics.
@@ -35,6 +40,7 @@ package com.neethu.corelib
  */
 data class AvatarConfig(
     val iblPath: String? = null,
+    val skyboxPath: String? = null,
     val backgroundColor: FloatArray = floatArrayOf(0.2f, 0.2f, 0.25f, 1.0f),
     val enableTouch: Boolean = true,
     val enableSpringBone: Boolean = true,
@@ -58,6 +64,7 @@ data class AvatarConfig(
         if (this === other) return true
         if (other !is AvatarConfig) return false
         return iblPath == other.iblPath &&
+                skyboxPath == other.skyboxPath &&
                 backgroundColor.contentEquals(other.backgroundColor) &&
                 enableSpringBone == other.enableSpringBone &&
                 enableTouch == other.enableTouch &&
@@ -66,6 +73,7 @@ data class AvatarConfig(
 
     override fun hashCode(): Int {
         var result = iblPath?.hashCode() ?: 0
+        result = 31 * result + (skyboxPath?.hashCode() ?: 0)
         result = 31 * result + backgroundColor.contentHashCode()
         result = 31 * result + enableTouch.hashCode()
         result = 31 * result + enableSpringBone.hashCode()

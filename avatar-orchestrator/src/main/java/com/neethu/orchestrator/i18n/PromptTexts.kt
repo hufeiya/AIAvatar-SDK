@@ -258,6 +258,19 @@ interface PromptTexts {
     /** 渲染层未就绪/批容量满的错误文案。 */
     val toolEffectNotAvailable: String
 
+    // ── 智能体工具（天空盒，docs/skybox.md）────────────────────────────
+    val toolSetSkyboxDescription: String
+    val toolSetSkyboxHint: String
+
+    /** 全景切换成功的确认文案。 */
+    fun toolSkyboxSet(id: String): String
+
+    /** off 恢复纯色背景成功的确认文案。 */
+    val toolSkyboxCleared: String
+
+    /** 渲染层缺失/切换失败的错误文案。 */
+    val toolSkyboxFailed: String
+
     /**
      * 智能体工具使用说明块（钉在协议块末尾，同一条 system——部分服务商拒绝
      * 多条 system）。[hints] 是 (工具名, 时机提示) 列表；轮数上限写进块里，
@@ -693,6 +706,25 @@ object PromptTextsZh : PromptTexts {
 
     override val toolEffectNotAvailable: String =
         "特效没能放出来(渲染没就绪或场景太满)。请口头向用户说明这次没成功。"
+
+    // ── 天空盒（docs/skybox.md）──────────────────────────────────────────
+
+    override val toolSetSkyboxDescription: String =
+        "切换 360° 全景天空盒(背景环境,id 见参数列表;off=恢复纯色背景)。"
+
+    override val toolSetSkyboxHint: String =
+        "用户想换个环境/去某地(「想去海边看看」「换个星空背景」「回到默认背景」)而列表里有" +
+            "对应全景时调用;id 必须来自参数列表,不要发明;切换后顺着自己的新视野自然描绘" +
+            "环境变化,不要播报工具名。"
+
+    override fun toolSkyboxSet(id: String): String =
+        "全景背景「$id」已经切换好了,你眼前正是新环境。请自然地描绘周围景色并继续对话。"
+
+    override val toolSkyboxCleared: String =
+        "背景恢复成纯色了。请自然地继续对话。"
+
+    override val toolSkyboxFailed: String =
+        "全景背景没能切换(渲染没就绪)。请口头向用户说明这次没成功。"
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {
@@ -1173,6 +1205,26 @@ object PromptTextsEn : PromptTexts {
 
     override val toolEffectNotAvailable: String =
         "The effect could not be played (renderer not ready or the scene is too full). Tell the user it didn't work this time."
+
+    // ── Skybox (docs/skybox.md) ─────────────────────────────────────────
+
+    override val toolSetSkyboxDescription: String =
+        "Switch the 360° panorama skybox (the backdrop environment; ids are listed in the schema; off = solid color backdrop)."
+
+    override val toolSetSkyboxHint: String =
+        "Call when the user wants a different environment (\"take me to the beach\", \"a starry sky\", " +
+            "\"back to the plain backdrop\") and a matching panorama is in the list; the id MUST come from " +
+            "the schema list — never invent one; after switching, describe your new surroundings naturally " +
+            "instead of naming the tool."
+
+    override fun toolSkyboxSet(id: String): String =
+        "The backdrop is now the \"$id\" panorama and you are standing in it. Describe the new surroundings naturally and continue."
+
+    override val toolSkyboxCleared: String =
+        "The backdrop is back to a solid color. Continue naturally."
+
+    override val toolSkyboxFailed: String =
+        "The panorama could not be switched (renderer not ready). Tell the user it didn't work this time."
 
     override fun toolEnumArgInvalid(tool: String, value: String, valid: List<String>): String =
         if (value.isBlank()) {

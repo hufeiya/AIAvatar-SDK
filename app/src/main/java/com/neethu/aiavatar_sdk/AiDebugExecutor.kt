@@ -166,6 +166,7 @@ internal suspend fun executeAiCommand(
             "load_model" -> loadModelCommand(controller, uiState, command.arg)
             "import_model" -> importModelCommand(context, uiState, command.arg)
             "load_scene" -> loadSceneCommand(controller, uiState, command.arg)
+            "skybox" -> skyboxCommand(context, controller, uiState, command.arg)
             "set_expression" -> setExpressionCommand(controller, uiState, command, chat)
             "clear_expression" -> {
                 val eased = chat?.clearManualExpression?.invoke()
@@ -627,6 +628,61 @@ private fun loadSceneCommand(
     if (name == uiState.selectedScene) return "scene '$name' is already active"
     uiState.setScene(name)
     return "loading scene/$name"
+}
+
+/**
+ * 360° 全景天空盒（assets/skybox，docs/skybox.md）：
+ * - 无参/list：当前 + 可用列表 + 亮度倍率
+ * - off/none：恢复纯色背景
+ * - yaw <deg>：水平偏移（原画面右侧内容转到正前方；全景模式才有意义）
+ * - gain <f>：亮度倍率（1.0 = 与原图一致；>1 提亮 <1 压暗，范围 0.1–4）
+ * - <name>：切换全景（支持省扩展名/大小写不敏感）
+ */
+private fun skyboxCommand(
+    context: Context,
+    controller: AvatarController,
+    uiState: DemoUiState,
+    arg: String?,
+): String {
+    val files = uiState.skyboxFiles
+    val parts = arg?.trim()?.split(Regex("\\s+")) ?: emptyList()
+    return when (val head = parts.firstOrNull()?.lowercase()) {
+        null, "list" -> {
+            val current = controller.getSkyboxSource()?.substringAfterLast('/')
+                ?: uiState.selectedSkybox ?: "none"
+            "current=$current brightness=${controller.getSkyboxBrightness()}\n" +
+                "skyboxes=${files.joinToString(",")}"
+        }
+        "off", "none" -> {
+            uiState.setSkybox(null)
+            "skybox cleared (solid background)"
+        }
+        "yaw" -> {
+            val deg = parts.getOrNull(1)?.toFloatOrNull()
+                ?: throw IllegalArgumentException("skybox yaw expects a degree number, e.g. ai_cmd=skybox ai_arg=\"yaw 90\"")
+            if (controller.setSkyboxYaw(deg)) "skybox yaw rotated to $deg°"
+            else "no panorama active (yaw ignored)"
+        }
+        "gain", "brightness" -> {
+            val factor = parts.getOrNull(1)?.toFloatOrNull()
+                ?: throw IllegalArgumentException(
+                    "skybox gain expects a multiplier, e.g. ai_cmd=skybox ai_arg=\"gain 1.3\"",
+                )
+            val applied = controller.setSkyboxBrightness(factor)
+            (if (applied) "skybox brightness set to $factor (re-deriving panorama)"
+            else "brightness stored ($factor); no panorama active") +
+                " [applied=${controller.getSkyboxBrightness()}]"
+        }
+        else -> {
+            val name = SkyboxCatalog.resolve(context, head)
+                ?: throw IllegalArgumentException(
+                    "Unknown skybox '$head'. Available: ${files.joinToString(",")}"
+                )
+            if (name == uiState.selectedSkybox) return "skybox '$name' is already active"
+            uiState.setSkybox(name)
+            "loading skybox/$name"
+        }
+    }
 }
 
 private fun setExpressionCommand(

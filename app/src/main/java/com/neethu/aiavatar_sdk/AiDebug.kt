@@ -113,6 +113,9 @@ fun aiDebugHelp(): String = """
     |                           the app's external files dir) into filesDir/vrms,
     |                           auto-select it and start a new context
     |  load_scene <arg>         Switch scene (file in assets/scene) or remove it (arg=none)
+|  skybox <arg>             360° panorama skybox (image in assets/skybox): <name> |
+|                           off (solid color) | list | yaw <deg> (rotate) |
+|                           gain <f> (brightness, 1.0 = source image, 0.1–4)
     |  set_expression <arg>     Apply expression. arg = name, ai_weight = 0..1 (default 1)
     |  clear_expression         Reset face to neutral
     |  play_animation <arg>     Play .vrma from assets/animations. ai_loop = true/false

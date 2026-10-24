@@ -143,6 +143,7 @@ class Strings(val lang: Lang) {
     val fabMove: String get() = zh("移", "Move")
     val fabView: String get() = zh("视", "View")
     val fabCard: String get() = zh("卡", "Card")
+    val fabSkybox: String get() = zh("天", "Sky")
     val pipFront: String get() = zh("前", "Front")
     val pipBack: String get() = zh("后", "Back")
 

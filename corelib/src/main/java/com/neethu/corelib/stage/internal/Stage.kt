@@ -10,7 +10,6 @@ import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.LightManager
 import com.google.android.filament.Scene
-import com.google.android.filament.Skybox
 import com.google.android.filament.ToneMapper
 import com.google.android.filament.View
 import com.google.android.filament.android.UiHelper
@@ -32,6 +31,8 @@ import com.neethu.corelib.RenderMode
 import com.neethu.corelib.ScenePlacement
 import com.neethu.corelib.ToneMappingMode
 import com.neethu.corelib.internal.MToonMaterialFactory
+import com.neethu.corelib.internal.SkyboxManager
+import com.neethu.corelib.internal.SkyboxTexturePacker
 import com.neethu.corelib.vfx.internal.VfxManager
 import kotlin.math.abs
 import kotlin.math.asin
@@ -576,6 +577,7 @@ internal class Stage(
         applyIblSettings()
         applyViewSettings()
         synchronized(runtimes) { runtimes.forEach { it.applyMaterialEnhancements() } }
+        skyboxManager?.setBrightness(settings.skyboxBrightness)
     }
 
     /** 演员加载完成后的模式自动切换（fresh 加载跟随模型材质）。 */
@@ -721,6 +723,7 @@ internal class Stage(
         val c = cos(radians).toFloat()
         val s = sin(radians).toFloat()
         ibl.setRotation(floatArrayOf(c, 0f, -s, 0f, 1f, 0f, s, 0f, c))
+        skyboxManager?.setEnvironmentLuminance(currentSkyboxEnvLuminance())
     }
 
     private fun applyViewSettings() {
@@ -818,12 +821,89 @@ internal class Stage(
         colorGrading = grading
     }
 
+    // ── Skybox（360° 全景壁纸 → cubemap；与单人 SoulLinkRenderer 同款）──
+
+    private var skyboxManager: SkyboxManager? = null
+
+    /** 当前天空盒来源（全景 assets 路径或绝对文件路径；null = 纯色背景）。 */
+    var skyboxSource: String? = null
+        private set
+
     private fun setupSkybox() {
-        val bg = config.backgroundColor
-        val skybox = Skybox.Builder()
-            .color(bg[0], bg[1], bg[2], bg.getOrElse(3) { 1.0f })
-            .build(engine)
-        scene.skybox = skybox
+        val manager = SkyboxManager(engine, scene)
+        manager.setEnvironmentLuminance(currentSkyboxEnvLuminance())
+        manager.setBrightness(renderSettings.skyboxBrightness)
+        skyboxManager = manager
+        val path = config.skyboxPath
+        val loaded = path != null && runCatching { loadSkybox(path) }.getOrDefault(false)
+        if (!loaded) {
+            skyboxSource = null
+            manager.setColor(config.backgroundColor)
+        }
+    }
+
+    /** 天空盒亮度补偿基准：IBL 强度 × 相机曝光（同 SoulLinkRenderer，docs/skybox.md 坑 9）。 */
+    private fun currentSkyboxEnvLuminance(): Float =
+        renderSettings.iblIntensity * SkyboxTexturePacker.cameraExposure(
+            modelViewer.camera.aperture, modelViewer.camera.shutterSpeed, modelViewer.camera.sensitivity,
+        )
+
+    /**
+     * 360° 全景壁纸（equirect，约 2:1 的 JPG/PNG/WebP）→ GPU 转 cubemap →
+     * 天空盒。失败（路径不存在/解码/转换异常）保留旧背景返回 false。
+     *
+     * @param yawDeg 水平循环偏移（度）：正 = 原画面右侧内容转到正前方。
+     */
+    fun loadSkybox(assetsPath: String, yawDeg: Float = 0f): Boolean {
+        val manager = skyboxManager ?: return false
+        val bitmap = runCatching {
+            surfaceView.context.assets.open(assetsPath).use { input ->
+                decodePanoramaBitmap(input.readBytes())
+            }
+        }.getOrNull() ?: return false
+        if (!manager.setPanorama(bitmap, yawDeg)) return false
+        skyboxSource = assetsPath
+        return true
+    }
+
+    /** 同 [loadSkybox]，但读本地存储的绝对路径（运行时导入的全景）。 */
+    fun loadSkyboxFromFile(path: String, yawDeg: Float = 0f): Boolean {
+        val manager = skyboxManager ?: return false
+        val file = java.io.File(path)
+        if (!file.isFile) return false
+        val bitmap = runCatching { decodePanoramaBitmap(file.readBytes()) }.getOrNull() ?: return false
+        if (!manager.setPanorama(bitmap, yawDeg)) return false
+        skyboxSource = path
+        return true
+    }
+
+    /** 只调水平偏移（重派生自驻留位图，不重新解码；纯色模式下返回 false）。 */
+    fun setSkyboxYaw(yawDeg: Float): Boolean = skyboxManager?.setYaw(yawDeg) ?: false
+
+    /** 全景亮度倍率（1.0 = 与原图一致；同 [setSkyboxYaw] 的重派生语义）。 */
+    fun setSkyboxBrightness(factor: Float): Boolean = skyboxManager?.setBrightness(factor) ?: false
+
+    /** 当前亮度倍率（渲染器未就绪时回落到设置值）。 */
+    val skyboxBrightness: Float
+        get() = skyboxManager?.brightness ?: renderSettings.skyboxBrightness
+
+    /** 恢复纯色背景（config.backgroundColor）。 */
+    fun clearSkybox() {
+        skyboxSource = null
+        skyboxManager?.setColor(config.backgroundColor)
+    }
+
+    private fun decodePanoramaBitmap(bytes: ByteArray): Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > SkyboxManager.MAX_SOURCE_WIDTH) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     }
 
     /** 加载内置 IBL（舞台初始化一次；单虚拟人是每次加载模型重载——语义等价，舞台级配置无 per-model 差异）。 */
@@ -1425,6 +1505,11 @@ internal class Stage(
         // VFX 先收（renderable/缓冲/材质/纹理仍要引擎在位；坑 13 顺序）
         vfxManager?.destroy()
         vfxManager = null
+
+        // 天空盒（skybox/cubemap/位图/转换器；同样要求引擎在位）
+        skyboxManager?.destroy()
+        skyboxManager = null
+        skyboxSource = null
 
         // 演员：in-use 顺序（asset 先于 MToon 实例，SIGABRT 红线）
         synchronized(runtimes) {

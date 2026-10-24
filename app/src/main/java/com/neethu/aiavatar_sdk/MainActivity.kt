@@ -240,6 +240,11 @@ private const val KEY_SELECTED_SCENE = "selected_scene"
 
 /** 升级首启的默认场景（存档缺失时）：闭室卧室=防遮挡+家具交互旗舰 demo。 */
 private const val DEFAULT_SCENE = "dream_bedroom.glb"
+/** 默认天空盒（assets/skybox 下的 360° 全景壁纸；会话级，不持久化）。
+ *  forest_grove = 真 equirect 全景（Polyhaven CC0，4096×2048）；目录内容随素材
+ *  增删自动生效（SkyboxCatalog 运行时扫描，「天」按钮/ai_cmd/LLM 工具共用）。
+ *  ⚠ 放非 2:1 的图（如小行星投影）会拉伸且有接缝，真机踩过。 */
+private const val DEFAULT_SKYBOX = "forest_grove.jpg"
 /** 选中模型持久化（内置或导入，均按文件名）。 */
 private const val KEY_SELECTED_MODEL = "selected_model"
 /** 无持久化存档时的默认模型（assets/vrms 内置）。 */
@@ -413,6 +418,32 @@ internal class DemoUiState(context: Context) {
 
     val sceneFiles: List<String> = listAssets(context, "scene") {
         it.endsWith(".glb")
+    }
+
+    /** assets/skybox 下的 360° 全景壁纸（[SkyboxCatalog] 过滤图片后缀）。 */
+    val skyboxFiles: List<String> = SkyboxCatalog.files(context)
+
+    /**
+     * 当前天空盒文件名（null = 纯色背景）。会话级状态不持久化；初始默认
+     * [DEFAULT_SKYBOX]（目录内缺失时退第一个），[LaunchedEffect] 据此加载/
+     * 清除，ai_cmd `skybox` 走 [setSkybox]。
+     */
+    var selectedSkybox by mutableStateOf(
+        DEFAULT_SKYBOX.takeIf { skyboxFiles.contains(it) } ?: skyboxFiles.firstOrNull()
+    )
+        private set
+
+    /** 切换天空盒（null = 纯色背景）。 */
+    fun setSkybox(name: String?) {
+        selectedSkybox = name
+    }
+
+    /** 循环切换 [skyboxFiles]（「天」按钮）：下一张，末张回绕到首张；
+     *  当前不在列表（纯色/缺失）视为从头开始。 */
+    fun cycleSkybox() {
+        if (skyboxFiles.isEmpty()) return
+        val idx = selectedSkybox?.let { skyboxFiles.indexOf(it) } ?: -1
+        selectedSkybox = skyboxFiles[(idx + 1).mod(skyboxFiles.size)]
     }
 
     /**
@@ -1013,6 +1044,18 @@ private fun DemoScreen(
         }
     }
 
+    // 天空盒（360° 全景壁纸，assets/skybox）：null = 纯色背景。状态由默认值
+    // 与 ai_cmd `skybox` 驱动；水平偏移是运行时微调（controller.setSkyboxYaw），
+    // 不进状态——重选天空盒时从 0° 重新开始。
+    LaunchedEffect(uiState.selectedSkybox) {
+        val skybox = uiState.selectedSkybox
+        if (skybox != null) {
+            controller.setSkybox("skybox/$skybox")
+        } else {
+            controller.clearSkybox()
+        }
+    }
+
     // 场景出生点（闭室场景如 dream_bedroom：地板不在 y=0，角色要落到房内
     // SPAWN 交互点）。meta.spawn 可选；等模型 Ready 后应用（场景与模型加载
     // 异步，任一先到都行），按场景只应用一次（换走再换回会重新落点）。
@@ -1504,6 +1547,15 @@ private fun DemoScreen(
         // P2 特效工具（play/stop_effect，跟随 agentTools 总开关 + fxTools
         // 独立开关默认关，关闭 = 两工具退场）
         AgentEffectTools.register(
+            session = s,
+            controller = controller,
+            context = context,
+            texts = promptTextsOf(uiState.lang),
+            prefs = uiState.aiPrefs,
+        )
+        // 天空盒工具（set_skybox，只跟 agentTools 总开关——换背景低频良性，
+        // 无 fxTools 式独立开关；docs/skybox.md）
+        AgentSkyboxTools.register(
             session = s,
             controller = controller,
             context = context,
@@ -2763,6 +2815,20 @@ private fun DemoScreen(
                 Icon(
                     imageVector = if (uiState.activePanel == PanelType.SETTINGS) Icons.Default.Close else Icons.Default.Settings,
                     contentDescription = if (uiState.activePanel == PanelType.SETTINGS) "Hide settings" else "Show settings"
+                )
+            }
+
+            // Skybox FAB (天) — 循环切换 assets/skybox 全景图（docs/skybox.md）；
+            // 文字 FAB 与「卡」同款（核心图标集无合适的天空/风景图标）
+            SmallFloatingActionButton(
+                onClick = { uiState.cycleSkybox() },
+                shape = RoundedCornerShape(50),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            ) {
+                Text(
+                    text = LocalStrings.current.fabSkybox,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
 

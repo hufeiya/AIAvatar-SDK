@@ -107,6 +107,11 @@ enum class RenderMode {
  * @property renderMode Avatar material/shading model, see [RenderMode].
  *   Unlike the other fields this one is NOT hot-swappable: switching reloads
  *   the model (see [AvatarController.updateRenderSettings]).
+ * @property skyboxBrightness Linear brightness multiplier for the 360° panorama
+ *   skybox; 1.0 matches the source image pixel-for-pixel (the renderer
+ *   compensates filament's IBL-coupled skybox attenuation automatically —
+ *   docs/skybox.md 坑 9). Values >1 brighten beyond the source, <1 darken.
+ *   Hot-swappable; re-derives the panorama in the background (~0.7 s).
  * @property showFps Whether the consuming UI should show a live FPS counter.
  *   The renderer always measures frame rate and reports it via
  *   [AvatarController.fps]; this flag only controls whether the overlay is
@@ -127,6 +132,7 @@ data class AvatarRenderSettings(
     val depthOfFieldEnabled: Boolean = false,
     val enhanceMaterials: Boolean = false,
     val renderMode: RenderMode = RenderMode.PBR,
+    val skyboxBrightness: Float = 1f,
     val showFps: Boolean = true,
 )
 

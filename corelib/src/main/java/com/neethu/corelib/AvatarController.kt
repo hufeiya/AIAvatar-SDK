@@ -667,6 +667,62 @@ class AvatarController : AvatarActor {
         }
     }
 
+    // ── Public API: Skybox (360° panorama backdrop) ──────────────────────
+
+    /**
+     * Set a 360° equirectangular panorama image (JPG/PNG/WebP, aspect ≈ 2:1)
+     * from the app's `assets/` as the skybox backdrop — the room's windows and
+     * any empty background show the panorama.
+     *
+     * GPU-converted to a cubemap (filament-utils channel, source capped at
+     * 4096 px wide); lighting stays on the configured IBL — the skybox is
+     * purely visual. On failure (missing path / decode / conversion) the
+     * previous backdrop is kept and `false` returned.
+     *
+     * @param assetPath Relative path inside `assets/`, e.g. `"skybox/beach.jpg"`.
+     * @param yawDeg Horizontal wrap-around offset in degrees; positive rotates
+     *   the panorama so content previously on the right moves to the front.
+     * @return `true` if the panorama is now the backdrop.
+     */
+    fun setSkybox(assetPath: String, yawDeg: Float = 0f): Boolean =
+        renderer?.loadSkybox(assetPath, yawDeg) ?: false
+
+    /**
+     * Same as [setSkybox] but reads an absolute filesystem path — for
+     * panoramas imported at runtime into the app data dir.
+     */
+    fun setSkyboxFromFile(filePath: String, yawDeg: Float = 0f): Boolean =
+        renderer?.loadSkyboxFromFile(filePath, yawDeg) ?: false
+
+    /**
+     * Re-derive the current panorama with a new horizontal offset (no
+     * re-decode; the downsampled source bitmap stays resident while a
+     * panorama is active). `false` when the backdrop is solid color.
+     */
+    fun setSkyboxYaw(yawDeg: Float): Boolean = renderer?.setSkyboxYaw(yawDeg) ?: false
+
+    /**
+     * Linear brightness multiplier for the panorama skybox: `1f` (default)
+     * displays the source image pixel-for-pixel — the renderer automatically
+     * compensates filament's IBL-coupled skybox attenuation (see
+     * `docs/skybox.md`). Values >1 brighten beyond the source, <1 darken;
+     * clamped to 0.1–4. Re-derives the panorama in the background (~0.7 s)
+     * when one is active; on a solid-color backdrop the value is only stored
+     * for the next panorama (`false` returned).
+     */
+    fun setSkyboxBrightness(factor: Float): Boolean = renderer?.setSkyboxBrightness(factor) ?: false
+
+    /** Current skybox brightness multiplier (see [setSkyboxBrightness]). */
+    fun getSkyboxBrightness(): Float = renderer?.skyboxBrightness ?: 1f
+
+    /** Restore the solid-color backdrop ([AvatarConfig.backgroundColor]). */
+    fun clearSkybox() {
+        renderer?.clearSkybox()
+    }
+
+    /** Current skybox source path (assets or file), or `null` for solid color. */
+    fun getSkyboxSource(): String? = renderer?.skyboxSource
+
     // ── Public API: Locomotion（自由走动）────────────────────────────────
 
     /**

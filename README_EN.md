@@ -222,13 +222,14 @@ The full lifecycle of each user message is emitted through `session.events` (`Sh
 |---|---|---|
 | VRM / GLB model | ✅ | Put it in `assets/`, then `controller.loadModel("model.vrm")`; for local files use `loadModelFromFile()` |
 | IBL environment lighting (.ktx) | Optional | **A default IBL is built in** (`AvatarConfig()` works with zero assets); to customize, put a `.ktx` in `assets/` and pass `AvatarConfig(iblPath = …)`, or pass `AvatarConfig.IBL_NONE` to disable |
+| 360° panorama skybox | Optional | An equirectangular panorama (JPG/PNG/WebP, aspect ≈ 2:1) in `assets/` becomes a 360° backdrop via `controller.setSkybox("skybox/beach.jpg")` (GPU-converted to a cubemap); `AvatarConfig(skyboxPath = …)` loads it at startup, `clearSkybox()` restores the solid color, `setSkyboxBrightness(f)` adjusts brightness (1.0 = matches the source image; the renderer auto-compensates the IBL-coupled attenuation) |
 
 Lip sync, blinking, breathing, and expression arbitration are driven automatically by the FaceDriver built into the session — no extra wiring needed.
 
 ## API Quick Reference
 
 **`AvatarController`** (rendering, corelib)
-`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode` (render mode auto-detected from the model's materials)
+`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setSkybox / setSkyboxYaw / setSkyboxBrightness / clearSkybox` (360° panorama backdrop; brightness multiplier 1.0 = matches the source image) · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode` (render mode auto-detected from the model's materials)
 
 **Render entry points** (corelib)
 `AvatarView(modifier, controller, config)` Compose · `AvatarSurfaceView(context, attrs, style, config, controller)` classic View (lifecycle auto-bound to Activity/Fragment; get the controller via the `controller` property)

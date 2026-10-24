@@ -222,13 +222,14 @@ session.interrupt()                  // 随时打断（LLM + TTS + 播放三层�
 |---|---|---|
 | VRM / GLB 模型 | ✅ | 放 `assets/`，`controller.loadModel("model.vrm")`；本地文件用 `loadModelFromFile()` |
 | IBL 环境光（.ktx） | 可选 | **内置默认环境光**（`AvatarConfig()` 零资产即得）；要自定义时放 `assets/` 传 `AvatarConfig(iblPath = …)`，传 `AvatarConfig.IBL_NONE` 关闭 |
+| 360° 全景天空盒 | 可选 | 等距圆柱投影全景图（JPG/PNG/WebP，宽高比 ≈ 2:1）放 `assets/`，`controller.setSkybox("skybox/beach.jpg")` 即成 360° 背景（GPU 转 cubemap）；`AvatarConfig(skyboxPath = …)` 启动即载，`clearSkybox()` 恢复纯色，`setSkyboxBrightness(f)` 调亮度（1.0=与原图一致，渲染器自动抵消 IBL 耦合的亮度衰减） |
 
 口型同步、眨眼、呼吸、表情仲裁由会话内建的 FaceDriver 自动驱动，无需额外接线。
 
 ## API 速查
 
 **`AvatarController`**（渲染，corelib）
-`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode`（按模型材质判定的渲染模式）
+`loadModel / loadModelFromFile` · `state: StateFlow<AvatarState>` · `setExpression` · `playVrmaAnimation / setVrmaIdleAnimation` · `setLookAtTarget` · `setSkybox / setSkyboxYaw / setSkyboxBrightness / clearSkybox`（360° 全景背景；亮度倍率 1.0=与原图一致） · `setCameraShot / orbitCamera / resetCamera` · `captureFrame` · `updateRenderSettings` · `detectedRenderMode`（按模型材质判定的渲染模式）
 
 **渲染入口**（corelib）
 `AvatarView(modifier, controller, config)` Compose · `AvatarSurfaceView(context, attrs, style, config, controller)` 传统 View（生命周期自动绑定 Activity/Fragment，`controller` 属性取控制器）
