@@ -1,0 +1,2526 @@
+{
+  "schemaVersion": 1,
+  "title": "桃隐仙居 · Peachveil Sanctuary",
+  "units": "meters",
+  "coordinateSystem": {
+    "handedness": "right",
+    "up": "+Y",
+    "defaultAvatarForward": "+Z",
+    "yaw": "degrees about +Y, positive turns +Z toward +X",
+    "blenderToGltf": "[x,y,z] -> [x,z,-y]",
+    "floorGltfY": 0
+  },
+  "room": {
+    "width": 8,
+    "depth": 7,
+    "eaveHeight": 3.25,
+    "ridgeHeight": 4.65,
+    "height": 4.82,
+    "ridgeCapMaxHeight": 4.82,
+    "roofProfile": "3.25 + 1.40*(1-abs(X)/4.20)**1.30, 18 planar facets per side",
+    "gltfInteriorBounds": {
+      "min": [
+        -4,
+        0,
+        -3.5
+      ],
+      "max": [
+        4,
+        4.82,
+        3.5
+      ]
+    }
+  },
+  "sdkPlacement": {
+    "offsetX": 0,
+    "offsetY": -1,
+    "offsetZ": -4,
+    "yawDeg": 0,
+    "formula": "sdkWorld = gltfPosition + [0,-1,-4]"
+  },
+  "poseContract": {
+    "feet": "Sole contact with floor/rug, not avatar root.",
+    "buttock_surface": "Seat surface contact; evaluate sitting pose and apply hips-to-contact offset.",
+    "back_hip_surface": "Supine pelvis/back surface; needs lying animation and bone contact alignment.",
+    "head_surface": "Optional pillow/head surface calibration, not a walking destination.",
+    "hand_grip": "Hand IK/grip reference.",
+    "rootPlacement": "rootTranslation += targetContactWorld - measuredContactWorld"
+  },
+  "objects": [
+    {
+      "node": "FURN_BED",
+      "label": "桃华流霞架子床",
+      "gltfOrigin": [
+        2.05,
+        0.0,
+        -1.05
+      ],
+      "sdkWorldOrigin": [
+        2.05,
+        -1.0,
+        -5.05
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          0.633292,
+          0.01,
+          -2.725
+        ],
+        "max": [
+          3.466708,
+          3.115,
+          0.632
+        ]
+      }
+    },
+    {
+      "node": "FURN_NIGHTSTAND",
+      "label": "鎏金床头小柜",
+      "gltfOrigin": [
+        3.6,
+        0.0,
+        -1.9
+      ],
+      "sdkWorldOrigin": [
+        3.6,
+        -1.0,
+        -5.9
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.28,
+          0.0,
+          -2.22
+        ],
+        "max": [
+          3.92,
+          1.490449,
+          -1.549
+        ]
+      }
+    },
+    {
+      "node": "FURN_DESK",
+      "label": "听雨书案",
+      "gltfOrigin": [
+        -2.65,
+        0.0,
+        -2.75
+      ],
+      "sdkWorldOrigin": [
+        -2.65,
+        -1.0,
+        -6.75
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.55,
+          0.005,
+          -3.1
+        ],
+        "max": [
+          -1.75,
+          0.9025,
+          -2.397
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_DESK",
+      "label": "如意圈背书椅",
+      "gltfOrigin": [
+        -2.65,
+        0.0,
+        -1.65
+      ],
+      "sdkWorldOrigin": [
+        -2.65,
+        -1.0,
+        -5.65
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.022857,
+          0.015,
+          -1.975
+        ],
+        "max": [
+          -2.277144,
+          1.211125,
+          -1.325
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_TABLE",
+      "label": "花间矮茶案",
+      "gltfOrigin": [
+        -2.0,
+        0.0,
+        0.75
+      ],
+      "sdkWorldOrigin": [
+        -2.0,
+        -1.0,
+        -3.25
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -2.6,
+          0.005,
+          0.325
+        ],
+        "max": [
+          -1.4,
+          0.764,
+          1.175
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_CUSHION_NORTH",
+      "label": "茶席北蒲团",
+      "gltfOrigin": [
+        -2.0,
+        0.0,
+        -0.15
+      ],
+      "sdkWorldOrigin": [
+        -2.0,
+        -1.0,
+        -4.15
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -2.35,
+          0.01,
+          -0.5
+        ],
+        "max": [
+          -1.65,
+          0.22,
+          0.2
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_CUSHION_SOUTH",
+      "label": "茶席南蒲团",
+      "gltfOrigin": [
+        -2.0,
+        0.0,
+        1.65
+      ],
+      "sdkWorldOrigin": [
+        -2.0,
+        -1.0,
+        -2.35
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -2.35,
+          0.01,
+          1.3
+        ],
+        "max": [
+          -1.65,
+          0.22,
+          2.0
+        ]
+      }
+    },
+    {
+      "node": "FURN_RUG",
+      "label": "桃花织锦地毯",
+      "gltfOrigin": [
+        -1.5,
+        0.0,
+        0.75
+      ],
+      "sdkWorldOrigin": [
+        -1.5,
+        -1.0,
+        -3.25
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.0,
+          0.0,
+          -0.985428
+        ],
+        "max": [
+          0.0,
+          0.04,
+          2.485428
+        ]
+      }
+    },
+    {
+      "node": "FURN_MEDITATION",
+      "label": "凝神白玉莲台",
+      "gltfOrigin": [
+        2.35,
+        0.0,
+        2.15
+      ],
+      "sdkWorldOrigin": [
+        2.35,
+        -1.0,
+        -1.85
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          1.525,
+          0.0,
+          1.325
+        ],
+        "max": [
+          3.175,
+          0.28,
+          2.975
+        ]
+      }
+    },
+    {
+      "node": "FURN_BOOKCASE",
+      "label": "藏经小书阁",
+      "gltfOrigin": [
+        -3.65,
+        0.0,
+        0.2
+      ],
+      "sdkWorldOrigin": [
+        -3.65,
+        -1.0,
+        -3.8
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.945,
+          0.0,
+          -0.67
+        ],
+        "max": [
+          -3.342,
+          1.96,
+          1.07
+        ]
+      }
+    },
+    {
+      "node": "FURN_ALTAR",
+      "label": "凝香供案",
+      "gltfOrigin": [
+        -2.65,
+        0.0,
+        2.9
+      ],
+      "sdkWorldOrigin": [
+        -2.65,
+        -1.0,
+        -1.1
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.55,
+          0.005,
+          2.628091
+        ],
+        "max": [
+          -1.75,
+          1.21,
+          3.22
+        ]
+      }
+    },
+    {
+      "node": "FURN_SWORD_STAND",
+      "label": "青霄灵剑架",
+      "gltfOrigin": [
+        3.45,
+        0.0,
+        0.95
+      ],
+      "sdkWorldOrigin": [
+        3.45,
+        -1.0,
+        -3.05
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.176407,
+          0.005,
+          0.675
+        ],
+        "max": [
+          3.7,
+          1.712656,
+          1.225
+        ]
+      }
+    },
+    {
+      "node": "PORTAL_ENTRY",
+      "label": "入户门槛",
+      "gltfOrigin": [
+        0.15,
+        0.0,
+        3.5
+      ],
+      "sdkWorldOrigin": [
+        0.15,
+        -1.0,
+        -0.5
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          0.15,
+          0.0,
+          3.5
+        ],
+        "max": [
+          0.15,
+          0.0,
+          3.5
+        ]
+      },
+      "boundsKind": "semantic_point"
+    },
+    {
+      "node": "FURN_PEACH_VASE",
+      "label": "青瓷桃枝花器",
+      "gltfOrigin": [
+        -3.55,
+        0.0,
+        -2.0
+      ],
+      "sdkWorldOrigin": [
+        -3.55,
+        -1.0,
+        -6.0
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.79,
+          0.02,
+          -2.339817
+        ],
+        "max": [
+          -3.025111,
+          1.952525,
+          -1.628793
+        ]
+      }
+    }
+  ],
+  "anchors": [
+    {
+      "id": "SPAWN",
+      "node": "ANCHOR_SPAWN",
+      "label": "中央出生/站立",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        0.0,
+        0.015,
+        1.1
+      ],
+      "sdkWorldPosition": [
+        0.0,
+        -0.985,
+        -2.9
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_SPAWN",
+      "lookTargetNode": "LOOK_SPAWN",
+      "gltfLookTarget": [
+        0.0,
+        2.0,
+        -3.5
+      ]
+    },
+    {
+      "id": "ENTRY",
+      "node": "ANCHOR_ENTRY",
+      "label": "门内入口",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        0.15,
+        0.002,
+        2.95
+      ],
+      "sdkWorldPosition": [
+        0.15,
+        -0.998,
+        -1.05
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_ENTRY",
+      "relatedNode": "PORTAL_ENTRY"
+    },
+    {
+      "id": "AISLE_CENTER",
+      "node": "ANCHOR_AISLE_CENTER",
+      "label": "中央行走通道",
+      "kind": "waypoint",
+      "contact": "feet",
+      "gltfPosition": [
+        0.0,
+        0.015,
+        0.0
+      ],
+      "sdkWorldPosition": [
+        0.0,
+        -0.985,
+        -4.0
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_AISLE_CENTER"
+    },
+    {
+      "id": "BED_APPROACH",
+      "node": "ANCHOR_BED_APPROACH",
+      "label": "纱帐床侧接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        0.15,
+        0.002,
+        -0.4
+      ],
+      "sdkWorldPosition": [
+        0.15,
+        -0.998,
+        -4.4
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_BED_APPROACH",
+      "relatedNode": "FURN_BED",
+      "lookTargetNode": "LOOK_BED_APPROACH",
+      "gltfLookTarget": [
+        2.05,
+        0.9,
+        -1.05
+      ]
+    },
+    {
+      "id": "BED_SIT",
+      "node": "ANCHOR_BED_SIT",
+      "label": "床沿坐姿接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        1.05,
+        0.787269,
+        -0.45
+      ],
+      "sdkWorldPosition": [
+        1.05,
+        -0.212731,
+        -4.45
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_SIT",
+      "relatedNode": "FURN_BED",
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "BED_LIE",
+      "node": "ANCHOR_BED_LIE",
+      "label": "床上仰卧髋背接触",
+      "kind": "lie",
+      "contact": "back_hip_surface",
+      "gltfPosition": [
+        1.5,
+        0.805269,
+        -1.05
+      ],
+      "sdkWorldPosition": [
+        1.5,
+        -0.194731,
+        -5.05
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_LIE",
+      "relatedNode": "FURN_BED",
+      "lookTargetNode": "LOOK_BED_LIE",
+      "gltfLookTarget": [
+        1.5,
+        3.1,
+        -1.05
+      ],
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset. Yaw is the feet-to-head body axis; a supine animation and contact alignment are required."
+    },
+    {
+      "id": "BED_HEAD",
+      "node": "ANCHOR_BED_HEAD",
+      "label": "枕区头部校准",
+      "kind": "lie_target",
+      "contact": "head_surface",
+      "gltfPosition": [
+        1.5,
+        1.0115,
+        -2.1
+      ],
+      "sdkWorldPosition": [
+        1.5,
+        0.0115,
+        -6.1
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_HEAD",
+      "relatedNode": "FURN_BED",
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "DESK_APPROACH",
+      "node": "ANCHOR_DESK_APPROACH",
+      "label": "书案椅前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        -2.65,
+        0.033,
+        -0.85
+      ],
+      "sdkWorldPosition": [
+        -2.65,
+        -0.967,
+        -4.85
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_DESK_APPROACH",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "lookTargetNode": "LOOK_DESK_APPROACH",
+      "gltfLookTarget": [
+        -2.65,
+        1.0,
+        -2.75
+      ]
+    },
+    {
+      "id": "DESK_SEAT",
+      "node": "ANCHOR_DESK_SEAT",
+      "label": "书案椅座面接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        -2.65,
+        0.502,
+        -1.65
+      ],
+      "sdkWorldPosition": [
+        -2.65,
+        -0.498,
+        -5.65
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_DESK_SEAT",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "lookTargetNode": "LOOK_DESK_SEAT",
+      "gltfLookTarget": [
+        -2.65,
+        0.95,
+        -2.75
+      ],
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "NORTH_AISLE",
+      "node": "ANCHOR_NORTH_AISLE",
+      "label": "北侧行走通道",
+      "kind": "waypoint",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.25,
+        0.002,
+        -1.3
+      ],
+      "sdkWorldPosition": [
+        -0.25,
+        -0.998,
+        -5.3
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_NORTH_AISLE"
+    },
+    {
+      "id": "WINDOW_VIEW",
+      "node": "ANCHOR_WINDOW_VIEW",
+      "label": "北侧栏前观景",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.2,
+        0.002,
+        -2.85
+      ],
+      "sdkWorldPosition": [
+        -0.2,
+        -0.998,
+        -6.85
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_WINDOW_VIEW",
+      "relatedNode": "WALL_NORTH",
+      "lookTargetNode": "LOOK_WINDOW_VIEW",
+      "gltfLookTarget": [
+        -0.2,
+        1.6,
+        -5.0
+      ]
+    },
+    {
+      "id": "TEA_APPROACH",
+      "node": "ANCHOR_TEA_APPROACH",
+      "label": "茶席接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.85,
+        0.028,
+        1.65
+      ],
+      "sdkWorldPosition": [
+        -0.85,
+        -0.972,
+        -2.35
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_TEA_APPROACH",
+      "relatedNode": "FURN_TEA_TABLE",
+      "lookTargetNode": "LOOK_TEA_APPROACH",
+      "gltfLookTarget": [
+        -2.0,
+        0.6,
+        0.75
+      ]
+    },
+    {
+      "id": "TEA_SEAT",
+      "node": "ANCHOR_TEA_SEAT",
+      "label": "南侧蒲团坐姿接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        -2.0,
+        0.221999,
+        1.65
+      ],
+      "sdkWorldPosition": [
+        -2.0,
+        -0.778001,
+        -2.35
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_TEA_SEAT",
+      "relatedNode": "FURN_TEA_CUSHION_SOUTH",
+      "lookTargetNode": "LOOK_TEA_SEAT",
+      "gltfLookTarget": [
+        -2.0,
+        0.6,
+        0.75
+      ],
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "MEDITATION_APPROACH",
+      "node": "ANCHOR_MEDITATION_APPROACH",
+      "label": "修炼台侧接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        1.05,
+        0.002,
+        2.15
+      ],
+      "sdkWorldPosition": [
+        1.05,
+        -0.998,
+        -1.85
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_MEDITATION_APPROACH",
+      "relatedNode": "FURN_MEDITATION",
+      "lookTargetNode": "LOOK_MEDITATION_APPROACH",
+      "gltfLookTarget": [
+        2.35,
+        0.65,
+        2.15
+      ]
+    },
+    {
+      "id": "MEDITATION_SEAT",
+      "node": "ANCHOR_MEDITATION_SEAT",
+      "label": "莲台打坐接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        2.35,
+        0.1965,
+        2.15
+      ],
+      "sdkWorldPosition": [
+        2.35,
+        -0.8035,
+        -1.85
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_MEDITATION_SEAT",
+      "relatedNode": "FURN_MEDITATION",
+      "lookTargetNode": "LOOK_MEDITATION_SEAT",
+      "gltfLookTarget": [
+        2.35,
+        1.3,
+        -1.0
+      ],
+      "notes": "Actual support mesh surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "ALTAR_APPROACH",
+      "node": "ANCHOR_ALTAR_APPROACH",
+      "label": "香案侧接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        -1.15,
+        0.002,
+        2.4
+      ],
+      "sdkWorldPosition": [
+        -1.15,
+        -0.998,
+        -1.6
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_ALTAR_APPROACH",
+      "relatedNode": "FURN_ALTAR",
+      "lookTargetNode": "LOOK_ALTAR_APPROACH",
+      "gltfLookTarget": [
+        -2.65,
+        1.2,
+        2.9
+      ]
+    },
+    {
+      "id": "EAST_CROSSING",
+      "node": "ANCHOR_EAST_CROSSING",
+      "label": "床尾修炼台间通道",
+      "kind": "waypoint",
+      "contact": "feet",
+      "gltfPosition": [
+        1.05,
+        0.002,
+        0.98
+      ],
+      "sdkWorldPosition": [
+        1.05,
+        -0.998,
+        -3.02
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_EAST_CROSSING"
+    },
+    {
+      "id": "SWORD_APPROACH",
+      "node": "ANCHOR_SWORD_APPROACH",
+      "label": "剑架前赏剑",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        2.6,
+        0.002,
+        0.98
+      ],
+      "sdkWorldPosition": [
+        2.6,
+        -0.998,
+        -3.02
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_SWORD_APPROACH",
+      "relatedNode": "FURN_SWORD_STAND",
+      "lookTargetNode": "LOOK_SWORD_APPROACH",
+      "gltfLookTarget": [
+        3.45,
+        1.0,
+        0.95
+      ]
+    }
+  ],
+  "navigation": {
+    "agentRadius": 0.22,
+    "validatedMode": "Final GLB furniture world AABBs expanded in XZ by agentRadius; rug is walkable.",
+    "edges": [
+      [
+        "ENTRY",
+        "SPAWN"
+      ],
+      [
+        "SPAWN",
+        "AISLE_CENTER"
+      ],
+      [
+        "AISLE_CENTER",
+        "BED_APPROACH"
+      ],
+      [
+        "AISLE_CENTER",
+        "NORTH_AISLE"
+      ],
+      [
+        "NORTH_AISLE",
+        "DESK_APPROACH"
+      ],
+      [
+        "NORTH_AISLE",
+        "WINDOW_VIEW"
+      ],
+      [
+        "SPAWN",
+        "TEA_APPROACH"
+      ],
+      [
+        "ENTRY",
+        "ALTAR_APPROACH"
+      ],
+      [
+        "SPAWN",
+        "MEDITATION_APPROACH"
+      ],
+      [
+        "MEDITATION_APPROACH",
+        "EAST_CROSSING"
+      ],
+      [
+        "EAST_CROSSING",
+        "SWORD_APPROACH"
+      ]
+    ],
+    "obstacles": [
+      {
+        "node": "FURN_BED",
+        "gltfBounds": {
+          "min": [
+            0.633292,
+            0.01,
+            -2.725
+          ],
+          "max": [
+            3.466708,
+            3.115,
+            0.632
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_NIGHTSTAND",
+        "gltfBounds": {
+          "min": [
+            3.28,
+            0.0,
+            -2.22
+          ],
+          "max": [
+            3.92,
+            1.490449,
+            -1.549
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_DESK",
+        "gltfBounds": {
+          "min": [
+            -3.55,
+            0.005,
+            -3.1
+          ],
+          "max": [
+            -1.75,
+            0.9025,
+            -2.397
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_CHAIR_DESK",
+        "gltfBounds": {
+          "min": [
+            -3.022857,
+            0.015,
+            -1.975
+          ],
+          "max": [
+            -2.277144,
+            1.211125,
+            -1.325
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_TEA_TABLE",
+        "gltfBounds": {
+          "min": [
+            -2.6,
+            0.005,
+            0.325
+          ],
+          "max": [
+            -1.4,
+            0.764,
+            1.175
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_TEA_CUSHION_NORTH",
+        "gltfBounds": {
+          "min": [
+            -2.35,
+            0.01,
+            -0.5
+          ],
+          "max": [
+            -1.65,
+            0.22,
+            0.2
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_TEA_CUSHION_SOUTH",
+        "gltfBounds": {
+          "min": [
+            -2.35,
+            0.01,
+            1.3
+          ],
+          "max": [
+            -1.65,
+            0.22,
+            2.0
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_MEDITATION",
+        "gltfBounds": {
+          "min": [
+            1.525,
+            0.0,
+            1.325
+          ],
+          "max": [
+            3.175,
+            0.28,
+            2.975
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_BOOKCASE",
+        "gltfBounds": {
+          "min": [
+            -3.945,
+            0.0,
+            -0.67
+          ],
+          "max": [
+            -3.342,
+            1.96,
+            1.07
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_ALTAR",
+        "gltfBounds": {
+          "min": [
+            -3.55,
+            0.005,
+            2.628091
+          ],
+          "max": [
+            -1.75,
+            1.21,
+            3.22
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_SWORD_STAND",
+        "gltfBounds": {
+          "min": [
+            3.176407,
+            0.005,
+            0.675
+          ],
+          "max": [
+            3.7,
+            1.712656,
+            1.225
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_PEACH_VASE",
+        "gltfBounds": {
+          "min": [
+            -3.79,
+            0.02,
+            -2.339817
+          ],
+          "max": [
+            -3.025111,
+            1.952525,
+            -1.628793
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      }
+    ],
+    "limitations": "Static graph edges only. No arbitrary starting-path, runtime collision, dynamic avoidance, animation or IK."
+  },
+  "rendering": {
+    "materials": "Portable glTF metallic-roughness PBR; blush fabric, carved wood, brass details and emissive lanterns.",
+    "previewOnly": "Blender cameras/lights/world are excluded from GLB. Host supplies skybox/IBL and runtime lights.",
+    "exteriorGeometry": false,
+    "openRailings": true,
+    "openRailingSides": [
+      "north",
+      "east"
+    ],
+    "solidWallSides": [
+      "south",
+      "west"
+    ],
+    "glassGeometry": false,
+    "optionalNodes": [
+      "WALL_NORTH",
+      "WALL_SOUTH",
+      "WALL_EAST",
+      "WALL_WEST",
+      "CEILING"
+    ],
+    "cutawayGroups": [
+      {
+        "node": "WALL_NORTH",
+        "label": "北侧木柱/栏杆/花格",
+        "role": "wall",
+        "renderableNodes": [
+          "WALL_NORTH_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          0,
+          -3.5
+        ],
+        "outwardNormalGltf": [
+          0,
+          0,
+          -1
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.435,
+            0.0,
+            -3.63
+          ],
+          "max": [
+            4.435001,
+            3.31,
+            -3.31
+          ]
+        }
+      },
+      {
+        "node": "WALL_SOUTH",
+        "label": "南侧灰泥隔墙/木框/入口",
+        "role": "wall",
+        "renderableNodes": [
+          "WALL_SOUTH_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          0,
+          3.5
+        ],
+        "outwardNormalGltf": [
+          0,
+          0,
+          1
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.06,
+            0.0,
+            3.331
+          ],
+          "max": [
+            4.06,
+            3.31,
+            3.62
+          ]
+        }
+      },
+      {
+        "node": "WALL_EAST",
+        "label": "东侧木柱/栏杆/花格",
+        "role": "wall",
+        "renderableNodes": [
+          "WALL_EAST_GEOMETRY"
+        ],
+        "planePointGltf": [
+          4,
+          0,
+          0
+        ],
+        "outwardNormalGltf": [
+          1,
+          0,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            3.475,
+            0.0,
+            -3.55
+          ],
+          "max": [
+            4.465,
+            3.31,
+            3.59
+          ]
+        }
+      },
+      {
+        "node": "WALL_WEST",
+        "label": "西侧灰泥墙/护墙板/月纹装饰",
+        "role": "wall",
+        "renderableNodes": [
+          "WALL_WEST_GEOMETRY"
+        ],
+        "planePointGltf": [
+          -4,
+          0,
+          0
+        ],
+        "outwardNormalGltf": [
+          -1,
+          0,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.435,
+            -0.0,
+            -3.55
+          ],
+          "max": [
+            -3.445,
+            3.31,
+            3.59
+          ]
+        }
+      },
+      {
+        "node": "CEILING",
+        "label": "中式曲面木屋顶/梁架/悬灯",
+        "role": "ceiling",
+        "renderableNodes": [
+          "CEILING_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          4.65,
+          0
+        ],
+        "outwardNormalGltf": [
+          0,
+          1,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.211096,
+            1.977178,
+            -3.735
+          ],
+          "max": [
+            4.201545,
+            4.82,
+            3.735
+          ]
+        },
+        "planeMeaning": "Ridge reference only. Boundary planes are the 36 original roof-profile mesh facets, before board thickness, tiles and ridge-cap decoration.",
+        "boundaryPlanesGltf": [
+          {
+            "label": "east_facet_01",
+            "point": [
+              0.116667,
+              4.599871,
+              0.0
+            ],
+            "outwardNormal": [
+              0.394775,
+              0.918778,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                0.0,
+                4.65,
+                0.0
+              ],
+              [
+                0.233333,
+                4.549743,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_02",
+            "point": [
+              0.35,
+              4.500491,
+              0.0
+            ],
+            "outwardNormal": [
+              0.388919,
+              0.921272,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                0.233333,
+                4.549743,
+                0.0
+              ],
+              [
+                0.466667,
+                4.45124,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_03",
+            "point": [
+              0.583333,
+              4.402904,
+              0.0
+            ],
+            "outwardNormal": [
+              0.382758,
+              0.923848,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                0.466667,
+                4.45124,
+                0.0
+              ],
+              [
+                0.7,
+                4.354568,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_04",
+            "point": [
+              0.816667,
+              4.30719,
+              0.0
+            ],
+            "outwardNormal": [
+              0.376258,
+              0.926515,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                0.7,
+                4.354568,
+                0.0
+              ],
+              [
+                0.933333,
+                4.259811,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_05",
+            "point": [
+              1.05,
+              4.213438,
+              0.0
+            ],
+            "outwardNormal": [
+              0.369374,
+              0.929281,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                0.933333,
+                4.259811,
+                0.0
+              ],
+              [
+                1.166667,
+                4.167065,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_06",
+            "point": [
+              1.283333,
+              4.121751,
+              0.0
+            ],
+            "outwardNormal": [
+              0.362057,
+              0.932156,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                1.166667,
+                4.167065,
+                0.0
+              ],
+              [
+                1.4,
+                4.076436,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_07",
+            "point": [
+              1.516667,
+              4.032242,
+              0.0
+            ],
+            "outwardNormal": [
+              0.354245,
+              0.935153,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                1.4,
+                4.076436,
+                0.0
+              ],
+              [
+                1.633333,
+                3.988047,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_08",
+            "point": [
+              1.75,
+              3.945043,
+              0.0
+            ],
+            "outwardNormal": [
+              0.345858,
+              0.938287,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                1.633333,
+                3.988047,
+                0.0
+              ],
+              [
+                1.866667,
+                3.902039,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_09",
+            "point": [
+              1.983333,
+              3.860308,
+              0.0
+            ],
+            "outwardNormal": [
+              0.336799,
+              0.941577,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                1.866667,
+                3.902039,
+                0.0
+              ],
+              [
+                2.1,
+                3.818577,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_10",
+            "point": [
+              2.216667,
+              3.778216,
+              0.0
+            ],
+            "outwardNormal": [
+              0.326939,
+              0.945046,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                2.1,
+                3.818577,
+                0.0
+              ],
+              [
+                2.333333,
+                3.737855,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_11",
+            "point": [
+              2.45,
+              3.698983,
+              0.0
+            ],
+            "outwardNormal": [
+              0.316105,
+              0.948724,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                2.333333,
+                3.737855,
+                0.0
+              ],
+              [
+                2.566667,
+                3.660111,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_12",
+            "point": [
+              2.683333,
+              3.622874,
+              0.0
+            ],
+            "outwardNormal": [
+              0.30406,
+              0.952653,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                2.566667,
+                3.660111,
+                0.0
+              ],
+              [
+                2.8,
+                3.585637,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_13",
+            "point": [
+              2.916667,
+              3.550224,
+              0.0
+            ],
+            "outwardNormal": [
+              0.290459,
+              0.956888,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                2.8,
+                3.585637,
+                0.0
+              ],
+              [
+                3.033333,
+                3.51481,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_14",
+            "point": [
+              3.15,
+              3.48147,
+              0.0
+            ],
+            "outwardNormal": [
+              0.27477,
+              0.96151,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                3.033333,
+                3.51481,
+                0.0
+              ],
+              [
+                3.266667,
+                3.448131,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_15",
+            "point": [
+              3.383333,
+              3.417221,
+              0.0
+            ],
+            "outwardNormal": [
+              0.256105,
+              0.966649,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                3.266667,
+                3.448131,
+                0.0
+              ],
+              [
+                3.5,
+                3.386311,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_16",
+            "point": [
+              3.616667,
+              3.358389,
+              0.0
+            ],
+            "outwardNormal": [
+              0.232762,
+              0.972534,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                3.5,
+                3.386311,
+                0.0
+              ],
+              [
+                3.733333,
+                3.330466,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_17",
+            "point": [
+              3.85,
+              3.306573,
+              0.0
+            ],
+            "outwardNormal": [
+              0.200636,
+              0.979666,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                3.733333,
+                3.330466,
+                0.0
+              ],
+              [
+                3.966667,
+                3.282679,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "east_facet_18",
+            "point": [
+              4.083333,
+              3.26634,
+              0.0
+            ],
+            "outwardNormal": [
+              0.138701,
+              0.990334,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                3.966667,
+                3.282679,
+                0.0
+              ],
+              [
+                4.2,
+                3.25,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_01",
+            "point": [
+              -0.116667,
+              4.599871,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.394775,
+              0.918778,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -0.0,
+                4.65,
+                0.0
+              ],
+              [
+                -0.233333,
+                4.549743,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_02",
+            "point": [
+              -0.35,
+              4.500491,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.388919,
+              0.921272,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -0.233333,
+                4.549743,
+                0.0
+              ],
+              [
+                -0.466667,
+                4.45124,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_03",
+            "point": [
+              -0.583333,
+              4.402904,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.382758,
+              0.923848,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -0.466667,
+                4.45124,
+                0.0
+              ],
+              [
+                -0.7,
+                4.354568,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_04",
+            "point": [
+              -0.816667,
+              4.30719,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.376258,
+              0.926515,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -0.7,
+                4.354568,
+                0.0
+              ],
+              [
+                -0.933333,
+                4.259811,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_05",
+            "point": [
+              -1.05,
+              4.213438,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.369374,
+              0.929281,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -0.933333,
+                4.259811,
+                0.0
+              ],
+              [
+                -1.166667,
+                4.167065,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_06",
+            "point": [
+              -1.283333,
+              4.121751,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.362057,
+              0.932156,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -1.166667,
+                4.167065,
+                0.0
+              ],
+              [
+                -1.4,
+                4.076436,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_07",
+            "point": [
+              -1.516667,
+              4.032242,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.354245,
+              0.935153,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -1.4,
+                4.076436,
+                0.0
+              ],
+              [
+                -1.633333,
+                3.988047,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_08",
+            "point": [
+              -1.75,
+              3.945043,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.345858,
+              0.938287,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -1.633333,
+                3.988047,
+                0.0
+              ],
+              [
+                -1.866667,
+                3.902039,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_09",
+            "point": [
+              -1.983333,
+              3.860308,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.336799,
+              0.941577,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -1.866667,
+                3.902039,
+                0.0
+              ],
+              [
+                -2.1,
+                3.818577,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_10",
+            "point": [
+              -2.216667,
+              3.778216,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.326939,
+              0.945046,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -2.1,
+                3.818577,
+                0.0
+              ],
+              [
+                -2.333333,
+                3.737855,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_11",
+            "point": [
+              -2.45,
+              3.698983,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.316105,
+              0.948724,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -2.333333,
+                3.737855,
+                0.0
+              ],
+              [
+                -2.566667,
+                3.660111,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_12",
+            "point": [
+              -2.683333,
+              3.622874,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.30406,
+              0.952653,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -2.566667,
+                3.660111,
+                0.0
+              ],
+              [
+                -2.8,
+                3.585637,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_13",
+            "point": [
+              -2.916667,
+              3.550224,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.290459,
+              0.956888,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -2.8,
+                3.585637,
+                0.0
+              ],
+              [
+                -3.033333,
+                3.51481,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_14",
+            "point": [
+              -3.15,
+              3.48147,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.27477,
+              0.96151,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -3.033333,
+                3.51481,
+                0.0
+              ],
+              [
+                -3.266667,
+                3.448131,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_15",
+            "point": [
+              -3.383333,
+              3.417221,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.256105,
+              0.966649,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -3.266667,
+                3.448131,
+                0.0
+              ],
+              [
+                -3.5,
+                3.386311,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_16",
+            "point": [
+              -3.616667,
+              3.358389,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.232762,
+              0.972534,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -3.5,
+                3.386311,
+                0.0
+              ],
+              [
+                -3.733333,
+                3.330466,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_17",
+            "point": [
+              -3.85,
+              3.306573,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.200636,
+              0.979666,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -3.733333,
+                3.330466,
+                0.0
+              ],
+              [
+                -3.966667,
+                3.282679,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          },
+          {
+            "label": "west_facet_18",
+            "point": [
+              -4.083333,
+              3.26634,
+              0.0
+            ],
+            "outwardNormal": [
+              -0.138701,
+              0.990334,
+              0.0
+            ],
+            "profileSegmentGltf": [
+              [
+                -3.966667,
+                3.282679,
+                0.0
+              ],
+              [
+                -4.2,
+                3.25,
+                0.0
+              ]
+            ],
+            "longitudinalRangeGltfZ": [
+              -3.7,
+              3.7
+            ]
+          }
+        ]
+      }
+    ],
+    "alwaysVisibleNodes": [
+      "FLOOR"
+    ],
+    "visibilityContract": "All groups export visible. Recursively hide/show every descendant renderable, or use renderableNodes; empty group visibility alone does not hide Filament mesh entities."
+  }
+}

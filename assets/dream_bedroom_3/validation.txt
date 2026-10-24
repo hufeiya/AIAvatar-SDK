@@ -1,0 +1,7 @@
+Peachveil Sanctuary validation: PASS
+GLB SHA-256: c65bf735cef0456be573b3c702a87871831300b0bf79138dcb7983ad4831c21c
+Counts: {"sceneNodes": 96, "meshes": 20, "primitives": 123, "triangles": 183608, "vertices": 191839, "materials": 27, "embeddedImages": 8, "furnitureRoots": 14, "interactionAnchors": 18, "navigableAnchors": 12, "undirectedEdges": 11}
+Coordinate tolerance: 2e-05m; agent radius: 0.22m
+LIMITATION: Static graph paths checked against listed furniture AABBs expanded by agent radius; arbitrary entry paths and dynamic avoidance need host logic.
+LIMITATION: GLB coordinates and pose contact targets were verified; Android/Filament rendering and a specific VRM sitting/lying fit were not tested.
+LIMITATION: SDK walking sidecar contains XZ only. Arrival yaw, ground height, gaze, animations and contact IK need host logic.

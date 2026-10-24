@@ -1,0 +1,134 @@
+{
+  "anchors": [
+    {
+      "name": "spawn",
+      "x": 0.0,
+      "z": -2.9,
+      "label": "中央出生/站立",
+      "labelEn": "spawn",
+      "links": [
+        "entry",
+        "aisle_center",
+        "tea_approach",
+        "meditation_approach"
+      ]
+    },
+    {
+      "name": "entry",
+      "x": 0.15,
+      "z": -1.05,
+      "label": "门内入口",
+      "labelEn": "entry",
+      "links": [
+        "spawn",
+        "altar_approach"
+      ]
+    },
+    {
+      "name": "aisle_center",
+      "x": 0.0,
+      "z": -4.0,
+      "label": "中央行走通道",
+      "labelEn": "aisle center",
+      "links": [
+        "spawn",
+        "bed_approach",
+        "north_aisle"
+      ]
+    },
+    {
+      "name": "bed_approach",
+      "x": 0.15,
+      "z": -4.4,
+      "label": "纱帐床侧接近",
+      "labelEn": "bed approach",
+      "links": [
+        "aisle_center"
+      ]
+    },
+    {
+      "name": "desk_approach",
+      "x": -2.65,
+      "z": -4.85,
+      "label": "书案椅前接近",
+      "labelEn": "desk approach",
+      "links": [
+        "north_aisle"
+      ]
+    },
+    {
+      "name": "north_aisle",
+      "x": -0.25,
+      "z": -5.3,
+      "label": "北侧行走通道",
+      "labelEn": "north aisle",
+      "links": [
+        "aisle_center",
+        "desk_approach",
+        "window_view"
+      ]
+    },
+    {
+      "name": "window_view",
+      "x": -0.2,
+      "z": -6.85,
+      "label": "北侧栏前观景",
+      "labelEn": "window view",
+      "links": [
+        "north_aisle"
+      ]
+    },
+    {
+      "name": "tea_approach",
+      "x": -0.85,
+      "z": -2.35,
+      "label": "茶席接近",
+      "labelEn": "tea approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "meditation_approach",
+      "x": 1.05,
+      "z": -1.85,
+      "label": "修炼台侧接近",
+      "labelEn": "meditation approach",
+      "links": [
+        "spawn",
+        "east_crossing"
+      ]
+    },
+    {
+      "name": "altar_approach",
+      "x": -1.15,
+      "z": -1.6,
+      "label": "香案侧接近",
+      "labelEn": "altar approach",
+      "links": [
+        "entry"
+      ]
+    },
+    {
+      "name": "east_crossing",
+      "x": 1.05,
+      "z": -3.02,
+      "label": "床尾修炼台间通道",
+      "labelEn": "east crossing",
+      "links": [
+        "meditation_approach",
+        "sword_approach"
+      ]
+    },
+    {
+      "name": "sword_approach",
+      "x": 2.6,
+      "z": -3.02,
+      "label": "剑架前赏剑",
+      "labelEn": "sword approach",
+      "links": [
+        "east_crossing"
+      ]
+    }
+  ]
+}

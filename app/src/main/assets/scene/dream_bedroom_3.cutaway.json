@@ -1,0 +1,1224 @@
+{
+  "schemaVersion": 1,
+  "units": "meters",
+  "coordinateSystem": {
+    "handedness": "right",
+    "up": "+Y",
+    "defaultAvatarForward": "+Z",
+    "yaw": "degrees about +Y, positive turns +Z toward +X",
+    "blenderToGltf": "[x,y,z] -> [x,z,-y]",
+    "floorGltfY": 0
+  },
+  "sdkPlacement": {
+    "offsetX": 0,
+    "offsetY": -1,
+    "offsetZ": -4,
+    "yawDeg": 0,
+    "formula": "sdkWorld = gltfPosition + [0,-1,-4]"
+  },
+  "groups": [
+    {
+      "node": "WALL_NORTH",
+      "label": "北侧木柱/栏杆/花格",
+      "role": "wall",
+      "renderableNodes": [
+        "WALL_NORTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        0,
+        -3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        -1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.435,
+          0.0,
+          -3.63
+        ],
+        "max": [
+          4.435001,
+          3.31,
+          -3.31
+        ]
+      }
+    },
+    {
+      "node": "WALL_SOUTH",
+      "label": "南侧灰泥隔墙/木框/入口",
+      "role": "wall",
+      "renderableNodes": [
+        "WALL_SOUTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        0,
+        3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.06,
+          0.0,
+          3.331
+        ],
+        "max": [
+          4.06,
+          3.31,
+          3.62
+        ]
+      }
+    },
+    {
+      "node": "WALL_EAST",
+      "label": "东侧木柱/栏杆/花格",
+      "role": "wall",
+      "renderableNodes": [
+        "WALL_EAST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.475,
+          0.0,
+          -3.55
+        ],
+        "max": [
+          4.465,
+          3.31,
+          3.59
+        ]
+      }
+    },
+    {
+      "node": "WALL_WEST",
+      "label": "西侧灰泥墙/护墙板/月纹装饰",
+      "role": "wall",
+      "renderableNodes": [
+        "WALL_WEST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        -4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        -1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.435,
+          -0.0,
+          -3.55
+        ],
+        "max": [
+          -3.445,
+          3.31,
+          3.59
+        ]
+      }
+    },
+    {
+      "node": "CEILING",
+      "label": "中式曲面木屋顶/梁架/悬灯",
+      "role": "ceiling",
+      "renderableNodes": [
+        "CEILING_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        4.65,
+        0
+      ],
+      "outwardNormalGltf": [
+        0,
+        1,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.211096,
+          1.977178,
+          -3.735
+        ],
+        "max": [
+          4.201545,
+          4.82,
+          3.735
+        ]
+      },
+      "planeMeaning": "Ridge reference only. Boundary planes are the 36 original roof-profile mesh facets, before board thickness, tiles and ridge-cap decoration.",
+      "boundaryPlanesGltf": [
+        {
+          "label": "east_facet_01",
+          "point": [
+            0.116667,
+            4.599871,
+            0.0
+          ],
+          "outwardNormal": [
+            0.394775,
+            0.918778,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              0.0,
+              4.65,
+              0.0
+            ],
+            [
+              0.233333,
+              4.549743,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_02",
+          "point": [
+            0.35,
+            4.500491,
+            0.0
+          ],
+          "outwardNormal": [
+            0.388919,
+            0.921272,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              0.233333,
+              4.549743,
+              0.0
+            ],
+            [
+              0.466667,
+              4.45124,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_03",
+          "point": [
+            0.583333,
+            4.402904,
+            0.0
+          ],
+          "outwardNormal": [
+            0.382758,
+            0.923848,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              0.466667,
+              4.45124,
+              0.0
+            ],
+            [
+              0.7,
+              4.354568,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_04",
+          "point": [
+            0.816667,
+            4.30719,
+            0.0
+          ],
+          "outwardNormal": [
+            0.376258,
+            0.926515,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              0.7,
+              4.354568,
+              0.0
+            ],
+            [
+              0.933333,
+              4.259811,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_05",
+          "point": [
+            1.05,
+            4.213438,
+            0.0
+          ],
+          "outwardNormal": [
+            0.369374,
+            0.929281,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              0.933333,
+              4.259811,
+              0.0
+            ],
+            [
+              1.166667,
+              4.167065,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_06",
+          "point": [
+            1.283333,
+            4.121751,
+            0.0
+          ],
+          "outwardNormal": [
+            0.362057,
+            0.932156,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              1.166667,
+              4.167065,
+              0.0
+            ],
+            [
+              1.4,
+              4.076436,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_07",
+          "point": [
+            1.516667,
+            4.032242,
+            0.0
+          ],
+          "outwardNormal": [
+            0.354245,
+            0.935153,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              1.4,
+              4.076436,
+              0.0
+            ],
+            [
+              1.633333,
+              3.988047,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_08",
+          "point": [
+            1.75,
+            3.945043,
+            0.0
+          ],
+          "outwardNormal": [
+            0.345858,
+            0.938287,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              1.633333,
+              3.988047,
+              0.0
+            ],
+            [
+              1.866667,
+              3.902039,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_09",
+          "point": [
+            1.983333,
+            3.860308,
+            0.0
+          ],
+          "outwardNormal": [
+            0.336799,
+            0.941577,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              1.866667,
+              3.902039,
+              0.0
+            ],
+            [
+              2.1,
+              3.818577,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_10",
+          "point": [
+            2.216667,
+            3.778216,
+            0.0
+          ],
+          "outwardNormal": [
+            0.326939,
+            0.945046,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              2.1,
+              3.818577,
+              0.0
+            ],
+            [
+              2.333333,
+              3.737855,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_11",
+          "point": [
+            2.45,
+            3.698983,
+            0.0
+          ],
+          "outwardNormal": [
+            0.316105,
+            0.948724,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              2.333333,
+              3.737855,
+              0.0
+            ],
+            [
+              2.566667,
+              3.660111,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_12",
+          "point": [
+            2.683333,
+            3.622874,
+            0.0
+          ],
+          "outwardNormal": [
+            0.30406,
+            0.952653,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              2.566667,
+              3.660111,
+              0.0
+            ],
+            [
+              2.8,
+              3.585637,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_13",
+          "point": [
+            2.916667,
+            3.550224,
+            0.0
+          ],
+          "outwardNormal": [
+            0.290459,
+            0.956888,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              2.8,
+              3.585637,
+              0.0
+            ],
+            [
+              3.033333,
+              3.51481,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_14",
+          "point": [
+            3.15,
+            3.48147,
+            0.0
+          ],
+          "outwardNormal": [
+            0.27477,
+            0.96151,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              3.033333,
+              3.51481,
+              0.0
+            ],
+            [
+              3.266667,
+              3.448131,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_15",
+          "point": [
+            3.383333,
+            3.417221,
+            0.0
+          ],
+          "outwardNormal": [
+            0.256105,
+            0.966649,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              3.266667,
+              3.448131,
+              0.0
+            ],
+            [
+              3.5,
+              3.386311,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_16",
+          "point": [
+            3.616667,
+            3.358389,
+            0.0
+          ],
+          "outwardNormal": [
+            0.232762,
+            0.972534,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              3.5,
+              3.386311,
+              0.0
+            ],
+            [
+              3.733333,
+              3.330466,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_17",
+          "point": [
+            3.85,
+            3.306573,
+            0.0
+          ],
+          "outwardNormal": [
+            0.200636,
+            0.979666,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              3.733333,
+              3.330466,
+              0.0
+            ],
+            [
+              3.966667,
+              3.282679,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "east_facet_18",
+          "point": [
+            4.083333,
+            3.26634,
+            0.0
+          ],
+          "outwardNormal": [
+            0.138701,
+            0.990334,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              3.966667,
+              3.282679,
+              0.0
+            ],
+            [
+              4.2,
+              3.25,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_01",
+          "point": [
+            -0.116667,
+            4.599871,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.394775,
+            0.918778,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -0.0,
+              4.65,
+              0.0
+            ],
+            [
+              -0.233333,
+              4.549743,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_02",
+          "point": [
+            -0.35,
+            4.500491,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.388919,
+            0.921272,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -0.233333,
+              4.549743,
+              0.0
+            ],
+            [
+              -0.466667,
+              4.45124,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_03",
+          "point": [
+            -0.583333,
+            4.402904,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.382758,
+            0.923848,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -0.466667,
+              4.45124,
+              0.0
+            ],
+            [
+              -0.7,
+              4.354568,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_04",
+          "point": [
+            -0.816667,
+            4.30719,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.376258,
+            0.926515,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -0.7,
+              4.354568,
+              0.0
+            ],
+            [
+              -0.933333,
+              4.259811,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_05",
+          "point": [
+            -1.05,
+            4.213438,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.369374,
+            0.929281,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -0.933333,
+              4.259811,
+              0.0
+            ],
+            [
+              -1.166667,
+              4.167065,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_06",
+          "point": [
+            -1.283333,
+            4.121751,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.362057,
+            0.932156,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -1.166667,
+              4.167065,
+              0.0
+            ],
+            [
+              -1.4,
+              4.076436,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_07",
+          "point": [
+            -1.516667,
+            4.032242,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.354245,
+            0.935153,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -1.4,
+              4.076436,
+              0.0
+            ],
+            [
+              -1.633333,
+              3.988047,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_08",
+          "point": [
+            -1.75,
+            3.945043,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.345858,
+            0.938287,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -1.633333,
+              3.988047,
+              0.0
+            ],
+            [
+              -1.866667,
+              3.902039,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_09",
+          "point": [
+            -1.983333,
+            3.860308,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.336799,
+            0.941577,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -1.866667,
+              3.902039,
+              0.0
+            ],
+            [
+              -2.1,
+              3.818577,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_10",
+          "point": [
+            -2.216667,
+            3.778216,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.326939,
+            0.945046,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -2.1,
+              3.818577,
+              0.0
+            ],
+            [
+              -2.333333,
+              3.737855,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_11",
+          "point": [
+            -2.45,
+            3.698983,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.316105,
+            0.948724,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -2.333333,
+              3.737855,
+              0.0
+            ],
+            [
+              -2.566667,
+              3.660111,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_12",
+          "point": [
+            -2.683333,
+            3.622874,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.30406,
+            0.952653,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -2.566667,
+              3.660111,
+              0.0
+            ],
+            [
+              -2.8,
+              3.585637,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_13",
+          "point": [
+            -2.916667,
+            3.550224,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.290459,
+            0.956888,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -2.8,
+              3.585637,
+              0.0
+            ],
+            [
+              -3.033333,
+              3.51481,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_14",
+          "point": [
+            -3.15,
+            3.48147,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.27477,
+            0.96151,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -3.033333,
+              3.51481,
+              0.0
+            ],
+            [
+              -3.266667,
+              3.448131,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_15",
+          "point": [
+            -3.383333,
+            3.417221,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.256105,
+            0.966649,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -3.266667,
+              3.448131,
+              0.0
+            ],
+            [
+              -3.5,
+              3.386311,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_16",
+          "point": [
+            -3.616667,
+            3.358389,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.232762,
+            0.972534,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -3.5,
+              3.386311,
+              0.0
+            ],
+            [
+              -3.733333,
+              3.330466,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_17",
+          "point": [
+            -3.85,
+            3.306573,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.200636,
+            0.979666,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -3.733333,
+              3.330466,
+              0.0
+            ],
+            [
+              -3.966667,
+              3.282679,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        },
+        {
+          "label": "west_facet_18",
+          "point": [
+            -4.083333,
+            3.26634,
+            0.0
+          ],
+          "outwardNormal": [
+            -0.138701,
+            0.990334,
+            0.0
+          ],
+          "profileSegmentGltf": [
+            [
+              -3.966667,
+              3.282679,
+              0.0
+            ],
+            [
+              -4.2,
+              3.25,
+              0.0
+            ]
+          ],
+          "longitudinalRangeGltfZ": [
+            -3.7,
+            3.7
+          ]
+        }
+      ]
+    }
+  ],
+  "alwaysVisibleNodes": [
+    "FLOOR"
+  ],
+  "defaultVisibility": "all_visible",
+  "visibilityContract": "All groups export visible. Recursively hide/show every descendant renderable, or use renderableNodes; empty group visibility alone does not hide Filament mesh entities.",
+  "planeMeaning": "Unplaced GLB coordinates; transform planes/normals to the same space as camera and target. CEILING boundaryPlanesGltf contains the 36 curved-profile mesh facets before thickness and roof decoration."
+}

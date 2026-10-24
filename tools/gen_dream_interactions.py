@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENES = {
     "dream_bedroom": ("dream_bedroom", "dream_bedroom.glb"),
     "dream_bedroom_2": ("dream_bedroom_2", "dream_bedroom_2.glb"),
+    "dream_bedroom_3": ("dream_bedroom_3", "dream_bedroom_3.glb"),
 }
 
 SDK_OFFSET = (0.0, -1.0, -4.0)
@@ -37,6 +38,9 @@ SIT_LOOP = {
     "DESK_SEAT": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
     "READING_SEAT": "animations/06_坐姿/Elbows On Legs Leaning Forward.vrma",
     "WINDOW_SEAT": "animations/06_坐姿/Little Girl Sitting On A Bench Swinging Her Legs.vrma",
+    # dream_bedroom_3 桃隐仙居:茶席蒲团面朝矮茶桌,莲台为盘腿打坐
+    "TEA_SEAT": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
+    "MEDITATION_SEAT": "animations/06_坐姿/Sitting Cross Legged.vrma",
 }
 
 # anchors that are pure walk targets (walk + turn, no contact pose)

@@ -1,0 +1,459 @@
+{
+  "status": "PASS",
+  "asset": "dream_bedroom_3.glb",
+  "sha256": "c65bf735cef0456be573b3c702a87871831300b0bf79138dcb7983ad4831c21c",
+  "byteLength": 11328188,
+  "actualSceneBounds": {
+    "min": [
+      -4.435000240802765,
+      -0.26999999582767487,
+      -3.7350001368397656
+    ],
+    "max": [
+      4.464999973773956,
+      4.8199997842312925,
+      3.7350001368397265
+    ]
+  },
+  "counts": {
+    "sceneNodes": 96,
+    "meshes": 20,
+    "primitives": 123,
+    "triangles": 183608,
+    "vertices": 191839,
+    "materials": 27,
+    "embeddedImages": 8,
+    "furnitureRoots": 14,
+    "interactionAnchors": 18,
+    "navigableAnchors": 12,
+    "undirectedEdges": 11
+  },
+  "toleranceMeters": 2e-05,
+  "agentRadiusMeters": 0.22,
+  "checks": {
+    "uniqueNames": 1,
+    "coordinates": 2,
+    "sdkPlacement": 4,
+    "cutawaySchema": 13,
+    "cutawayGroups": 1,
+    "cutawayFloor": 8,
+    "cutawayNodeExists": 5,
+    "cutawayRenderables": 10,
+    "cutawayDisjointness": 5,
+    "cutawayBounds": 10,
+    "cutawaySidecar": 6,
+    "layoutContract": 38,
+    "nodeExists": 74,
+    "worldPosition": 32,
+    "sdkWorldPosition": 32,
+    "forward": 32,
+    "nodeForward": 32,
+    "furnitureBounds": 14,
+    "semanticBounds": 1,
+    "facingDirection": 18,
+    "facingDistance": 18,
+    "lookTarget": 12,
+    "anchorExtras": 72,
+    "feetSurfaceContact": 12,
+    "poseContract": 12,
+    "poseSurfaceContact": 6,
+    "anchorIDs": 1,
+    "walkingSidecar": 14,
+    "walkingBounds": 12,
+    "walkingLinks": 45,
+    "connectivity": 1,
+    "navigationBounds": 24,
+    "walkTargetClearance": 1,
+    "edgeClearance": 1,
+    "assetRoot": 1,
+    "openRailings": 2,
+    "timberRoof": 1,
+    "roofPlanes": 37,
+    "roofProfileGeometry": 7,
+    "noExterior": 2,
+    "embeddedImages": 8,
+    "embeddedBuffers": 1,
+    "staticAsset": 2
+  },
+  "navigationCollisions": [],
+  "navigationEndpointCollisions": [],
+  "roofMaterialIndices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13
+  ],
+  "cutawayGroups": [
+    {
+      "node": "WALL_NORTH",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "WALL_NORTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_SOUTH",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "WALL_SOUTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_EAST",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "WALL_EAST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_WEST",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "WALL_WEST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "CEILING",
+      "renderableCount": 1,
+      "renderableNodes": [
+        "CEILING_GEOMETRY"
+      ]
+    }
+  ],
+  "furnitureBounds": [
+    {
+      "node": "FURN_BED",
+      "maxErrorMeters": 2.786560058254395e-07,
+      "actual": {
+        "min": [
+          0.6332917213439941,
+          0.009999997913837433,
+          -2.7250001430511475
+        ],
+        "max": [
+          3.466708183288574,
+          3.115000009536743,
+          0.6319999694824219
+        ]
+      }
+    },
+    {
+      "node": "FURN_NIGHTSTAND",
+      "maxErrorMeters": 2.866973876081147e-07,
+      "actual": {
+        "min": [
+          3.2799999117851257,
+          0.0,
+          -2.2199999690055847
+        ],
+        "max": [
+          3.919999897480011,
+          1.4904487133026123,
+          -1.5489999949932098
+        ]
+      }
+    },
+    {
+      "node": "FURN_DESK",
+      "maxErrorMeters": 3.0912007398242736e-07,
+      "actual": {
+        "min": [
+          -3.550000253292476,
+          0.004999890193093326,
+          -3.099999776475243
+        ],
+        "max": [
+          -1.750000217137266,
+          0.9024999315472408,
+          -2.396999690879926
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_DESK",
+      "maxErrorMeters": 4.521095360310312e-07,
+      "actual": {
+        "min": [
+          -3.0228566030242807,
+          0.015000000596046448,
+          -1.9749999903766218
+        ],
+        "max": [
+          -2.277143547890464,
+          1.2111250162124634,
+          -1.3249999619396624
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_TABLE",
+      "maxErrorMeters": 2.3841857821338408e-08,
+      "actual": {
+        "min": [
+          -2.600000023841858,
+          0.004999995231628418,
+          0.32499998807907104
+        ],
+        "max": [
+          -1.399999976158142,
+          0.7639999985694885,
+          1.175000011920929
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_CUSHION_NORTH",
+      "maxErrorMeters": 1.1920928966180355e-08,
+      "actual": {
+        "min": [
+          -2.3499999940395355,
+          0.009999997913837433,
+          -0.5
+        ],
+        "max": [
+          -1.6500000059604645,
+          0.2199999988079071,
+          0.19999998807907104
+        ]
+      }
+    },
+    {
+      "node": "FURN_TEA_CUSHION_SOUTH",
+      "maxErrorMeters": 4.454533963915708e-08,
+      "actual": {
+        "min": [
+          -2.3500000207034817,
+          0.009999997913837433,
+          1.2999999554546604
+        ],
+        "max": [
+          -1.6499999792965183,
+          0.2199999988079071,
+          1.9999999968616238
+        ]
+      }
+    },
+    {
+      "node": "FURN_RUG",
+      "maxErrorMeters": 1.4355468769267077e-07,
+      "actual": {
+        "min": [
+          -3.0,
+          0.0,
+          -0.9854278564453125
+        ],
+        "max": [
+          0.0,
+          0.04000000283122063,
+          2.4854278564453125
+        ]
+      }
+    },
+    {
+      "node": "FURN_MEDITATION",
+      "maxErrorMeters": 1.0728836064011205e-07,
+      "actual": {
+        "min": [
+          1.5249999165534973,
+          0.0,
+          1.3250001072883606
+        ],
+        "max": [
+          3.1749998927116394,
+          0.2800000011920929,
+          2.9750000834465027
+        ]
+      }
+    },
+    {
+      "node": "FURN_BOOKCASE",
+      "maxErrorMeters": 9.703636161262352e-08,
+      "actual": {
+        "min": [
+          -3.94500008225441,
+          0.0,
+          -0.6700000017881393
+        ],
+        "max": [
+          -3.3420000970363617,
+          1.9599999636411667,
+          1.0700000077486038
+        ]
+      }
+    },
+    {
+      "node": "FURN_ALTAR",
+      "maxErrorMeters": 1.1920928955078125e-07,
+      "actual": {
+        "min": [
+          -3.5500000715255737,
+          0.005000000819563866,
+          2.628090888261795
+        ],
+        "max": [
+          -1.7500001192092896,
+          1.209999918937683,
+          3.2200000882148743
+        ]
+      }
+    },
+    {
+      "node": "FURN_SWORD_STAND",
+      "maxErrorMeters": 4.233834358657873e-07,
+      "actual": {
+        "min": [
+          3.1764065766165643,
+          0.004999998956918716,
+          0.6749999821186066
+        ],
+        "max": [
+          3.700000047683716,
+          1.712656150568538,
+          1.2249999940395355
+        ]
+      }
+    },
+    {
+      "node": "PORTAL_ENTRY",
+      "maxErrorMeters": 5.960464483090178e-09,
+      "actual": {
+        "min": [
+          0.15000000596046448,
+          0.0,
+          3.5
+        ],
+        "max": [
+          0.15000000596046448,
+          0.0,
+          3.5
+        ]
+      }
+    },
+    {
+      "node": "FURN_PEACH_VASE",
+      "maxErrorMeters": 4.57225799443961e-07,
+      "actual": {
+        "min": [
+          -3.789999946951866,
+          0.019999999552965164,
+          -2.339817136526108
+        ],
+        "max": [
+          -3.0251105427742004,
+          1.952525019645691,
+          -1.6287929117679596
+        ]
+      }
+    }
+  ],
+  "poseSurfaceContacts": [
+    {
+      "anchor": "BED_SIT",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.0020000691621886446
+    },
+    {
+      "anchor": "BED_LIE",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.0019998535212305546
+    },
+    {
+      "anchor": "BED_HEAD",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.001999974981663044
+    },
+    {
+      "anchor": "DESK_SEAT",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "surfaceClearanceMeters": 0.0019996166229248047
+    },
+    {
+      "anchor": "TEA_SEAT",
+      "relatedNode": "FURN_TEA_CUSHION_SOUTH",
+      "surfaceClearanceMeters": 0.0019993185997009277
+    },
+    {
+      "anchor": "MEDITATION_SEAT",
+      "relatedNode": "FURN_MEDITATION",
+      "surfaceClearanceMeters": 0.001999601721763611
+    }
+  ],
+  "feetSurfaceContacts": [
+    {
+      "anchor": "SPAWN",
+      "supportHeightMeters": 0.013000001199543476,
+      "surfaceClearanceMeters": 0.0019995225593447685
+    },
+    {
+      "anchor": "ENTRY",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    },
+    {
+      "anchor": "AISLE_CENTER",
+      "supportHeightMeters": 0.013000001199543476,
+      "surfaceClearanceMeters": 0.0019999993965029716
+    },
+    {
+      "anchor": "BED_APPROACH",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    },
+    {
+      "anchor": "DESK_APPROACH",
+      "supportHeightMeters": 0.030999999493360523,
+      "surfaceClearanceMeters": 0.0019998550415039028
+    },
+    {
+      "anchor": "NORTH_AISLE",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    },
+    {
+      "anchor": "WINDOW_VIEW",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    },
+    {
+      "anchor": "TEA_APPROACH",
+      "supportHeightMeters": 0.026000000536441803,
+      "surfaceClearanceMeters": 0.0020000115036964417
+    },
+    {
+      "anchor": "MEDITATION_APPROACH",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.002000415464863181
+    },
+    {
+      "anchor": "ALTAR_APPROACH",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.002000415464863181
+    },
+    {
+      "anchor": "EAST_CROSSING",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    },
+    {
+      "anchor": "SWORD_APPROACH",
+      "supportHeightMeters": 0.0,
+      "surfaceClearanceMeters": 0.001999938627704978
+    }
+  ],
+  "errors": [],
+  "limitations": [
+    "Static graph paths checked against listed furniture AABBs expanded by agent radius; arbitrary entry paths and dynamic avoidance need host logic.",
+    "GLB coordinates and pose contact targets were verified; Android/Filament rendering and a specific VRM sitting/lying fit were not tested.",
+    "SDK walking sidecar contains XZ only. Arrival yaw, ground height, gaze, animations and contact IK need host logic."
+  ]
+}

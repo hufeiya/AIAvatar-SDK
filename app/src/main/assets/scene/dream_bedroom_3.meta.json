@@ -1,0 +1,18 @@
+{
+  "offsetX": 0,
+  "offsetY": -1,
+  "offsetZ": -4,
+  "yawDeg": 0,
+  "bounds": {
+    "minX": -3.65,
+    "maxX": 3.65,
+    "minZ": -7.15,
+    "maxZ": -0.85
+  },
+  "spawn": {
+    "x": 0.0,
+    "y": -0.985,
+    "z": -2.9,
+    "yawDeg": 0
+  }
+}

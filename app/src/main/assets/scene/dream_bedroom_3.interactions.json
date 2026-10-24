@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "scene": "dream_bedroom_3.glb",
+  "title": "桃隐仙居 · Peachveil Sanctuary",
+  "anchorCount": 17,
+  "anchors": [
+    {
+      "id": "spawn",
+      "label": "中央出生/站立",
+      "labelEn": "spawn",
+      "kind": "stand",
+      "x": 0.0,
+      "y": -0.985,
+      "z": -2.9,
+      "yawDeg": 180.0,
+      "look": [
+        0.0,
+        1.0,
+        -7.5
+      ]
+    },
+    {
+      "id": "entry",
+      "label": "门内入口",
+      "labelEn": "entry",
+      "kind": "stand",
+      "x": 0.15,
+      "y": -0.998,
+      "z": -1.05,
+      "yawDeg": 180.0
+    },
+    {
+      "id": "aisle_center",
+      "label": "中央行走通道",
+      "labelEn": "aisle center",
+      "kind": "waypoint",
+      "x": 0.0,
+      "y": -0.985,
+      "z": -4.0,
+      "yawDeg": 180.0
+    },
+    {
+      "id": "bed_approach",
+      "label": "纱帐床侧接近",
+      "labelEn": "bed approach",
+      "kind": "approach",
+      "x": 0.15,
+      "y": -0.998,
+      "z": -4.4,
+      "yawDeg": 90.0,
+      "look": [
+        2.05,
+        -0.1,
+        -5.05
+      ]
+    },
+    {
+      "id": "bed_sit",
+      "label": "床沿坐姿接触",
+      "labelEn": "bed sit",
+      "kind": "sit",
+      "x": 1.05,
+      "y": -0.212731,
+      "z": -4.45,
+      "yawDeg": -90.0,
+      "approach": "bed_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Sit With Fidgeting Feet.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma"
+    },
+    {
+      "id": "bed_lie",
+      "label": "床上仰卧髋背接触",
+      "labelEn": "bed lie",
+      "kind": "lie",
+      "x": 1.5,
+      "y": -0.194731,
+      "z": -5.05,
+      "yawDeg": 180.0,
+      "approach": "bed_approach",
+      "hipsLift": 0.09,
+      "look": [
+        1.5,
+        2.1,
+        -5.05
+      ]
+    },
+    {
+      "id": "desk_approach",
+      "label": "书案椅前接近",
+      "labelEn": "desk approach",
+      "kind": "approach",
+      "x": -2.65,
+      "y": -0.967,
+      "z": -4.85,
+      "yawDeg": 180.0,
+      "look": [
+        -2.65,
+        0.0,
+        -6.75
+      ]
+    },
+    {
+      "id": "desk_seat",
+      "label": "书案椅座面接触",
+      "labelEn": "desk seat",
+      "kind": "sit",
+      "x": -2.65,
+      "y": -0.498,
+      "z": -5.65,
+      "yawDeg": 180.0,
+      "approach": "desk_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+      "look": [
+        -2.65,
+        -0.05,
+        -6.75
+      ]
+    },
+    {
+      "id": "north_aisle",
+      "label": "北侧行走通道",
+      "labelEn": "north aisle",
+      "kind": "waypoint",
+      "x": -0.25,
+      "y": -0.998,
+      "z": -5.3,
+      "yawDeg": 180.0
+    },
+    {
+      "id": "window_view",
+      "label": "北侧栏前观景",
+      "labelEn": "window view",
+      "kind": "stand",
+      "x": -0.2,
+      "y": -0.998,
+      "z": -6.85,
+      "yawDeg": 180.0,
+      "look": [
+        -0.2,
+        0.6,
+        -9.0
+      ]
+    },
+    {
+      "id": "tea_approach",
+      "label": "茶席接近",
+      "labelEn": "tea approach",
+      "kind": "approach",
+      "x": -0.85,
+      "y": -0.972,
+      "z": -2.35,
+      "yawDeg": -90.0,
+      "look": [
+        -2.0,
+        -0.4,
+        -3.25
+      ]
+    },
+    {
+      "id": "tea_seat",
+      "label": "南侧蒲团坐姿接触",
+      "labelEn": "tea seat",
+      "kind": "sit",
+      "x": -2.0,
+      "y": -0.778001,
+      "z": -2.35,
+      "yawDeg": 180.0,
+      "approach": "tea_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Seated Idle With Hands On A Table.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+      "look": [
+        -2.0,
+        -0.4,
+        -3.25
+      ]
+    },
+    {
+      "id": "meditation_approach",
+      "label": "修炼台侧接近",
+      "labelEn": "meditation approach",
+      "kind": "approach",
+      "x": 1.05,
+      "y": -0.998,
+      "z": -1.85,
+      "yawDeg": 90.0,
+      "look": [
+        2.35,
+        -0.35,
+        -1.85
+      ]
+    },
+    {
+      "id": "meditation_seat",
+      "label": "莲台打坐接触",
+      "labelEn": "meditation seat",
+      "kind": "sit",
+      "x": 2.35,
+      "y": -0.8035,
+      "z": -1.85,
+      "yawDeg": 180.0,
+      "approach": "meditation_approach",
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Sitting Cross Legged.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+      "look": [
+        2.35,
+        0.3,
+        -5.0
+      ]
+    },
+    {
+      "id": "altar_approach",
+      "label": "香案侧接近",
+      "labelEn": "altar approach",
+      "kind": "approach",
+      "x": -1.15,
+      "y": -0.998,
+      "z": -1.6,
+      "yawDeg": -90.0,
+      "look": [
+        -2.65,
+        0.2,
+        -1.1
+      ]
+    },
+    {
+      "id": "east_crossing",
+      "label": "床尾修炼台间通道",
+      "labelEn": "east crossing",
+      "kind": "waypoint",
+      "x": 1.05,
+      "y": -0.998,
+      "z": -3.02,
+      "yawDeg": 90.0
+    },
+    {
+      "id": "sword_approach",
+      "label": "剑架前赏剑",
+      "labelEn": "sword approach",
+      "kind": "approach",
+      "x": 2.6,
+      "y": -0.998,
+      "z": -3.02,
+      "yawDeg": 90.0,
+      "look": [
+        3.45,
+        0.0,
+        -3.05
+      ]
+    }
+  ]
+}
