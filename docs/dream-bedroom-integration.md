@@ -78,6 +78,11 @@
   「换场景沿用旧词表」问题。
 - meta 可选 `spawn: {x,y,z,yawDeg}`：模型 Ready 后 `setAvatarWorldPosition` 落点
   （闭室地板不在 y=0，不落点=悬空 1m）。按场景只应用一次。
+- **spawn yawDeg 与资产 SPAWN 锚点刻意不同**（2026-10-24 修）：资产包 SPAWN 的
+  yaw=180 是「面向北窗」的房间设计，但 SDK 相机固定在 +Z 侧看向房内，照抄会让
+  人物开局背对相机（home 等无 spawn 场景默认 heading 0=面向相机，所以只有本场景
+  背影）。meta 落 0=面向相机；`interact spawn` 仍按资产锚点转 180（朝窗），
+  要改需动 Blender 资产侧的 FACING_SPAWN 再重投影。
 
 ## 五、真机验收（2026-10-24，2c3769db/Redmi K20 Pro，debug 变体，全程 60FPS 零 FATAL）
 
