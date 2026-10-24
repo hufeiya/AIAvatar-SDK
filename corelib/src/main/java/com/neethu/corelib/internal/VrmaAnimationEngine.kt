@@ -214,23 +214,32 @@ internal class VrmaAnimationEngine(
         boneRestWorldQuat = restWorld
         boneRestTransforms = restMats
 
-        // Hips Y for translation scaling
+        // Hips Y for translation scaling —— **局部 rest** y（getTransform 直读，
+        // 不经过世界合成）。⚠不能用世界 wm[13]：transformToUnitCube 把模型
+        // **居中**后世界 y = 「hips 相对模型中心的高度」（hips 在中心略下方，
+        // 真机 4705 实测 0.108），拿它当身高比会把所有 VRMA 平移轨道/步态
+        // 提取位移压小 ~8×（0.857→0.104）=「走路慢 4~7 倍」的根因（walk_to/
+        // <move:>/手柄全中招）。局部/素材两侧同为各自 rig 单位，比例即标准
+        // 比例重定向；世界位移由反馈侧 renderScale（链路缩放积）补齐，对
+        // unit-cube 大缩放模型同样成立。bind 时骨骼未被动画改写，局部矩阵
+        // 即 rest；commit 在上（防惰性求值的旧读数）。
         val hipsEntity = entityMap["hips"]
         if (hipsEntity != null) {
             val inst = tm.getInstance(hipsEntity)
             if (inst != 0) {
-                val wm = FloatArray(16)
-                tm.getWorldTransform(inst, wm)
-                targetHipsY = wm[13]
-                if (targetHipsY < 0.01f) targetHipsY = 1.0f
+                val lm = FloatArray(16)
+                tm.getTransform(inst, lm)
+                targetHipsY = if (lm[13] > 0.01f) lm[13] else 1.0f
             }
         }
 
         Log.i(TAG, "Bound ${entityMap.size} bones, hipsY=$targetHipsY, version=$vrmMetaVersion")
     }
 
-    /** 模型 hips 高（米，bindToModel 时测得）——位移提取的尺度换算用；
-     * 素材→模型的缩放比 = 此值 / 素材 restHipsPosition[1]。 */
+    /** 模型 hips **局部 rest** y（bindToModel 时测得）——位移提取的尺度换算
+     * 用；素材→模型的缩放比 = 此值 / 素材 restHipsPosition[1]（两侧同为各自
+     * rig 的局部单位）。世界口径的 hips 高受 transformToUnitCube 居中平移
+     * 污染，不可用（见 bindToModel 注释）。 */
     fun modelHipsHeight(): Float = targetHipsY
 
     /** hips 的 Filament entity（渲染层取世界/局部矩阵算链路渲染尺度用）。 */
