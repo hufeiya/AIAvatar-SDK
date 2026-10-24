@@ -64,25 +64,9 @@ for loc,r in [((-.12,-.15,2.84),.32),((2.82,-.10,2.47),.20)]:
     cylinder('Pendant brass cap',(x,y,z+.19),r*.23,.08,gold,ceiling,32)
     sphere('Pendant glow',(x,y,z-.13),(r*.62,r*.62,.04),glow,ceiling,24,12)
 
-# Forest outside both window walls: optional, original geometry with no image dependency.
-ground=material('Forest ground',(.075,.14,.065),1)
-cube('Forest ground',(0,9,-.34),(33,28,.35),ground,.04,forest)
-tree_specs=[(-7,7,6),(-4.9,6.7,5.1),(-2.7,7.7,6.2),(-.7,6.7,5.3),(1.9,7.4,6.6),(4.2,6.5,5.7),(6.7,5.6,6),(7.7,2.2,5.5),(8.0,-1,6.1),(-8,11,7),(-4,12,7),(1,13,7.5),(5,12,7),(10,8,7)]
-for ti,(tx,ty,h) in enumerate(tree_specs):
-    rod('Forest trunk',(tx,ty,-.25),(tx+.15,ty,h*.85),.13,walnut,forest,10)
-    for j in range(6):
-        a=j*2.4+ti;z=h*(.45+j*.073);r=random.uniform(.65,1.3)
-        ex=tx+math.cos(a)*r;ey=ty+math.sin(a)*r
-        rod('Tree branch',(tx,ty,z-.45),(ex,ey,z+.15),.045,walnut,forest,8)
-        sphere('Forest canopy',(ex,ey,z+.3),(r*.9,r*.85,.75),leaves[(ti+j)%5],forest,16,10)
-    sphere('Tree crown',(tx,ty,h),(1.05,1.0,.9),leaves[ti%5],forest,16,10)
-for i in range(24):
-    x=random.uniform(-8,9);y=random.uniform(5,11)
-    sphere('Fern understory',(x,y,.3),(random.uniform(.6,1.3),.85,.65),leaves[i%5],forest,12,8)
-for o in S.objects:
-    if o.name.startswith(('Forest canopy','Tree crown')):
-        for v in o.data.vertices:
-            p=v.co;p*=1+.10*math.sin(p.x*12+3)*math.sin(p.y*14+1)*math.sin(p.z*11+2)
+# The former procedural forest outside both window walls was removed on 2026-10-24:
+# blob-tree geometry read as fake and cost ~55k tris (22% of the scene). The window
+# view is now the world background haze; hosts that want scenery should add their own.
 
 # Real entrance remains open so avatars can enter; the portal has no collision mesh.
 entry=group('PORTAL_ENTRY','卧室入口',(-2.75,-3.5,0),180)
@@ -104,7 +88,6 @@ for o in [light('North soft daylight',(0,3.1,2.8),(.76,.88,1),500,5,(0,-1,0)),
           light('Front fill',(0,-3,2.7),(1,.86,.69),250,4,(0,1,1)),
           light('Bedside warm pool',(-.8,2.05,1.02),(1,.58,.25),25,.35,(-2,1,.3)),
           light('Reading warm pool',(2.82,-.1,2.28),(1,.64,.32),40,.45,(2.8,-.1,0))]:o.parent=lights
-light('Forest sky softbox',(1,7,10),(.9,1,.85),2400,9,(0,7,1)).parent=lights
 
 def camera(name,loc,target,lens=22):
     c=bpy.data.cameras.new(name);c.lens=lens;c.clip_start=.06;c.clip_end=150
@@ -132,4 +115,4 @@ for screen_area in bpy.context.screen.areas:
         screen_area.spaces.active.overlay.show_overlays=False
 
 bpy.context.view_layer.update()
-print('STAGE 3 • decor, forest, cameras:',len(S.objects),'objects')
+print('STAGE 3 • decor, cameras:',len(S.objects),'objects')

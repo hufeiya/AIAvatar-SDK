@@ -96,10 +96,12 @@ internal class SceneOcclusionController(private val engine: Engine) {
                     .filter { engine.renderableManager.getInstance(it) != 0 }
                 if (entities.isNotEmpty()) groups.add(OccluderGroup(name, entities))
             }
-            // ⚠刻意不把 FOREST_BACKDROP 之类的大背景板补进候选：它们是弯曲
-            // 地形/巨面网格，世界 AABB 罩住整个房间（实测 22×19m），相机恒
-            // "在盒内"→ 任何机位都误判遮挡 → 窗外永远变灰天空盒。sidecar
-            // 契约只声明墙体/天花板是剖切组，背景板交给宿主（README）。
+            // ⚠刻意不把大背景板补进候选：它们是弯曲地形/巨面网格，世界 AABB
+            // 罩住整个房间（dream_bedroom 旧 FOREST_BACKDROP 实测 22×19m），
+            // 相机恒"在盒内"→ 任何机位都误判遮挡 → 窗外永远变灰天空盒。
+            // sidecar 契约只声明墙体/天花板是剖切组，背景板交给宿主（README）。
+            // （dream_bedroom 的 FOREST_BACKDROP 已于 2026-10-24 从场景删除，
+            // 本规则对其余场景/未来资产仍然适用。）
         } else {
             val seenEntities = HashSet<Int>()
             for (prefix in OCCLUDER_PREFIXES) {

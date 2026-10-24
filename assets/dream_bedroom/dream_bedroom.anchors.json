@@ -61,7 +61,7 @@
       "name": "window_view",
       "x": 3.35,
       "z": -5.25,
-      "label": "窗前看森林",
+      "label": "窗前观景",
       "labelEn": "window view",
       "links": [
         "aisle_east_upper"

@@ -26,7 +26,7 @@ class InteractionAnchorsTest {
           "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma"
         },
         {
-          "id": "window_view", "label": "窗前看森林", "labelEn": "window view",
+          "id": "window_view", "label": "窗前观景", "labelEn": "window view",
           "kind": "stand", "x": 3.35, "y": -1.0, "z": -5.25, "yawDeg": 90,
           "look": [5.5, 1.2, -5.25]
         },

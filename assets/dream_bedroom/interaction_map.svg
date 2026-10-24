@@ -317,7 +317,7 @@
 <rect x="1047" y="900" width="822" height="53" rx="7" fill="#f0f3e8"/>
 <circle cx="1071" cy="922" r="13" fill="#fbfaf5" stroke="#2f7354" stroke-width="1.5"/>
 <text x="1071" y="926" font-family="Noto Sans CJK SC, sans-serif" font-size="12" font-weight="700" fill="#2f7354" text-anchor="middle">11</text>
-<text x="1095" y="924" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">窗前看森林</text>
+<text x="1095" y="924" font-family="Noto Sans CJK SC, sans-serif" font-size="17" font-weight="600" fill="#34553b" text-anchor="start">窗前观景</text>
 <text x="1095" y="943" font-family="Noto Sans CJK SC, sans-serif" font-size="11" font-weight="500" fill="#83937b" text-anchor="start">WINDOW_VIEW · 脚底落点</text>
 <text x="1396" y="924" font-family="DejaVu Sans Mono, sans-serif" font-size="15" font-weight="400" fill="#586f51" text-anchor="start">(3.35, 0, −1.25)</text>
 <text x="1849" y="924" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="600" fill="#2f7354" text-anchor="end">90°</text>

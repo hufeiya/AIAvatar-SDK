@@ -1,6 +1,6 @@
 Dream bedroom validation: PASS
-GLB SHA-256: 770657ee7d5b716330f6fcdca00a275ffcf6ea1fa58cf5d4fcfc39ba44abdb52
-Counts: {"sceneNodes": 101, "meshes": 27, "primitives": 129, "triangles": 245128, "materials": 28, "embeddedImages": 6, "furnitureRoots": 15, "interactionAnchors": 18, "navigableAnchors": 12, "undirectedEdges": 11}
+GLB SHA-256: 20f8565b28c70253fb428a3f770a8e62921f02d5634445b35f6443a1fae42fd9
+Counts: {"sceneNodes": 99, "meshes": 26, "primitives": 122, "triangles": 190340, "materials": 27, "embeddedImages": 6, "furnitureRoots": 15, "interactionAnchors": 18, "navigableAnchors": 12, "undirectedEdges": 11}
 Coordinate tolerance: 2e-05 m; navigation radius: 0.22 m
 
 LIMITATION: Geometry validation only: no Android/Filament device rendering or avatar pose fitting was performed.

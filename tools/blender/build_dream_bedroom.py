@@ -100,7 +100,6 @@ wall_west=empty('WALL_WEST',parent=arch,role='wall',canHideForCamera=True,
 ceiling_group=empty('CEILING',parent=arch,role='ceiling',canHideForCamera=True,
                    outwardNormalGltf=[0,1,0],planePointGltf=[0,3.4,0])
 cutaway_groups=[wall_north,wall_south,wall_east,wall_west,ceiling_group]
-forest=empty('FOREST_BACKDROP',parent=root,optional=True,collision=False)
 furnitures={}
 
 def group(name,label,loc,yaw=0):

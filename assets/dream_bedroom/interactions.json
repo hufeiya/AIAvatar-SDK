@@ -813,7 +813,7 @@
     {
       "id": "WINDOW_VIEW",
       "node": "ANCHOR_WINDOW_VIEW",
-      "label": "窗前看森林",
+      "label": "窗前观景",
       "kind": "stand",
       "contact": "feet",
       "gltfPosition": [
@@ -1228,7 +1228,6 @@
     "materials": "Portable glTF metallic-roughness PBR, packed original textures; alpha-blended glass; emissive light meshes.",
     "previewOnly": "Blender area lights and cameras are not exported. Runtime lighting must be configured by the host.",
     "optionalNodes": [
-      "FOREST_BACKDROP",
       "WALL_NORTH",
       "WALL_SOUTH",
       "WALL_EAST",

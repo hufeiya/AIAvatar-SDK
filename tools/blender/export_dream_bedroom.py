@@ -50,7 +50,7 @@ anchor('DESK_SEAT','书桌椅座面中心',(1,1.565,.5495),180,'sit','buttock_su
 anchor('READING_APPROACH','阅读椅前站立点',(1.65,-.65,0),115,'approach','feet',related='FURN_CHAIR_READING',navigable=True)
 seat_world=reading.matrix_world @ Vector((0,-.03,.56))
 anchor('READING_SEAT','阅读椅座面中心',tuple(seat_world),-65,'sit','buttock_surface',related='FURN_CHAIR_READING')
-anchor('WINDOW_VIEW','窗前看森林',(3.35,1.25,0),90,'stand','feet',related='GLASS_PANORAMA_EAST',navigable=True,target=(5.5,1.25,2.2))
+anchor('WINDOW_VIEW','窗前观景',(3.35,1.25,0),90,'stand','feet',related='GLASS_PANORAMA_EAST',navigable=True,target=(5.5,1.25,2.2))
 anchor('TV_APPROACH','电视柜前站立点',(.25,-2.28,0),0,'approach','feet',related='FURN_TV',navigable=True,target=(.3,-3.30,1.55))
 anchor('GAME_APPROACH','游戏机前站立点',(1.12,-2.28,0),0,'approach','feet',related='FURN_GAME_CONSOLE',navigable=True,target=(1.10,-2.82,.80))
 anchor('GAME_PICKUP','游戏手柄抓取参考点',(.55,-2.94,.635),0,'grasp','hand_grip',related='PROP_CONTROLLER',notes='Hand IK / grip reference; not a place for the avatar feet.')
@@ -99,7 +99,7 @@ manifest={
  'poseContract':{'feet':'Foot sole contact with finished floor or rug. Not avatar root.','buttock_surface':'Seat surface target. Apply hips-to-contact offset after evaluating sitting animation.','back_hip_surface':'Supine back/pelvis surface target. Needs lying animation plus bone contact alignment.','hand_grip':'Hand IK reference.','rootPlacement':'Do not set avatar root equal to these contact points. Root translation += targetContactWorld - measuredContactWorld.'},
  'objects':objects,'anchors':anchors,
  'navigation':{'agentRadius':.22,'validatedMode':'Straight graph edges tested against expanded conservative furniture AABBs; rug treated as traversable.','edges':edges,'obstacles':blockers,'limitations':'Bounds are a clamp, not collision detection. Vertical steps, animation, IK and dynamic avoidance are not implemented by this asset.'},
- 'rendering':{'materials':'Portable glTF metallic-roughness PBR, packed original textures; alpha-blended glass; emissive light meshes.','previewOnly':'Blender area lights and cameras are not exported. Runtime lighting must be configured by the host.','optionalNodes':['FOREST_BACKDROP','CEILING_OPTIONAL','CUTAWAY_FRONT_WALL']}
+ 'rendering':{'materials':'Portable glTF metallic-roughness PBR, packed original textures; alpha-blended glass; emissive light meshes.','previewOnly':'Blender area lights and cameras are not exported. Runtime lighting must be configured by the host.','optionalNodes':['CEILING_OPTIONAL','CUTAWAY_FRONT_WALL']}
 }
 (OUT/'interactions.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
 (OUT/'dream_bedroom.anchors.json').write_text(json.dumps(walking,ensure_ascii=False,indent=2)+'\n')
@@ -150,7 +150,7 @@ for group_obj in cutaway_groups:
 manifest['rendering'].update({
     'cutawayGroups':cutaway_records,
     'alwaysVisibleNodes':['FLOOR'],
-    'optionalNodes':['FOREST_BACKDROP']+[o.name for o in cutaway_groups],
+    'optionalNodes':[o.name for o in cutaway_groups],
     'visibilityContract':'Group nodes are empty transforms. Hide/show every descendant renderable; GLB does not run camera-occlusion logic. All groups export visible.',
     'legacyAliases':{'CUTAWAY_FRONT_WALL':'WALL_SOUTH','CEILING_OPTIONAL':'CEILING'},
 })

@@ -92,7 +92,7 @@ line(1060,341,1856,341,'#dfe5d7')
 labels={
 'SPAWN':'中央出生 / 站立', 'RUG_WATCH_TV':'地毯观看电视', 'BED_APPROACH':'床边站立', 'BED_SIT':'床沿坐姿接触',
 'BED_LIE':'床上躺卧髋部接触', 'BED_HEAD':'枕头头部接触', 'DESK_APPROACH':'书桌椅前站立', 'DESK_SEAT':'书桌椅座面中心',
-'READING_APPROACH':'阅读椅前站立', 'READING_SEAT':'阅读椅座面中心', 'WINDOW_VIEW':'窗前看森林', 'TV_APPROACH':'电视柜前站立',
+'READING_APPROACH':'阅读椅前站立', 'READING_SEAT':'阅读椅座面中心', 'WINDOW_VIEW':'窗前观景', 'TV_APPROACH':'电视柜前站立',
 'GAME_APPROACH':'游戏机前站立', 'GAME_PICKUP':'游戏手柄抓取参考', 'ENTRY':'门内入口', 'AISLE_SOUTH':'床尾通道',
 'AISLE_EAST_LOWER':'东侧通道转折', 'AISLE_EAST_UPPER':'东侧窗边通道'}
 for i,a in enumerate(meta['anchors']):
