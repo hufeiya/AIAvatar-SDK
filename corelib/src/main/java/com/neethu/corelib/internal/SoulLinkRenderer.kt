@@ -24,6 +24,7 @@ import com.google.android.filament.utils.Manipulator
 import com.google.android.filament.utils.ModelViewer
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.neethu.corelib.DriveMath
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
@@ -2651,6 +2652,7 @@ internal class SoulLinkRenderer(
         ?: return WalkStartResult.NO_GAIT
         val prevGait = activeGait
         val prevSpeed = walkSpeed
+        val wasIdle = locomotionEngine.snapshot().phase == com.neethu.corelib.WalkPhase.IDLE
         clearHipsDragOffset()
         walkSpeed = speed
         activeGait = gait
@@ -2671,8 +2673,12 @@ internal class SoulLinkRenderer(
         } else {
             startClipDeadlineNanos = 0L
             // 走动中 retarget 且就是当前步态：步态循环继续，不重载不重播
-            // （重播=步态周期跳回第 0 帧，视觉顿挫）
-            val sameGaitPlaying = prevGait == gait && prevSpeed == speed &&
+            // （重播=步态周期跳回第 0 帧，视觉顿挫）。⚠速度差异不进本判定——
+            // 摇杆连续控制逐帧微调速度，等值判定会退回慢路径每帧重播
+            // （docs/gamepad-control-feasibility.md §4.3①）；程序位移步态在
+            // 下面补设播速，外部步态本就由 updateLocomotion 每帧按
+            // commandedSpeed 设（设了也白设，跳过）。
+            val sameGaitPlaying = prevGait == gait &&
                 locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE &&
                 vrmaEngine?.isActive() == true
             if (!sameGaitPlaying) {
@@ -2683,19 +2689,28 @@ internal class SoulLinkRenderer(
                     fadeSeconds = walkFadeSeconds,
                     extractor = if (extractionEnabled) gait.extractor else null,
                 )
+            } else if (speed != prevSpeed && gait.extractor == null) {
+                // 程序位移步态的播速只在播放时设定——retarget 变速要补
+                vrmaEngine?.setPlaybackSpeed(speed / gait.baseSpeed)
             }
             locomotionEngine.startWalk(targetX, targetZ, speed, scenePlacement?.bounds)
         }
-        android.util.Log.i(
-            "SoulLinkRenderer",
-            "startWalk target=(%.2f, %.2f) speed=%.2f gait=%s%s startClip=%s fade=%.2f bounds=%s".format(
-                targetX, targetZ, speed,
-                gait.kind, if (external) "/extract" else "",
-                if (startClipDeadlineNanos != 0L) "on" else "off",
-                walkFadeSeconds,
-                scenePlacement?.bounds?.toString() ?: "none"
+        // 从静止起步必打日志（新走动事件）；走动中 retarget 摇杆会逐帧刷，
+        // 500ms 节流（正常单发 walk_to 不受影响——那是新起步）。
+        val nowNanos = System.nanoTime()
+        if (wasIdle || nowNanos - lastStartWalkLogNanos > 500_000_000L) {
+            lastStartWalkLogNanos = nowNanos
+            android.util.Log.i(
+                "SoulLinkRenderer",
+                "startWalk target=(%.2f, %.2f) speed=%.2f gait=%s%s startClip=%s fade=%.2f bounds=%s".format(
+                    targetX, targetZ, speed,
+                    gait.kind, if (external) "/extract" else "",
+                    if (startClipDeadlineNanos != 0L) "on" else "off",
+                    walkFadeSeconds,
+                    scenePlacement?.bounds?.toString() ?: "none"
+                )
             )
-        )
+        }
         return WalkStartResult.STARTED
     }
 
@@ -2807,6 +2822,128 @@ internal class SoulLinkRenderer(
         val tx = s.x + sin(rad) * 1f
         val tz = s.z + cos(rad) * 1f
         return locomotionEngine.startTurnTo(tx, tz, scenePlacement?.bounds)
+    }
+
+    // ── 模拟量驱动/视角通道（手柄与 ai_cmd pad 共用，docs/gamepad-control-feasibility.md）──
+
+    /** 满杆视角速率（px/s）：orbit 0.01 rad/px → 满杆 ~9 rad/s，实测微调。 */
+    private val LOOK_RATE_PX_PER_S = 900f
+
+    private var driveForward = 0f
+    private var driveStrafe = 0f
+    private var driveRun = false
+    private var lookYaw = 0f
+    private var lookPitch = 0f
+    private var lookResidualX = 0f
+    private var lookResidualY = 0f
+
+    /** 驱动通道自己起步的走动在进行中（归零时由它负责停步，AI 走动不受影响）。 */
+    private var driveWalking = false
+    private var driveRefusalLogNanos = 0L
+    private var lastStartWalkLogNanos = 0L
+    private val driveEye = FloatArray(3)
+    private val driveTarget = FloatArray(3)
+    private val driveUp = FloatArray(3)
+
+    /**
+     * 模拟量驱动通道：手柄左摇杆与 ai_cmd pad 命令族写同一份轴。
+     * [forward]/[strafe] ∈ -1..1，**相机相对**语义（前=远离相机，右=屏幕右）。
+     * 主线程写入（与其它 controller API 同契约），下一帧起生效——非零轴在
+     * updateLocomotion 里逐帧 retarget 步态目标（lookahead 恒在制动半径外，
+     * 恒速平滑），归零停步 crossfade 回待机。走动中 AI walk_to 目标被摇杆
+     * 接管（人 > AI）；松手后 AI 可再下指令（LocomotionDriver 防抖照常）。
+     */
+    fun setDriveAxis(forward: Float, strafe: Float) {
+        driveForward = forward.coerceIn(-1f, 1f)
+        driveStrafe = strafe.coerceIn(-1f, 1f)
+    }
+
+    /**
+     * 模拟量视角通道：右摇杆 -1..1，逐帧 orbitCamera（速率按 dt 缩放，
+     * 亚像素残差累积防慢杆整帧取整归零卡顿）。非零即取消预设机位
+     * steering（orbitCamera 自带 cancel——摇杆接管相机）；机位记录保留，
+     * R3/`camera_shot follow` 可召回。
+     */
+    fun setLookAxis(yaw: Float, pitch: Float) {
+        lookYaw = yaw.coerceIn(-1f, 1f)
+        lookPitch = pitch.coerceIn(-1f, 1f)
+    }
+
+    /** 跑步增益开关（满杆 1.2→2.16 m/s，越 RUN_SPEED_MPS 自动换跑步步态）。 */
+    fun setDriveRun(enabled: Boolean) {
+        driveRun = enabled
+    }
+
+    /** 归零双通道；驱动通道自己起步的走动立即停步（AI walk_to 不受影响）。 */
+    fun clearDrive() {
+        driveForward = 0f
+        driveStrafe = 0f
+        lookYaw = 0f
+        lookPitch = 0f
+        lookResidualX = 0f
+        lookResidualY = 0f
+        if (driveWalking) {
+            driveWalking = false
+            stopWalk()
+        }
+    }
+
+    /** 驱动通道是否正持有一次走动（ai_cmd pad_state 诊断用）。 */
+    fun isDriveWalking(): Boolean = driveWalking
+
+    /** 每帧消费视角轴（doFrame → updateLocomotion 调用）。 */
+    private fun updateLookAxis(dtSeconds: Float) {
+        if (lookYaw == 0f && lookPitch == 0f) return
+        val dyaw = lookYaw * LOOK_RATE_PX_PER_S * dtSeconds + lookResidualX
+        val dpitch = lookPitch * LOOK_RATE_PX_PER_S * dtSeconds + lookResidualY
+        val appliedX = dyaw.roundToInt()
+        val appliedY = dpitch.roundToInt()
+        lookResidualX = dyaw - appliedX
+        lookResidualY = dpitch - appliedY
+        if (appliedX != 0 || appliedY != 0) {
+            orbitCamera(appliedX.toFloat(), appliedY.toFloat())
+        }
+    }
+
+    /**
+     * 每帧消费驱动轴：目标 = 当前位置 + 相机相对方向 × lookahead（
+     * [DriveMath.lookaheadMeters] 保证制动半径外恒速），逐帧 retarget 走
+     * startWalk 同款步态快速路径（不重载剪辑）。拒绝态（NO_SCENE 虚空行走
+     * 守卫/MIMIC/POSE）按 2s 节流告警，不呛帧。
+     */
+    private fun updateDriveAxes(mat: FloatArray) {
+        val forward = driveForward
+        val strafe = driveStrafe
+        if (forward == 0f && strafe == 0f) {
+            if (driveWalking) {
+                driveWalking = false
+                stopWalk()
+            }
+            return
+        }
+        cameraManipulator.getLookAt(driveEye, driveTarget, driveUp)
+        // 俯视相机（gaze 近垂直）退化：沿角色当前朝向走
+        val snap = locomotionEngine.snapshot()
+        val fallbackX = sin(Math.toRadians(snap.headingDeg.toDouble())).toFloat()
+        val fallbackZ = cos(Math.toRadians(snap.headingDeg.toDouble())).toFloat()
+        val dir = DriveMath.cameraRelativeDir(
+            driveTarget[0] - driveEye[0], driveTarget[2] - driveEye[2],
+            forward, strafe, fallbackX, fallbackZ,
+        ) ?: return
+        val speed = DriveMath.speedMps(kotlin.math.hypot(forward, strafe), driveRun)
+        val lookahead = DriveMath.lookaheadMeters(speed)
+        val result = startWalk(
+            mat[12] + dir.first * lookahead,
+            mat[14] + dir.second * lookahead,
+            speed,
+        )
+        driveWalking = result == WalkStartResult.STARTED
+        if (result != WalkStartResult.STARTED &&
+            System.nanoTime() - driveRefusalLogNanos > 2_000_000_000L
+        ) {
+            driveRefusalLogNanos = System.nanoTime()
+            android.util.Log.w("SoulLinkRenderer", "drive axis refused: $result (throttled 2s)")
+        }
     }
 
     // ── 场景交互定姿（坐/躺接触对齐）────────────────────────────────
@@ -2928,6 +3065,10 @@ internal class SoulLinkRenderer(
 
         val mat = FloatArray(16)
         tm.getTransform(instance, mat)
+        // 模拟量通道（手柄/ai_cmd pad）：先消费轴（可能 retarget/停步，
+        // 改写 engine 目标），再做本帧状态机更新——同帧生效
+        updateLookAxis(dtSeconds)
+        updateDriveAxes(mat)
         val external = activeGait?.extractor != null
         val motion = locomotionEngine.update(dtSeconds, mat[12], mat[13], mat[14], external)
         if (motion != null) {

@@ -857,6 +857,52 @@ class AvatarController : AvatarActor {
      */
     override fun getWalkState(): WalkSnapshot? = renderer?.walkSnapshot()
 
+    // ── Public API: Analog drive / look channels（模拟量驱动通道）────────
+
+    /**
+     * Analog drive axis for continuous walking (gamepad left stick, virtual
+     * joystick, any analog source): **camera-relative** semantics, values in
+     * -1..1. While non-zero the renderer re-pins the walk target ahead of the
+     * avatar every frame (constant pace, bounds-clamped); zeroing stops with
+     * the regular crossfade back to idle. Overrides an in-flight AI
+     * [startWalk] target (human > AI); released axes let AI command again.
+     *
+     * Requires a loaded scene (same guards as [startWalk] — the refusal is
+     * logged, the axis stays parked). Main-thread call, same contract as the
+     * rest of this facade.
+     */
+    fun setDriveAxis(forward: Float, strafe: Float) {
+        renderer?.setDriveAxis(forward, strafe)
+    }
+
+    /**
+     * Analog look axis (gamepad right stick): per-frame orbit of the camera,
+     * rate-scaled. Non-zero input releases the active [CameraShot] steering
+     * (manual camera wins); the shot stays recorded and can be re-issued.
+     */
+    fun setLookAxis(yaw: Float, pitch: Float) {
+        renderer?.setLookAxis(yaw, pitch)
+    }
+
+    /**
+     * Run gain for the drive channel (default walk max 1.2 m/s × 1.8 = 2.16
+     * m/s, which auto-selects the run gait when configured).
+     */
+    fun setDriveRun(enabled: Boolean) {
+        renderer?.setDriveRun(enabled)
+    }
+
+    /**
+     * Zero both analog channels; a walk the drive channel started stops
+     * immediately (an AI-initiated [startWalk] is left alone).
+     */
+    fun clearDrive() {
+        renderer?.clearDrive()
+    }
+
+    /** True while the drive channel owns the current walk (diagnostics). */
+    fun isDriveWalking(): Boolean = renderer?.isDriveWalking() ?: false
+
     // ── Public API: Scene Interaction（场景交互定姿）─────────────────────
 
     /**

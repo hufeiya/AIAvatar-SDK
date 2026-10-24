@@ -145,6 +145,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import android.graphics.BitmapFactory
+import android.view.KeyEvent
+import android.view.MotionEvent
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -165,6 +167,24 @@ class MainActivity : ComponentActivity() {
 
     /** Intent-issued commands, consumed by [DemoScreen] once composed. */
     private val aiCommands = Channel<AiDebugCommand>(Channel.UNLIMITED)
+
+    /**
+     * 手柄输入枢纽（docs/gamepad-control-feasibility.md）：硬件事件与 ai_cmd
+     * `pad` 命令族共用；进程级单例（MIUI 闪断重建 Activity 不丢状态），
+     * 控制器由 [DemoScreen] 组装后 [GamepadHub.attach]。
+     */
+    private val gamepadHub: GamepadHub get() = GamepadHub.get(applicationContext)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        if (gamepadHub.onKeyEvent(event)) true else super.dispatchKeyEvent(event)
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean =
+        if (gamepadHub.onMotionEvent(event)) true else super.onGenericMotionEvent(event)
+
+    override fun onPause() {
+        super.onPause()
+        gamepadHub.onAppPaused()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -193,6 +213,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(innerPadding),
                             uiState = uiState,
                             aiCommands = aiCommands,
+                            gamepad = gamepadHub,
                             onOpenDrawer = { scope.launch { drawerState.open() } },
                         )
                     }
@@ -940,6 +961,7 @@ private fun DemoScreen(
     modifier: Modifier = Modifier,
     uiState: DemoUiState,
     aiCommands: Channel<AiDebugCommand>,
+    gamepad: GamepadHub,
     onOpenDrawer: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -948,6 +970,12 @@ private fun DemoScreen(
     val fps by controller.fps.collectAsState()
     // 在播特效快照：设置页特效组的停止行计数
     val activeVfx by controller.effects.collectAsState()
+    // 手柄 HUD chip：连接即显示（ai_cmd pad / 硬件事件共用同一枢纽）
+    val gamepadName by gamepad.deviceName.collectAsState()
+
+    LaunchedEffect(controller) {
+        gamepad.attach(controller)
+    }
 
     // ── 界面语言（多语言支持）：语言变化 = 重组全部 UI 文案 + 重建 AI 会话 ──
     val strings = remember(uiState.lang) { Strings(uiState.lang) }
@@ -2621,7 +2649,7 @@ private fun DemoScreen(
     // AI debug interface: execute queued Intent commands for the screen's lifetime
     LaunchedEffect(aiCommands) {
         for (command in aiCommands) {
-            executeAiCommand(context, controller, uiState, command, chatHooks)
+            executeAiCommand(context, controller, uiState, command, chatHooks, gamepad)
         }
     }
 
@@ -2667,6 +2695,26 @@ private fun DemoScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 180.dp)
         )
+
+        // Gamepad HUD chip (top-end, under the FPS badge): visible while a
+        // controller is connected — hardware axes and ai_cmd pad share the hub
+        if (gamepadName != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 44.dp, end = 12.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.Black.copy(alpha = 0.45f)
+            ) {
+                Text(
+                    text = "🎮 ${gamepadName!!.takeLast(24)} — L:move R:cam",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
 
         // 视频模式 PiP：用户相机实时预览小窗（可拖动，位置持久化；可切前后摄）。
         // 摆在 Box 最上层（输入条之上），拖动不受聊天条遮挡。

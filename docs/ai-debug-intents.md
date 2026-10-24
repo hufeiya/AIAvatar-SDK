@@ -50,6 +50,7 @@
 | `walk_extract` | `on` \| `off` \| `status` | **P2 方案 C 位移提取总开关**（A/B 对拍用）：带烘焙位移步态的 hips 前向分量剥离回灌 root；off=程序位移（P1 行为） |
 | `anchors` | — | 列出会话注入的走动锚点表（`<move:>` 词表 = move_to 工具白名单，`assets/scene/home.anchors.json`；⇄ 标记 waypoint links）；无会话/空表给出原因行 |
 | `walk_transit` | `ai_arg`：空=查看；`off`=清除；`start <assets/*.vrma>` / `stop <assets/*.vrma>` | **P1 过渡剪辑 A/B 入口**（docs/locomotion-feasibility.md §5.2）：起步剪辑播放期程序位移冻结、播完切步态循环；停步剪辑 one-shot 播完自动回待机。默认关（库内起步候选带 0.8~1.7m root motion 会双重位移，测量见交接文档坑 23） |
+| `pad` | `ai_arg`=子命令（见下） | **手柄枢纽族**（docs/gamepad-control-feasibility.md §6）：与物理手柄写**同一份模拟量轴状态**（corelib drive/look 通道），AI 的连续控制通道。子命令：`move <左右-1..1> <前后-1..1> [秒]`（左摇杆=走动，**相机相对**，+1=前；秒=到时自动归零，省略=锁存最长 10s）/ `look <yaw> <pitch> [秒]`（右摇杆=视角环绕）/ `release`（全轴归零=松开手柄）/ `run [on\|off]`（跑步增益，省略=翻转，=手柄 A 键）/ `press a\|b`（注入按键沿）/ `state`（设备/轴值/锁存源/走动相位快照）/ `on\|off`（总开关）。数字也可用 `ai_x/ai_y/ai_z` extras 按位传（第 1/2/3 个数）。**人机仲裁**：任一通道硬件摇杆真实越死区=立即清该通道 AI 锁存（人 > AI）；Activity onPause 时轴自动清零（防后台走位）。真机已验证：锁存走动/限时走/视角环绕/跑步换挡/A 键注入 |
 | `scene_offset` | `ai_x` `ai_y` `ai_z` | 对位标定探针：把已加载场景平移指定米数（在 load 抓拍的基准上累计，不逐次叠加）；回显可直接抄进 `assets/scene/<场景>.meta.json` 的 placement JSON |
 | `scene_rot` | `ai_x`=度 | 对位标定探针：把已加载场景绕 Y 轴旋转指定度数；同 scene_offset 回显 meta |
 | `zoom` | `ai_x` | 相机推拉，取值为「双指张开距离」像素：正数放大、负数缩小 |
@@ -154,6 +155,15 @@ adb shell am start -n $PKG/.MainActivity --es ai_cmd pan --ef ai_x -150 --ef ai_
 adb shell am start -n $PKG/.MainActivity --es ai_cmd orbit --ef ai_x 200 --ef ai_y -100
 adb shell am start -n $PKG/.MainActivity --es ai_cmd reset_camera
 adb shell am start -n $PKG/.MainActivity --es ai_cmd camera_shot --es ai_arg closeup
+
+# 手柄枢纽：锁存前进 3 秒（相机相对）/ 视角环绕 2 秒 / 跑步挡 / 急停
+adb shell am start -n $PKG/.MainActivity --es ai_cmd pad --es ai_arg "'move 0 1 3'"
+adb shell am start -n $PKG/.MainActivity --es ai_cmd pad --es ai_arg "'look 0.9 0 2'"
+adb shell am start -n $PKG/.MainActivity --es ai_cmd pad --es ai_arg "run on"
+adb shell am start -n $PKG/.MainActivity --es ai_cmd pad --es ai_arg release
+adb shell am start -n $PKG/.MainActivity --es ai_cmd pad --es ai_arg state
+# 注入手柄按键沿（KEYCODE_BUTTON_A=96 跑步 / BUTTON_B=97 停）——无手柄验证按键路径
+adb shell input keyevent 96
 
 # 视线（任务 5）：查状态 / 指向世界坐标点 / 回到注视用户 / 关闭
 adb shell am start -n $PKG/.MainActivity --es ai_cmd look_at

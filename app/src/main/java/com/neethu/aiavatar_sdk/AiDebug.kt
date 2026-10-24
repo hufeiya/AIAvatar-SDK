@@ -175,6 +175,19 @@ fun aiDebugHelp(): String = """
     |                           (one-shot clips; program motion held while the
     |                           start clip plays; measured candidates in
     |                           docs/locomotion-feasibility.md §5.2)
+    |  pad                      Gamepad hub commands (analog drive channel —
+    |                           same state a physical controller writes,
+    |                           docs/gamepad-control-feasibility.md):
+    |                           move <左右-1..1> <前后-1..1> [秒] — latch walk
+    |                           (camera-relative; +1 forward; seconds = auto-
+    |                           release, else max 10s latch); look <yaw>
+    |                           <pitch> [秒] — right stick; release — zero all;
+    |                           run [on|off] — run gain (A button);
+    |                           press a|b — inject button edge; state — dump
+    |                           axes/latch/walk; on|off — master switch.
+    |                           Numbers also via ai_x/ai_y/ai_z (positional).
+    |                           Human priority: a real stick move overrides
+    |                           the AI latch on that channel.
     |  scene_offset             Nudge the loaded scene: ai_x/ai_y/ai_z = meters.
     |                           Calibration probe — paste the echoed placement
     |                           json into assets/scene/<scene>.meta.json

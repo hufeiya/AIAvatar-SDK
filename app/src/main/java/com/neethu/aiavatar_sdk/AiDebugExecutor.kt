@@ -150,6 +150,7 @@ internal suspend fun executeAiCommand(
     uiState: DemoUiState,
     command: AiDebugCommand,
     chat: AiChatDebugHooks? = null,
+    gamepad: GamepadHub? = null,
 ) {
     val result: String = try {
         when (command.name) {
@@ -202,6 +203,12 @@ internal suspend fun executeAiCommand(
             "walk_fade" -> walkFadeCommand(controller, command.arg)
             "walk_overlay" -> walkOverlayCommand(controller, command.arg)
             "walk_extract" -> walkExtractCommand(controller, command.arg)
+            "pad" -> {
+                // 手柄枢纽命令族（docs/gamepad-control-feasibility.md §6）：与
+                // 硬件手柄写同一份轴状态——AI 的模拟量连续控制通道
+                if (gamepad == null) throw IllegalStateException("gamepad hub not wired in this screen")
+                gamepad.executeCommand(command)
+            }
             "anchors" -> anchorsCommand(chat)
             "interactions" -> interactionsCommand(chat)
             "interact" -> interactCommand(controller, chat, command.arg)
