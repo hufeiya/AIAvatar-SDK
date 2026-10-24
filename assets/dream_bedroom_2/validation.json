@@ -1,0 +1,451 @@
+{
+  "status": "PASS",
+  "asset": "dream_bedroom_2.glb",
+  "sha256": "51be86674df6dfca7265c6b3db966eff6eea3ef1d10f38e4b3a75dbc6bd5e77d",
+  "byteLength": 7772332,
+  "counts": {
+    "sceneNodes": 104,
+    "meshes": 24,
+    "primitives": 109,
+    "triangles": 135774,
+    "materials": 21,
+    "embeddedImages": 6,
+    "furnitureRoots": 19,
+    "interactionAnchors": 20,
+    "navigableAnchors": 13,
+    "undirectedEdges": 12
+  },
+  "toleranceMeters": 2e-05,
+  "agentRadiusMeters": 0.22,
+  "checks": {
+    "uniqueNames": 1,
+    "coordinates": 2,
+    "sdkPlacement": 4,
+    "cutawaySchema": 13,
+    "cutawayGroups": 1,
+    "cutawayFloor": 8,
+    "cutawayNodeExists": 5,
+    "cutawayRenderables": 10,
+    "cutawayDisjointness": 10,
+    "cutawayBounds": 10,
+    "cutawaySidecar": 6,
+    "nodeExists": 81,
+    "worldPosition": 39,
+    "sdkWorldPosition": 39,
+    "forward": 39,
+    "nodeForward": 39,
+    "furnitureBounds": 19,
+    "semanticBounds": 1,
+    "facingDirection": 20,
+    "facingDistance": 20,
+    "lookTarget": 12,
+    "anchorExtras": 80,
+    "poseContract": 12,
+    "poseSurfaceContact": 6,
+    "anchorIDs": 1,
+    "walkingSidecar": 15,
+    "walkingBounds": 13,
+    "walkingLinks": 49,
+    "connectivity": 1,
+    "navigationBounds": 20,
+    "walkTargetClearance": 1,
+    "edgeClearance": 1,
+    "glassRoof": 3,
+    "glassRoofSlope": 3,
+    "noExterior": 1,
+    "embeddedImages": 6,
+    "embeddedBuffers": 1,
+    "staticAsset": 2
+  },
+  "navigationCollisions": [],
+  "navigationEndpointCollisions": [],
+  "glassRoofMaterialIndices": [
+    4
+  ],
+  "cutawayGroups": [
+    {
+      "node": "WALL_NORTH",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "GLASS_PANORAMA_NORTH_GEOMETRY",
+        "WALL_NORTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_SOUTH",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "FURN_TV_GEOMETRY",
+        "WALL_SOUTH_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_EAST",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "GLASS_PANORAMA_EAST_GEOMETRY",
+        "WALL_EAST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "WALL_WEST",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "FURN_BOOKCASE_GEOMETRY",
+        "WALL_WEST_GEOMETRY"
+      ]
+    },
+    {
+      "node": "CEILING",
+      "renderableCount": 2,
+      "renderableNodes": [
+        "CEILING_GEOMETRY",
+        "GLASS_ROOF_GEOMETRY"
+      ]
+    }
+  ],
+  "furnitureBounds": [
+    {
+      "node": "FURN_BED",
+      "maxErrorMeters": 3.1256335164542293e-07,
+      "actual": {
+        "min": [
+          -3.5352503125633516,
+          0.09802989959073849,
+          -2.864500001369459
+        ],
+        "max": [
+          -0.7647499936554545,
+          1.3018608839802315,
+          0.764499846580458
+        ]
+      }
+    },
+    {
+      "node": "FURN_NIGHTSTAND",
+      "maxErrorMeters": 3.056228126130378e-07,
+      "actual": {
+        "min": [
+          -0.7250000200793139,
+          1.862645149230957e-09,
+          -2.425000292100009
+        ],
+        "max": [
+          -0.17500003237277184,
+          1.1818400328195082,
+          -1.8200003056228127
+        ]
+      }
+    },
+    {
+      "node": "FURN_DESK",
+      "maxErrorMeters": 1.0728836041806744e-07,
+      "actual": {
+        "min": [
+          3.0249999165534973,
+          0.019999980926513672,
+          -1.3250000476837156
+        ],
+        "max": [
+          3.6749998927116394,
+          1.2990000247955322,
+          0.19999998807907093
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_DESK",
+      "maxErrorMeters": 4.92326736451637e-07,
+      "actual": {
+        "min": [
+          2.082073360681534,
+          0.02765849232673645,
+          -0.8400000035762787
+        ],
+        "max": [
+          2.730000078678131,
+          1.049504041671753,
+          -0.2600000202655792
+        ]
+      }
+    },
+    {
+      "node": "FURN_RUG",
+      "maxErrorMeters": 1.7562484733169015e-07,
+      "actual": {
+        "min": [
+          -1.5,
+          0.0,
+          -1.1816691756248474
+        ],
+        "max": [
+          1.5,
+          0.04399999976158142,
+          2.5816691517829895
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_READING",
+      "maxErrorMeters": 1.4240455636915783e-07,
+      "actual": {
+        "min": [
+          2.2500000596046448,
+          0.02649196982383728,
+          1.0535998940467834
+        ],
+        "max": [
+          3.151522070169449,
+          1.1493281424045563,
+          2.046400010585785
+        ]
+      }
+    },
+    {
+      "node": "FURN_SIDE_TABLE",
+      "maxErrorMeters": 1.0013580320489268e-07,
+      "actual": {
+        "min": [
+          2.6200000047683716,
+          0.009999990463256836,
+          2.2700001001358032
+        ],
+        "max": [
+          3.3799999952316284,
+          1.227060079574585,
+          3.03000009059906
+        ]
+      }
+    },
+    {
+      "node": "FURN_TELESCOPE",
+      "maxErrorMeters": 2.982787412619814e-07,
+      "actual": {
+        "min": [
+          1.7924302791296223,
+          0.011999976739289764,
+          -2.897925298278741
+        ],
+        "max": [
+          2.934472167252445,
+          1.8388508079457857,
+          -1.9465238177301034
+        ]
+      }
+    },
+    {
+      "node": "FURN_WINDOW_BENCH",
+      "maxErrorMeters": 3.6975479122958177e-07,
+      "actual": {
+        "min": [
+          0.04999995231628418,
+          0.019999980926513672,
+          -3.3799999058246613
+        ],
+        "max": [
+          3.549999952316284,
+          1.2551093697547913,
+          -2.8199999034404755
+        ]
+      }
+    },
+    {
+      "node": "FURN_BOOKCASE",
+      "maxErrorMeters": 4.1083908053352047e-07,
+      "actual": {
+        "min": [
+          -4.03041335940361,
+          0.8199301064014435,
+          -2.7799999713897705
+        ],
+        "max": [
+          -3.5644705891609196,
+          3.0655319690704346,
+          -0.019999980926513894
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHEST",
+      "maxErrorMeters": 2.0384788523841735e-07,
+      "actual": {
+        "min": [
+          -3.320000112056732,
+          0.0,
+          2.2550000846385956
+        ],
+        "max": [
+          -1.9800000190734863,
+          1.2410000562667847,
+          3.067500203847885
+        ]
+      }
+    },
+    {
+      "node": "FURN_MEDIA_CONSOLE",
+      "maxErrorMeters": 2.731873312566968e-07,
+      "actual": {
+        "min": [
+          0.44999972681266875,
+          -1.1324883086860638e-08,
+          2.788586877303776
+        ],
+        "max": [
+          2.850000020463577,
+          0.5800000733137289,
+          3.3949998148313227
+        ]
+      }
+    },
+    {
+      "node": "FURN_TV",
+      "maxErrorMeters": 2.1372652980744533e-07,
+      "actual": {
+        "min": [
+          0.7749999752839173,
+          1.190000057220459,
+          3.29199978627347
+        ],
+        "max": [
+          2.524999977032367,
+          2.2100000381469727,
+          3.3749999886276854
+        ]
+      }
+    },
+    {
+      "node": "FURN_GAME_CONSOLE",
+      "maxErrorMeters": 1.549321955174321e-07,
+      "actual": {
+        "min": [
+          2.024999892035826,
+          0.5799999833106995,
+          2.958999853026326
+        ],
+        "max": [
+          2.1749999172293,
+          0.8399999737739563,
+          3.2299998450678045
+        ]
+      }
+    },
+    {
+      "node": "PROP_CONTROLLER",
+      "maxErrorMeters": 2.5449669038835054e-07,
+      "actual": {
+        "min": [
+          1.3599999450981897,
+          0.5799999833106995,
+          2.97499983198941
+        ],
+        "max": [
+          1.6400000058949307,
+          0.7174999783746898,
+          3.1379997455033095
+        ]
+      }
+    },
+    {
+      "node": "PORTAL_ENTRY",
+      "maxErrorMeters": 2.384185793236071e-08,
+      "actual": {
+        "min": [
+          -0.8999999761581421,
+          0.0,
+          3.5
+        ],
+        "max": [
+          -0.8999999761581421,
+          0.0,
+          3.5
+        ]
+      }
+    },
+    {
+      "node": "GLASS_PANORAMA_NORTH",
+      "maxErrorMeters": 1.2636184720804522e-07,
+      "actual": {
+        "min": [
+          -3.940000057220459,
+          0.699999988079071,
+          -3.490000009536743
+        ],
+        "max": [
+          3.940000057220459,
+          4.819999873638153,
+          -3.490000009536743
+        ]
+      }
+    },
+    {
+      "node": "GLASS_PANORAMA_EAST",
+      "maxErrorMeters": 6.437301625084046e-08,
+      "actual": {
+        "min": [
+          3.984000009484588,
+          0.699999988079071,
+          -3.440000057220458
+        ],
+        "max": [
+          3.996000009588898,
+          3.1200000643730164,
+          3.440000057220458
+        ]
+      }
+    },
+    {
+      "node": "GLASS_ROOF",
+      "maxErrorMeters": 9.536743128535363e-08,
+      "actual": {
+        "min": [
+          -3.9800000190734863,
+          3.1584999561309814,
+          -3.490000009536743
+        ],
+        "max": [
+          3.9800000190734863,
+          4.849999904632568,
+          3.490000009536743
+        ]
+      }
+    }
+  ],
+  "poseSurfaceContacts": [
+    {
+      "anchor": "BED_SIT",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.0020003470678130464
+    },
+    {
+      "anchor": "BED_LIE",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.0020001544277507
+    },
+    {
+      "anchor": "BED_HEAD",
+      "relatedNode": "FURN_BED",
+      "surfaceClearanceMeters": 0.002000581157188819
+    },
+    {
+      "anchor": "DESK_SEAT",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "surfaceClearanceMeters": 0.001999899744987488
+    },
+    {
+      "anchor": "READING_SEAT",
+      "relatedNode": "FURN_CHAIR_READING",
+      "surfaceClearanceMeters": 0.0019994527101516724
+    },
+    {
+      "anchor": "WINDOW_SEAT",
+      "relatedNode": "FURN_WINDOW_BENCH",
+      "surfaceClearanceMeters": 0.0020004212856292725
+    }
+  ],
+  "errors": [],
+  "limitations": [
+    "Static graph paths checked against listed furniture AABBs expanded by agent radius; arbitrary entry paths and dynamic avoidance need host logic.",
+    "GLB coordinates and pose contact targets were verified; Android/Filament rendering and a specific VRM sitting/lying fit were not tested.",
+    "SDK walking sidecar contains XZ only. Arrival yaw, ground height, gaze, animations and contact IK need host logic."
+  ]
+}

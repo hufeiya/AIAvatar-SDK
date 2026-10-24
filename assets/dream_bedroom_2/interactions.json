@@ -1,0 +1,1687 @@
+{
+  "schemaVersion": 1,
+  "title": "星潮玻璃小屋 · Starlit Tide",
+  "units": "meters",
+  "coordinateSystem": {
+    "handedness": "right",
+    "up": "+Y",
+    "defaultAvatarForward": "+Z",
+    "yaw": "degrees about +Y, positive turns +Z toward +X",
+    "blenderToGltf": "[x,y,z] -> [x,z,-y]",
+    "floorGltfY": 0
+  },
+  "room": {
+    "width": 8,
+    "depth": 7,
+    "eaveHeight": 3.15,
+    "ridgeHeight": 4.85,
+    "height": 4.85,
+    "roofSlope": 0.425,
+    "gltfInteriorBounds": {
+      "min": [
+        -4,
+        0,
+        -3.5
+      ],
+      "max": [
+        4,
+        4.85,
+        3.5
+      ]
+    }
+  },
+  "sdkPlacement": {
+    "offsetX": 0,
+    "offsetY": -1,
+    "offsetZ": -4,
+    "yawDeg": 0,
+    "formula": "sdkWorld = gltfPosition + [0,-1,-4]"
+  },
+  "poseContract": {
+    "feet": "Sole contact with floor/rug, not avatar root.",
+    "buttock_surface": "Seat surface contact; evaluate sitting pose and apply hips-to-contact offset.",
+    "back_hip_surface": "Supine pelvis/back surface; needs lying animation and bone contact alignment.",
+    "head_surface": "Optional pillow/head surface calibration, not a walking destination.",
+    "hand_grip": "Hand IK/grip reference.",
+    "rootPlacement": "rootTranslation += targetContactWorld - measuredContactWorld"
+  },
+  "objects": [
+    {
+      "node": "FURN_BED",
+      "label": "橡木船形双人床",
+      "gltfOrigin": [
+        -2.15,
+        0.0,
+        -1.05
+      ],
+      "sdkWorldOrigin": [
+        -2.15,
+        -1.0,
+        -5.05
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.53525,
+          0.09803,
+          -2.8645
+        ],
+        "max": [
+          -0.76475,
+          1.301861,
+          0.7645
+        ]
+      }
+    },
+    {
+      "node": "FURN_NIGHTSTAND",
+      "label": "床头小柜",
+      "gltfOrigin": [
+        -0.45,
+        0.0,
+        -2.15
+      ],
+      "sdkWorldOrigin": [
+        -0.45,
+        -1.0,
+        -6.15
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -0.725,
+          0.0,
+          -2.425
+        ],
+        "max": [
+          -0.175,
+          1.18184,
+          -1.82
+        ]
+      }
+    },
+    {
+      "node": "FURN_DESK",
+      "label": "窗边书桌",
+      "gltfOrigin": [
+        3.35,
+        0.0,
+        -0.55
+      ],
+      "sdkWorldOrigin": [
+        3.35,
+        -1.0,
+        -4.55
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.025,
+          0.02,
+          -1.325
+        ],
+        "max": [
+          3.675,
+          1.299,
+          0.2
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_DESK",
+      "label": "书桌椅",
+      "gltfOrigin": [
+        2.42,
+        0.0,
+        -0.55
+      ],
+      "sdkWorldOrigin": [
+        2.42,
+        -1.0,
+        -4.55
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "gltfBounds": {
+        "min": [
+          2.082073,
+          0.027658,
+          -0.84
+        ],
+        "max": [
+          2.73,
+          1.049504,
+          -0.26
+        ]
+      }
+    },
+    {
+      "node": "FURN_RUG",
+      "label": "蓝白潮汐编织地毯",
+      "gltfOrigin": [
+        0.0,
+        0.0,
+        0.7
+      ],
+      "sdkWorldOrigin": [
+        0.0,
+        -1.0,
+        -3.3
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -1.5,
+          0.0,
+          -1.181669
+        ],
+        "max": [
+          1.5,
+          0.044,
+          2.581669
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHAIR_READING",
+      "label": "蓝色阅读扶手椅",
+      "gltfOrigin": [
+        2.7,
+        0.0,
+        1.55
+      ],
+      "sdkWorldOrigin": [
+        2.7,
+        -1.0,
+        -2.45
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "gltfBounds": {
+        "min": [
+          2.25,
+          0.026492,
+          1.0536
+        ],
+        "max": [
+          3.151522,
+          1.149328,
+          2.0464
+        ]
+      }
+    },
+    {
+      "node": "FURN_SIDE_TABLE",
+      "label": "黄铜束带木桶边几",
+      "gltfOrigin": [
+        3.0,
+        0.0,
+        2.65
+      ],
+      "sdkWorldOrigin": [
+        3.0,
+        -1.0,
+        -1.35
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          2.62,
+          0.01,
+          2.27
+        ],
+        "max": [
+          3.38,
+          1.22706,
+          3.03
+        ]
+      }
+    },
+    {
+      "node": "FURN_TELESCOPE",
+      "label": "黄铜天文望远镜",
+      "gltfOrigin": [
+        2.35,
+        0.0,
+        -2.4
+      ],
+      "sdkWorldOrigin": [
+        2.35,
+        -1.0,
+        -6.4
+      ],
+      "yawDeg": -25.0,
+      "forward": [
+        -0.422618,
+        0.0,
+        0.906308
+      ],
+      "gltfBounds": {
+        "min": [
+          1.79243,
+          0.012,
+          -2.897925
+        ],
+        "max": [
+          2.934472,
+          1.838851,
+          -1.946524
+        ]
+      }
+    },
+    {
+      "node": "FURN_WINDOW_BENCH",
+      "label": "窗下长书柜",
+      "gltfOrigin": [
+        1.8,
+        0.0,
+        -3.1
+      ],
+      "sdkWorldOrigin": [
+        1.8,
+        -1.0,
+        -7.1
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          0.05,
+          0.02,
+          -3.38
+        ],
+        "max": [
+          3.55,
+          1.255109,
+          -2.82
+        ]
+      }
+    },
+    {
+      "node": "FURN_BOOKCASE",
+      "label": "床头悬挂藏书架",
+      "gltfOrigin": [
+        -3.93,
+        1.3,
+        -1.4
+      ],
+      "sdkWorldOrigin": [
+        -3.93,
+        0.3,
+        -5.4
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.030413,
+          0.81993,
+          -2.78
+        ],
+        "max": [
+          -3.564471,
+          3.065532,
+          -0.02
+        ]
+      }
+    },
+    {
+      "node": "FURN_CHEST",
+      "label": "航海黄铜收纳箱",
+      "gltfOrigin": [
+        -2.65,
+        0.0,
+        2.65
+      ],
+      "sdkWorldOrigin": [
+        -2.65,
+        -1.0,
+        -1.35
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.32,
+          0.0,
+          2.255
+        ],
+        "max": [
+          -1.98,
+          1.241,
+          3.0675
+        ]
+      }
+    },
+    {
+      "node": "FURN_MEDIA_CONSOLE",
+      "label": "南侧影音矮柜",
+      "gltfOrigin": [
+        1.65,
+        0.0,
+        3.12
+      ],
+      "sdkWorldOrigin": [
+        1.65,
+        -1.0,
+        -0.88
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          0.45,
+          -0.0,
+          2.788587
+        ],
+        "max": [
+          2.85,
+          0.58,
+          3.395
+        ]
+      }
+    },
+    {
+      "node": "FURN_TV",
+      "label": "壁挂显示屏",
+      "gltfOrigin": [
+        1.65,
+        1.7,
+        3.34
+      ],
+      "sdkWorldOrigin": [
+        1.65,
+        0.7,
+        -0.66
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          0.775,
+          1.19,
+          3.292
+        ],
+        "max": [
+          2.525,
+          2.21,
+          3.375
+        ]
+      }
+    },
+    {
+      "node": "FURN_GAME_CONSOLE",
+      "label": "游戏主机",
+      "gltfOrigin": [
+        2.1,
+        0.58,
+        3.1
+      ],
+      "sdkWorldOrigin": [
+        2.1,
+        -0.42,
+        -0.9
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          2.025,
+          0.58,
+          2.959
+        ],
+        "max": [
+          2.175,
+          0.84,
+          3.23
+        ]
+      }
+    },
+    {
+      "node": "PROP_CONTROLLER",
+      "label": "游戏手柄",
+      "gltfOrigin": [
+        1.5,
+        0.635,
+        3.05
+      ],
+      "sdkWorldOrigin": [
+        1.5,
+        -0.365,
+        -0.95
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          1.36,
+          0.58,
+          2.975
+        ],
+        "max": [
+          1.64,
+          0.7175,
+          3.138
+        ]
+      }
+    },
+    {
+      "node": "PORTAL_ENTRY",
+      "label": "入口",
+      "gltfOrigin": [
+        -0.9,
+        0.0,
+        3.5
+      ],
+      "sdkWorldOrigin": [
+        -0.9,
+        -1.0,
+        -0.5
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -0.9,
+          0.0,
+          3.5
+        ],
+        "max": [
+          -0.9,
+          0.0,
+          3.5
+        ]
+      },
+      "boundsKind": "semantic_point"
+    },
+    {
+      "node": "GLASS_PANORAMA_NORTH",
+      "label": "北侧山墙玻璃",
+      "gltfOrigin": [
+        0.0,
+        0.7,
+        -3.49
+      ],
+      "sdkWorldOrigin": [
+        0.0,
+        -0.3,
+        -7.49
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.94,
+          0.7,
+          -3.49
+        ],
+        "max": [
+          3.94,
+          4.82,
+          -3.49
+        ]
+      }
+    },
+    {
+      "node": "GLASS_PANORAMA_EAST",
+      "label": "东侧全景玻璃",
+      "gltfOrigin": [
+        3.99,
+        0.7,
+        0.0
+      ],
+      "sdkWorldOrigin": [
+        3.99,
+        -0.3,
+        -4.0
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.984,
+          0.7,
+          -3.44
+        ],
+        "max": [
+          3.996,
+          3.12,
+          3.44
+        ]
+      }
+    },
+    {
+      "node": "GLASS_ROOF",
+      "label": "全景双坡玻璃屋顶",
+      "gltfOrigin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sdkWorldOrigin": [
+        0.0,
+        -1.0,
+        -4.0
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "gltfBounds": {
+        "min": [
+          -3.98,
+          3.1585,
+          -3.49
+        ],
+        "max": [
+          3.98,
+          4.85,
+          3.49
+        ]
+      }
+    }
+  ],
+  "anchors": [
+    {
+      "id": "SPAWN",
+      "node": "ANCHOR_SPAWN",
+      "label": "地毯中央出生/站立",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        0.0,
+        0.045999,
+        0.65
+      ],
+      "sdkWorldPosition": [
+        0.0,
+        -0.954001,
+        -3.35
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_SPAWN",
+      "relatedNode": "FURN_RUG",
+      "lookTargetNode": "LOOK_SPAWN",
+      "gltfLookTarget": [
+        0.0,
+        4.3,
+        -0.7
+      ]
+    },
+    {
+      "id": "RUG_WATCH_TV",
+      "node": "ANCHOR_RUG_WATCH_TV",
+      "label": "地毯看电视",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        0.2,
+        0.046,
+        1.2
+      ],
+      "sdkWorldPosition": [
+        0.2,
+        -0.954,
+        -2.8
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_RUG_WATCH_TV",
+      "relatedNode": "FURN_RUG",
+      "lookTargetNode": "LOOK_RUG_WATCH_TV",
+      "gltfLookTarget": [
+        1.65,
+        1.7,
+        3.3
+      ]
+    },
+    {
+      "id": "BED_APPROACH",
+      "node": "ANCHOR_BED_APPROACH",
+      "label": "船床侧接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.3,
+        0.045999,
+        -0.2
+      ],
+      "sdkWorldPosition": [
+        -0.3,
+        -0.954001,
+        -4.2
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_BED_APPROACH",
+      "relatedNode": "FURN_BED",
+      "lookTargetNode": "LOOK_BED_APPROACH",
+      "gltfLookTarget": [
+        -2.15,
+        0.85,
+        -1.05
+      ]
+    },
+    {
+      "id": "BED_SIT",
+      "node": "ANCHOR_BED_SIT",
+      "label": "船床侧沿坐姿接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        -1.1,
+        0.932,
+        -0.3
+      ],
+      "sdkWorldPosition": [
+        -1.1,
+        -0.068,
+        -4.3
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_SIT",
+      "relatedNode": "FURN_BED",
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "BED_LIE",
+      "node": "ANCHOR_BED_LIE",
+      "label": "船床仰卧髋背接触",
+      "kind": "lie",
+      "contact": "back_hip_surface",
+      "gltfPosition": [
+        -2.77,
+        0.943868,
+        -1.05
+      ],
+      "sdkWorldPosition": [
+        -2.77,
+        -0.056132,
+        -5.05
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_LIE",
+      "relatedNode": "FURN_BED",
+      "lookTargetNode": "LOOK_BED_LIE",
+      "gltfLookTarget": [
+        -2.77,
+        4.25,
+        -1.05
+      ],
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset. Yaw is the feet-to-head body axis; a supine animation and contact alignment are required."
+    },
+    {
+      "id": "BED_HEAD",
+      "node": "ANCHOR_BED_HEAD",
+      "label": "枕区头部校准",
+      "kind": "lie_target",
+      "contact": "head_surface",
+      "gltfPosition": [
+        -2.77,
+        1.147246,
+        -2.2
+      ],
+      "sdkWorldPosition": [
+        -2.77,
+        0.147246,
+        -6.2
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_BED_HEAD",
+      "relatedNode": "FURN_BED",
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "DESK_APPROACH",
+      "node": "ANCHOR_DESK_APPROACH",
+      "label": "书桌椅前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        1.55,
+        0.002,
+        -0.55
+      ],
+      "sdkWorldPosition": [
+        1.55,
+        -0.998,
+        -4.55
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_DESK_APPROACH",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "lookTargetNode": "LOOK_DESK_APPROACH",
+      "gltfLookTarget": [
+        3.35,
+        1.1,
+        -0.55
+      ]
+    },
+    {
+      "id": "DESK_SEAT",
+      "node": "ANCHOR_DESK_SEAT",
+      "label": "书桌椅座面接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        2.42,
+        0.572,
+        -0.55
+      ],
+      "sdkWorldPosition": [
+        2.42,
+        -0.428,
+        -4.55
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_DESK_SEAT",
+      "relatedNode": "FURN_CHAIR_DESK",
+      "lookTargetNode": "LOOK_DESK_SEAT",
+      "gltfLookTarget": [
+        3.5,
+        1.05,
+        -0.55
+      ],
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "READING_APPROACH",
+      "node": "ANCHOR_READING_APPROACH",
+      "label": "阅读椅前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        1.55,
+        0.002,
+        1.55
+      ],
+      "sdkWorldPosition": [
+        1.55,
+        -0.998,
+        -2.45
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_READING_APPROACH",
+      "relatedNode": "FURN_CHAIR_READING"
+    },
+    {
+      "id": "READING_SEAT",
+      "node": "ANCHOR_READING_SEAT",
+      "label": "阅读椅座面接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        2.7,
+        0.561999,
+        1.55
+      ],
+      "sdkWorldPosition": [
+        2.7,
+        -0.438001,
+        -2.45
+      ],
+      "yawDeg": -90.0,
+      "forward": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_READING_SEAT",
+      "relatedNode": "FURN_CHAIR_READING",
+      "lookTargetNode": "LOOK_READING_SEAT",
+      "gltfLookTarget": [
+        0.5,
+        1.1,
+        0.8
+      ],
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "NORTH_AISLE",
+      "node": "ANCHOR_NORTH_AISLE",
+      "label": "北侧观星通道",
+      "kind": "waypoint",
+      "contact": "feet",
+      "gltfPosition": [
+        0.5,
+        0.002,
+        -1.25
+      ],
+      "sdkWorldPosition": [
+        0.5,
+        -0.998,
+        -5.25
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_NORTH_AISLE"
+    },
+    {
+      "id": "TELESCOPE_APPROACH",
+      "node": "ANCHOR_TELESCOPE_APPROACH",
+      "label": "望远镜观星接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        1.55,
+        0.002,
+        -1.55
+      ],
+      "sdkWorldPosition": [
+        1.55,
+        -0.998,
+        -5.55
+      ],
+      "yawDeg": 137.0,
+      "forward": [
+        0.681998,
+        0.0,
+        -0.731354
+      ],
+      "navigable": true,
+      "facingNode": "FACING_TELESCOPE_APPROACH",
+      "relatedNode": "FURN_TELESCOPE",
+      "lookTargetNode": "LOOK_TELESCOPE_APPROACH",
+      "gltfLookTarget": [
+        2.35,
+        1.5,
+        -2.4
+      ]
+    },
+    {
+      "id": "WINDOW_VIEW",
+      "node": "ANCHOR_WINDOW_VIEW",
+      "label": "北窗前站立观景",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        0.45,
+        0.002,
+        -2.45
+      ],
+      "sdkWorldPosition": [
+        0.45,
+        -0.998,
+        -6.45
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_WINDOW_VIEW",
+      "relatedNode": "GLASS_PANORAMA_NORTH",
+      "lookTargetNode": "LOOK_WINDOW_VIEW",
+      "gltfLookTarget": [
+        0.45,
+        2.0,
+        -5.0
+      ]
+    },
+    {
+      "id": "WINDOW_APPROACH",
+      "node": "ANCHOR_WINDOW_APPROACH",
+      "label": "窗边长凳前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        0.9,
+        0.002,
+        -2.45
+      ],
+      "sdkWorldPosition": [
+        0.9,
+        -0.998,
+        -6.45
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_WINDOW_APPROACH",
+      "relatedNode": "FURN_WINDOW_BENCH"
+    },
+    {
+      "id": "WINDOW_SEAT",
+      "node": "ANCHOR_WINDOW_SEAT",
+      "label": "窗边长凳座面接触",
+      "kind": "sit",
+      "contact": "buttock_surface",
+      "gltfPosition": [
+        0.9,
+        0.622,
+        -3.1
+      ],
+      "sdkWorldPosition": [
+        0.9,
+        -0.378,
+        -7.1
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_WINDOW_SEAT",
+      "relatedNode": "FURN_WINDOW_BENCH",
+      "lookTargetNode": "LOOK_WINDOW_SEAT",
+      "gltfLookTarget": [
+        0.0,
+        4.4,
+        -0.3
+      ],
+      "notes": "Actual furniture top surface plus 0.002m; contact reference, not avatar root. Apply pose-specific bone-to-body offset."
+    },
+    {
+      "id": "TV_APPROACH",
+      "node": "ANCHOR_TV_APPROACH",
+      "label": "电视柜前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        1.55,
+        0.002,
+        2.4
+      ],
+      "sdkWorldPosition": [
+        1.55,
+        -0.998,
+        -1.6
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_TV_APPROACH",
+      "relatedNode": "FURN_TV",
+      "lookTargetNode": "LOOK_TV_APPROACH",
+      "gltfLookTarget": [
+        1.65,
+        1.7,
+        3.3
+      ]
+    },
+    {
+      "id": "GAME_APPROACH",
+      "node": "ANCHOR_GAME_APPROACH",
+      "label": "游戏机前接近",
+      "kind": "approach",
+      "contact": "feet",
+      "gltfPosition": [
+        2.1,
+        0.002,
+        2.4
+      ],
+      "sdkWorldPosition": [
+        2.1,
+        -0.998,
+        -1.6
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_GAME_APPROACH",
+      "relatedNode": "FURN_GAME_CONSOLE",
+      "lookTargetNode": "LOOK_GAME_APPROACH",
+      "gltfLookTarget": [
+        2.1,
+        0.9,
+        3.1
+      ]
+    },
+    {
+      "id": "GAME_PICKUP",
+      "node": "ANCHOR_GAME_PICKUP",
+      "label": "手柄抓握参考",
+      "kind": "grasp",
+      "contact": "hand_grip",
+      "gltfPosition": [
+        1.5,
+        0.69,
+        3.05
+      ],
+      "sdkWorldPosition": [
+        1.5,
+        -0.31,
+        -0.95
+      ],
+      "yawDeg": 0.0,
+      "forward": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "navigable": false,
+      "facingNode": "FACING_GAME_PICKUP",
+      "relatedNode": "PROP_CONTROLLER"
+    },
+    {
+      "id": "ENTRY",
+      "node": "ANCHOR_ENTRY",
+      "label": "门内入口站立",
+      "kind": "stand",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.9,
+        0.002,
+        2.9
+      ],
+      "sdkWorldPosition": [
+        -0.9,
+        -0.998,
+        -1.1
+      ],
+      "yawDeg": 180.0,
+      "forward": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_ENTRY",
+      "relatedNode": "PORTAL_ENTRY"
+    },
+    {
+      "id": "SOUTH_AISLE",
+      "node": "ANCHOR_SOUTH_AISLE",
+      "label": "船床尾通道",
+      "kind": "waypoint",
+      "contact": "feet",
+      "gltfPosition": [
+        -0.4,
+        0.046001,
+        1.5
+      ],
+      "sdkWorldPosition": [
+        -0.4,
+        -0.953999,
+        -2.5
+      ],
+      "yawDeg": 90.0,
+      "forward": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "navigable": true,
+      "facingNode": "FACING_SOUTH_AISLE"
+    }
+  ],
+  "navigation": {
+    "agentRadius": 0.22,
+    "validatedMode": "Final GLB furniture world AABBs expanded in XZ by agentRadius; rug is walkable.",
+    "edges": [
+      [
+        "ENTRY",
+        "SOUTH_AISLE"
+      ],
+      [
+        "SOUTH_AISLE",
+        "SPAWN"
+      ],
+      [
+        "SPAWN",
+        "BED_APPROACH"
+      ],
+      [
+        "SPAWN",
+        "DESK_APPROACH"
+      ],
+      [
+        "SPAWN",
+        "READING_APPROACH"
+      ],
+      [
+        "SPAWN",
+        "RUG_WATCH_TV"
+      ],
+      [
+        "SPAWN",
+        "NORTH_AISLE"
+      ],
+      [
+        "NORTH_AISLE",
+        "TELESCOPE_APPROACH"
+      ],
+      [
+        "NORTH_AISLE",
+        "WINDOW_VIEW"
+      ],
+      [
+        "WINDOW_VIEW",
+        "WINDOW_APPROACH"
+      ],
+      [
+        "RUG_WATCH_TV",
+        "TV_APPROACH"
+      ],
+      [
+        "TV_APPROACH",
+        "GAME_APPROACH"
+      ]
+    ],
+    "obstacles": [
+      {
+        "node": "FURN_BED",
+        "gltfBounds": {
+          "min": [
+            -3.53525,
+            0.09803,
+            -2.8645
+          ],
+          "max": [
+            -0.76475,
+            1.301861,
+            0.7645
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_NIGHTSTAND",
+        "gltfBounds": {
+          "min": [
+            -0.725,
+            0.0,
+            -2.425
+          ],
+          "max": [
+            -0.175,
+            1.18184,
+            -1.82
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_DESK",
+        "gltfBounds": {
+          "min": [
+            3.025,
+            0.02,
+            -1.325
+          ],
+          "max": [
+            3.675,
+            1.299,
+            0.2
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_CHAIR_DESK",
+        "gltfBounds": {
+          "min": [
+            2.082073,
+            0.027658,
+            -0.84
+          ],
+          "max": [
+            2.73,
+            1.049504,
+            -0.26
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_CHAIR_READING",
+        "gltfBounds": {
+          "min": [
+            2.25,
+            0.026492,
+            1.0536
+          ],
+          "max": [
+            3.151522,
+            1.149328,
+            2.0464
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_SIDE_TABLE",
+        "gltfBounds": {
+          "min": [
+            2.62,
+            0.01,
+            2.27
+          ],
+          "max": [
+            3.38,
+            1.22706,
+            3.03
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_TELESCOPE",
+        "gltfBounds": {
+          "min": [
+            1.79243,
+            0.012,
+            -2.897925
+          ],
+          "max": [
+            2.934472,
+            1.838851,
+            -1.946524
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_WINDOW_BENCH",
+        "gltfBounds": {
+          "min": [
+            0.05,
+            0.02,
+            -3.38
+          ],
+          "max": [
+            3.55,
+            1.255109,
+            -2.82
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_CHEST",
+        "gltfBounds": {
+          "min": [
+            -3.32,
+            0.0,
+            2.255
+          ],
+          "max": [
+            -1.98,
+            1.241,
+            3.0675
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      },
+      {
+        "node": "FURN_MEDIA_CONSOLE",
+        "gltfBounds": {
+          "min": [
+            0.45,
+            -0.0,
+            2.788587
+          ],
+          "max": [
+            2.85,
+            0.58,
+            3.395
+          ]
+        },
+        "shape": "world_aabb",
+        "note": "Conservative static graph obstacle, not a runtime collider."
+      }
+    ],
+    "limitations": "Static graph edges only. No arbitrary starting-path, runtime collision, dynamic avoidance, animation or IK."
+  },
+  "rendering": {
+    "materials": "Portable glTF metallic-roughness PBR; alpha-blended actual roof/window glass; emissive fairy lights.",
+    "previewOnly": "Blender cameras/lights/world are excluded from GLB. Host supplies skybox/IBL and runtime lights.",
+    "glassRoofNode": "GLASS_ROOF",
+    "exteriorGeometry": false,
+    "optionalNodes": [
+      "WALL_NORTH",
+      "WALL_SOUTH",
+      "WALL_EAST",
+      "WALL_WEST",
+      "CEILING"
+    ],
+    "cutawayGroups": [
+      {
+        "node": "WALL_NORTH",
+        "label": "北墙/山形全景玻璃",
+        "role": "wall",
+        "renderableNodes": [
+          "GLASS_PANORAMA_NORTH_GEOMETRY",
+          "WALL_NORTH_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          0,
+          -3.5
+        ],
+        "outwardNormalGltf": [
+          0,
+          0,
+          -1
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.075,
+            -0.0,
+            -3.64
+          ],
+          "max": [
+            4.075,
+            4.928228,
+            -3.25
+          ]
+        }
+      },
+      {
+        "node": "WALL_SOUTH",
+        "label": "南墙/入口/电视",
+        "role": "wall",
+        "renderableNodes": [
+          "FURN_TV_GEOMETRY",
+          "WALL_SOUTH_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          0,
+          3.5
+        ],
+        "outwardNormalGltf": [
+          0,
+          0,
+          1
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.033247,
+            0.0,
+            3.292
+          ],
+          "max": [
+            4.033247,
+            4.928228,
+            3.64
+          ]
+        }
+      },
+      {
+        "node": "WALL_EAST",
+        "label": "东墙/全景玻璃",
+        "role": "wall",
+        "renderableNodes": [
+          "GLASS_PANORAMA_EAST_GEOMETRY",
+          "WALL_EAST_GEOMETRY"
+        ],
+        "planePointGltf": [
+          4,
+          0,
+          0
+        ],
+        "outwardNormalGltf": [
+          1,
+          0,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            3.75,
+            0.0,
+            -3.575
+          ],
+          "max": [
+            4.14,
+            3.235,
+            3.575
+          ]
+        }
+      },
+      {
+        "node": "WALL_WEST",
+        "label": "西墙/书架/护墙板",
+        "role": "wall",
+        "renderableNodes": [
+          "FURN_BOOKCASE_GEOMETRY",
+          "WALL_WEST_GEOMETRY"
+        ],
+        "planePointGltf": [
+          -4,
+          0,
+          0
+        ],
+        "outwardNormalGltf": [
+          -1,
+          0,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.14,
+            0.0,
+            -3.58
+          ],
+          "max": [
+            -3.564471,
+            3.235,
+            3.58
+          ]
+        }
+      },
+      {
+        "node": "CEILING",
+        "label": "双坡玻璃天花板/木梁/灯网",
+        "role": "ceiling",
+        "renderableNodes": [
+          "CEILING_GEOMETRY",
+          "GLASS_ROOF_GEOMETRY"
+        ],
+        "planePointGltf": [
+          0,
+          4.85,
+          0
+        ],
+        "outwardNormalGltf": [
+          0,
+          1,
+          0
+        ],
+        "gltfBounds": {
+          "min": [
+            -4.018384,
+            2.625418,
+            -3.57
+          ],
+          "max": [
+            4.018384,
+            4.93,
+            3.57
+          ]
+        },
+        "planeMeaning": "Ridge reference only; use boundaryPlanesGltf for actual sloped glass planes.",
+        "boundaryPlanesGltf": [
+          {
+            "label": "east_slope",
+            "point": [
+              2,
+              4,
+              0
+            ],
+            "outwardNormal": [
+              0.3911406403448517,
+              0.9203309184584746,
+              0
+            ]
+          },
+          {
+            "label": "west_slope",
+            "point": [
+              -2,
+              4,
+              0
+            ],
+            "outwardNormal": [
+              -0.3911406403448517,
+              0.9203309184584746,
+              0
+            ]
+          }
+        ]
+      }
+    ],
+    "alwaysVisibleNodes": [
+      "FLOOR"
+    ],
+    "visibilityContract": "All groups export visible. Recursively hide/show every descendant renderable, or use renderableNodes; empty group visibility alone does not hide Filament mesh entities."
+  }
+}

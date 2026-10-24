@@ -1,0 +1,145 @@
+{
+  "anchors": [
+    {
+      "name": "spawn",
+      "x": 0.0,
+      "z": -3.35,
+      "label": "地毯中央出生/站立",
+      "labelEn": "spawn",
+      "links": [
+        "south_aisle",
+        "bed_approach",
+        "desk_approach",
+        "reading_approach",
+        "rug_watch_tv",
+        "north_aisle"
+      ]
+    },
+    {
+      "name": "rug_watch_tv",
+      "x": 0.2,
+      "z": -2.8,
+      "label": "地毯看电视",
+      "labelEn": "rug watch tv",
+      "links": [
+        "spawn",
+        "tv_approach"
+      ]
+    },
+    {
+      "name": "bed_approach",
+      "x": -0.3,
+      "z": -4.2,
+      "label": "船床侧接近",
+      "labelEn": "bed approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "desk_approach",
+      "x": 1.55,
+      "z": -4.55,
+      "label": "书桌椅前接近",
+      "labelEn": "desk approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "reading_approach",
+      "x": 1.55,
+      "z": -2.45,
+      "label": "阅读椅前接近",
+      "labelEn": "reading approach",
+      "links": [
+        "spawn"
+      ]
+    },
+    {
+      "name": "north_aisle",
+      "x": 0.5,
+      "z": -5.25,
+      "label": "北侧观星通道",
+      "labelEn": "north aisle",
+      "links": [
+        "spawn",
+        "telescope_approach",
+        "window_view"
+      ]
+    },
+    {
+      "name": "telescope_approach",
+      "x": 1.55,
+      "z": -5.55,
+      "label": "望远镜观星接近",
+      "labelEn": "telescope approach",
+      "links": [
+        "north_aisle"
+      ]
+    },
+    {
+      "name": "window_view",
+      "x": 0.45,
+      "z": -6.45,
+      "label": "北窗前站立观景",
+      "labelEn": "window view",
+      "links": [
+        "north_aisle",
+        "window_approach"
+      ]
+    },
+    {
+      "name": "window_approach",
+      "x": 0.9,
+      "z": -6.45,
+      "label": "窗边长凳前接近",
+      "labelEn": "window approach",
+      "links": [
+        "window_view"
+      ]
+    },
+    {
+      "name": "tv_approach",
+      "x": 1.55,
+      "z": -1.6,
+      "label": "电视柜前接近",
+      "labelEn": "tv approach",
+      "links": [
+        "rug_watch_tv",
+        "game_approach"
+      ]
+    },
+    {
+      "name": "game_approach",
+      "x": 2.1,
+      "z": -1.6,
+      "label": "游戏机前接近",
+      "labelEn": "game approach",
+      "links": [
+        "tv_approach"
+      ]
+    },
+    {
+      "name": "entry",
+      "x": -0.9,
+      "z": -1.1,
+      "label": "门内入口站立",
+      "labelEn": "entry",
+      "links": [
+        "south_aisle"
+      ]
+    },
+    {
+      "name": "south_aisle",
+      "x": -0.4,
+      "z": -2.5,
+      "label": "船床尾通道",
+      "labelEn": "south aisle",
+      "links": [
+        "entry",
+        "spawn"
+      ]
+    }
+  ]
+}

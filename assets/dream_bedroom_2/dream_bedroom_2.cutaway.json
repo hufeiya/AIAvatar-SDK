@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "units": "meters",
+  "coordinateSystem": {
+    "handedness": "right",
+    "up": "+Y",
+    "defaultAvatarForward": "+Z",
+    "yaw": "degrees about +Y, positive turns +Z toward +X",
+    "blenderToGltf": "[x,y,z] -> [x,z,-y]",
+    "floorGltfY": 0
+  },
+  "sdkPlacement": {
+    "offsetX": 0,
+    "offsetY": -1,
+    "offsetZ": -4,
+    "yawDeg": 0,
+    "formula": "sdkWorld = gltfPosition + [0,-1,-4]"
+  },
+  "groups": [
+    {
+      "node": "WALL_NORTH",
+      "label": "北墙/山形全景玻璃",
+      "role": "wall",
+      "renderableNodes": [
+        "GLASS_PANORAMA_NORTH_GEOMETRY",
+        "WALL_NORTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        0,
+        -3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        -1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.075,
+          -0.0,
+          -3.64
+        ],
+        "max": [
+          4.075,
+          4.928228,
+          -3.25
+        ]
+      }
+    },
+    {
+      "node": "WALL_SOUTH",
+      "label": "南墙/入口/电视",
+      "role": "wall",
+      "renderableNodes": [
+        "FURN_TV_GEOMETRY",
+        "WALL_SOUTH_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        0,
+        3.5
+      ],
+      "outwardNormalGltf": [
+        0,
+        0,
+        1
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.033247,
+          0.0,
+          3.292
+        ],
+        "max": [
+          4.033247,
+          4.928228,
+          3.64
+        ]
+      }
+    },
+    {
+      "node": "WALL_EAST",
+      "label": "东墙/全景玻璃",
+      "role": "wall",
+      "renderableNodes": [
+        "GLASS_PANORAMA_EAST_GEOMETRY",
+        "WALL_EAST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          3.75,
+          0.0,
+          -3.575
+        ],
+        "max": [
+          4.14,
+          3.235,
+          3.575
+        ]
+      }
+    },
+    {
+      "node": "WALL_WEST",
+      "label": "西墙/书架/护墙板",
+      "role": "wall",
+      "renderableNodes": [
+        "FURN_BOOKCASE_GEOMETRY",
+        "WALL_WEST_GEOMETRY"
+      ],
+      "planePointGltf": [
+        -4,
+        0,
+        0
+      ],
+      "outwardNormalGltf": [
+        -1,
+        0,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.14,
+          0.0,
+          -3.58
+        ],
+        "max": [
+          -3.564471,
+          3.235,
+          3.58
+        ]
+      }
+    },
+    {
+      "node": "CEILING",
+      "label": "双坡玻璃天花板/木梁/灯网",
+      "role": "ceiling",
+      "renderableNodes": [
+        "CEILING_GEOMETRY",
+        "GLASS_ROOF_GEOMETRY"
+      ],
+      "planePointGltf": [
+        0,
+        4.85,
+        0
+      ],
+      "outwardNormalGltf": [
+        0,
+        1,
+        0
+      ],
+      "gltfBounds": {
+        "min": [
+          -4.018384,
+          2.625418,
+          -3.57
+        ],
+        "max": [
+          4.018384,
+          4.93,
+          3.57
+        ]
+      },
+      "planeMeaning": "Ridge reference only; use boundaryPlanesGltf for actual sloped glass planes.",
+      "boundaryPlanesGltf": [
+        {
+          "label": "east_slope",
+          "point": [
+            2,
+            4,
+            0
+          ],
+          "outwardNormal": [
+            0.3911406403448517,
+            0.9203309184584746,
+            0
+          ]
+        },
+        {
+          "label": "west_slope",
+          "point": [
+            -2,
+            4,
+            0
+          ],
+          "outwardNormal": [
+            -0.3911406403448517,
+            0.9203309184584746,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "alwaysVisibleNodes": [
+    "FLOOR"
+  ],
+  "defaultVisibility": "all_visible",
+  "visibilityContract": "All groups export visible. Recursively hide/show every descendant renderable, or use renderableNodes; empty group visibility alone does not hide Filament mesh entities.",
+  "planeMeaning": "Unplaced GLB coordinates; transform planes/normals to the same space as camera and target. CEILING uses two sloped boundary planes."
+}

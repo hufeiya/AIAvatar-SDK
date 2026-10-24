@@ -1,0 +1,7 @@
+Starlit Tide validation: PASS
+GLB SHA-256: 51be86674df6dfca7265c6b3db966eff6eea3ef1d10f38e4b3a75dbc6bd5e77d
+Counts: {"sceneNodes": 104, "meshes": 24, "primitives": 109, "triangles": 135774, "materials": 21, "embeddedImages": 6, "furnitureRoots": 19, "interactionAnchors": 20, "navigableAnchors": 13, "undirectedEdges": 12}
+Coordinate tolerance: 2e-05m; agent radius: 0.22m
+LIMITATION: Static graph paths checked against listed furniture AABBs expanded by agent radius; arbitrary entry paths and dynamic avoidance need host logic.
+LIMITATION: GLB coordinates and pose contact targets were verified; Android/Filament rendering and a specific VRM sitting/lying fit were not tested.
+LIMITATION: SDK walking sidecar contains XZ only. Arrival yaw, ground height, gaze, animations and contact IK need host logic.
