@@ -126,6 +126,12 @@ data class AiChatPrefs(
      * 前奏），≤20 字、不出声。默认开。
      */
     val thoughtBubble: Boolean = true,
+    /**
+     * 历史摘要压缩（酒馆 P2-4，docs/tavern-companion-feasibility.md §5）：
+     * 超出上下文窗口的早期对话滚动摘要进请求——记忆管「事实」，摘要管
+     * 「剧情」。默认开（每 20 条新溢出消息才多一次后台 LLM 调用）。
+     */
+    val historySummary: Boolean = true,
 ) {
     /** TTS 实际生效的服务商。 */
     val ttsProviderResolved: AiProvider
@@ -203,6 +209,7 @@ data class AiChatPrefs(
             },
             ttsModel = ttsModel,
             voice = voice,
+            historySummaryEnabled = historySummary,
             lang = lang,
             enableLlmCamera = llmCamera,
             enableLlmMove = llmMove,
@@ -240,6 +247,7 @@ private const val KEY_AI_FX_TOOLS = "ai_fx_tools"
 private const val KEY_AI_AUTONOMY = "ai_autonomy"
 private const val KEY_AI_GREETINGS = "ai_greetings"
 private const val KEY_AI_THOUGHT_BUBBLE = "ai_thought_bubble"
+private const val KEY_AI_HISTORY_SUMMARY = "ai_history_summary"
 
 /** 读枚举偏好；名字失效（改过枚举名）或未存过返回 null。 */
 private inline fun <reified T : Enum<T>> prefsEnum(sp: SharedPreferences, key: String): T? =
@@ -284,6 +292,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         autonomy = getBoolean(KEY_AI_AUTONOMY, true),
         greetings = getBoolean(KEY_AI_GREETINGS, true),
         thoughtBubble = getBoolean(KEY_AI_THOUGHT_BUBBLE, true),
+        historySummary = getBoolean(KEY_AI_HISTORY_SUMMARY, true),
     )
 }
 
@@ -316,6 +325,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_AUTONOMY, p.autonomy)
         .putBoolean(KEY_AI_GREETINGS, p.greetings)
         .putBoolean(KEY_AI_THOUGHT_BUBBLE, p.thoughtBubble)
+        .putBoolean(KEY_AI_HISTORY_SUMMARY, p.historySummary)
         .apply()
 }
 

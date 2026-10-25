@@ -250,6 +250,20 @@ class Strings(val lang: Lang) {
     val cardParseFailed: String get() =
         zh("无法解析所选文件为角色卡（支持 SillyTavern PNG / JSON）",
             "Cannot parse the selected file as a character card (SillyTavern PNG / JSON supported)")
+    /** 卡片作者（卡列表行，P2-2）。 */
+    fun cardCreator(name: String): String = zh("作者 $name", "by $name")
+    /** 卡级绑定提示（激活卡行，P2-3）：已绑定的音色/模型/开场白摘要。 */
+    fun cardBindingLine(voice: String, model: String, greeting: String): String =
+        zh("绑定：$voice · $model · 开场白$greeting",
+            "Bound: $voice · $model · greeting $greeting")
+    /** 开场白绑定的显示名（默认开场白）。 */
+    val greetingDefaultShort: String get() = zh("默认", "default")
+
+    // ── 历史摘要压缩（P2-4）──────────────────────────────────────────────
+    val summaryToggleTitle: String get() = zh("长对话剧情摘要", "Story-so-far summary")
+    val summaryToggleDesc: String get() =
+        zh("超出上下文窗口的早期对话自动压缩成摘要带进请求（每 20 条新消息更新一次，剧情不断片）",
+            "Older messages beyond the context window are auto-condensed into a summary that rides each request (refreshed every 20 new messages)")
 
     // ── 模型导入（filesDir/vrms，与内置模型同列表同加载路径）───────────────
     val importModel: String get() = zh("导入 VRM 模型…", "Import VRM model…")

@@ -32,6 +32,8 @@ internal class AiChatDebugHooks(
     val snapshot: () -> String,
     /** Import card bytes through the UI's save/activate path; null = unparseable. */
     val importCard: (ByteArray) -> String? = { null },
+    /** ai_cmd activate_card <fileName>：激活库内已有卡（走与点选同一条 UI 路径）。 */
+    val activateCard: (String) -> String = { "AI chat not wired in this screen" },
     /** One-line snapshot of the active card + system prompt for `active_card`. */
     val cardSnapshot: () -> String = { "AI chat not wired in this screen" },
     /** ai_cmd import_lorebook：独立世界书 JSON 导入（绑当前卡/设全局）。 */
@@ -368,6 +370,14 @@ internal suspend fun executeAiCommand(
             }
             "active_card" -> chat?.cardSnapshot()
                 ?: throw IllegalStateException("AI chat not wired in this screen")
+            "activate_card" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.activateCard(
+                    command.arg ?: throw IllegalArgumentException(
+                        "activate_card expects ai_arg = a card file name (ai_cmd active_card 看 cards= 列表)"
+                    )
+                )
+            }
             "import_lorebook" -> {
                 val arg = command.arg
                     ?: throw IllegalArgumentException(

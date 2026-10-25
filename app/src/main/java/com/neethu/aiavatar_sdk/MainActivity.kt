@@ -69,9 +69,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -119,6 +124,7 @@ import com.neethu.orchestrator.agent.AgentToolCatalog
 import com.neethu.orchestrator.agent.ToolExecutor
 import com.neethu.orchestrator.card.CharacterCard
 import com.neethu.orchestrator.card.CharacterCardStore
+import com.neethu.orchestrator.card.expandCardMacros
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.face.GazeMode
@@ -540,6 +546,8 @@ internal class DemoUiState(context: Context) {
         selectedModel = name
         selectedAnimation = null
         prefs.edit().putString(KEY_SELECTED_MODEL, name).apply()
+        // 卡级绑定写回（P2-3）：激活卡期间换 VRM = 记到该卡的「换人」档案
+        activeCardFile?.let { cardBindings.update(it, CardBinding(modelFile = name)) }
     }
 
     /** 存档名仍存在（内置或已导入）才采纳，否则默认模型。 */
@@ -665,6 +673,12 @@ internal class DemoUiState(context: Context) {
 
     /** 人物卡库：bytes 落 filesDir/cards，索引/激活卡持久化到 demo_settings。 */
     val cardLibrary = CardLibrary(context)
+
+    /** 卡级绑定（P2-3）：音色/VRM 模型/开场白选择挂卡索引，切卡即整体换人。 */
+    val cardBindings = CardBindings(prefs)
+
+    /** 查卡绑定（CardsPanel 绑定行显示用）。 */
+    fun cardBindingFor(fileName: String?): CardBinding? = cardBindings.forCard(fileName)
 
     // ── 世界书（酒馆 P1-1，docs/tavern-companion-feasibility.md）─────────────
     /** 世界书库：filesDir/lorebooks 落盘 + 卡绑定/全局书/开关持久化。 */
@@ -812,8 +826,15 @@ internal class DemoUiState(context: Context) {
      */
     fun updateAiPrefs(p: AiChatPrefs) {
         val oldSig = contextLlmSig
+        // 卡级绑定写回（P2-3）：激活卡期间改音色 = 记到该卡的「换人」档案
+        val oldVoice = aiPrefs.voice
         aiPrefs = p
         prefs.saveAiPrefs(p)
+        if (p.voice != oldVoice) {
+            activeCardFile?.let { file ->
+                cardBindings.update(file, CardBinding(voice = p.voice.ifBlank { null }))
+            }
+        }
         val newSig = llmIdentitySignature(p)
         if (oldSig != null && newSig != oldSig) newContext()
         contextLlmSig = newSig
@@ -882,6 +903,7 @@ internal class DemoUiState(context: Context) {
     fun deleteCard(fileName: String) {
         cardLibrary.delete(fileName)
         cards = cardLibrary.cards
+        cardBindings.remove(fileName)
         if (activeCardFile == fileName) {
             activeCardFile = null
             pendingGreetingFile = null
@@ -2181,6 +2203,15 @@ private fun DemoScreen(
         if (uiState.activeCardFile != entry.fileName) {
             uiState.setActiveCard(entry.fileName)
             val s = session
+            // 卡级绑定（P2-3）：切卡即整体换人——音色/VRM/开场白按卡的档案恢复
+            val binding = uiState.cardBindingFor(entry.fileName)
+            if (binding != null) {
+                binding.voice?.takeIf { it.isNotBlank() && it != uiState.aiPrefs.voice }?.let { voice ->
+                    uiState.updateAiPrefs(uiState.aiPrefs.copy(voice = voice))
+                }
+                binding.modelFile?.takeIf { it in uiState.builtinModelFiles || it in uiState.importedModelFiles }
+                    ?.let { uiState.selectModel(it) }
+            }
             when {
                 s != null -> {
                     applyCardToSession(s, entry, applyOverrideFor, uiState.lang, uiState::presetAssetByFile)
@@ -2188,31 +2219,50 @@ private fun DemoScreen(
                     uiState.applyLorebookToSession(s)
                     s.clearHistory()
                     val card = localizedCard(uiState, entry)
-                    // 备选开场白存在时弹层选择（P1-3），否则直接朗读默认
-                    if (card.alternateGreetings.isEmpty()) {
-                        val greeting = card.spokenGreeting(promptTextsOf(uiState.lang).userAlias)
-                        if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
-                    } else {
-                        greetingChooserFile = entry.fileName
+                    val greetings = listOf(card.firstMessage) + card.alternateGreetings
+                    val boundIndex = binding?.greetingIndex?.takeIf { it in greetings.indices }
+                    when {
+                        // 无备选开场白：直接朗读默认
+                        greetings.size == 1 -> {
+                            val greeting = card.spokenGreeting(promptTextsOf(uiState.lang).userAlias)
+                            if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+                        }
+                        // 有绑定过的开场白选择（P2-3）：不再弹层，直接朗读
+                        boundIndex != null -> {
+                            val greeting = expandCardMacros(
+                                greetings[boundIndex], card.name, promptTextsOf(uiState.lang).userAlias,
+                            ).trim()
+                            if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+                        }
+                        // 备选开场白存在且从未选过 → 弹层选择（P1-3）
+                        else -> greetingChooserFile = entry.fileName
                     }
                 }
                 else -> uiState.pendingGreetingFile = entry.fileName
             }
         }
     }
-    /** 开场白选择弹层的朗读动作（默认/备选统一走这里）。 */
+    /** 开场白选择弹层的朗读动作（默认/备选统一走这里）；选择写回卡绑定。 */
     val speakGreeting: (String) -> Unit = { raw ->
         val file = greetingChooserFile
         greetingChooserFile = null
         val s = session
         if (s != null) {
             val card = file?.let { uiState.cardByFile(it) }?.let { localizedCard(uiState, it) }
-            val greeting = com.neethu.orchestrator.card.expandCardMacros(
+            val greeting = expandCardMacros(
                 raw,
                 card?.name.orEmpty(),
                 promptTextsOf(uiState.lang).userAlias,
             ).trim()
             if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+            // 选择记忆（P2-3）：0=默认，1..n=备选下标；下次激活不再重复弹层
+            if (file != null && card != null) {
+                val greetings = listOf(card.firstMessage) + card.alternateGreetings
+                val index = greetings.indexOfFirst {
+                    expandCardMacros(it, card.name, promptTextsOf(uiState.lang).userAlias).trim() == greeting
+                }
+                if (index >= 0) uiState.cardBindings.update(file, CardBinding(greetingIndex = index))
+            }
         }
     }
     // 导入列表保持旧行为：点已激活的卡 = 取消激活（预置 grid 的取消走空卡片）
@@ -2427,6 +2477,17 @@ private fun DemoScreen(
                 else {
                     activateCard(entry)
                     "imported ${entry.fileName} (name=${entry.card.name}, spec=${entry.card.spec}) and activated"
+                }
+            },
+            activateCard = { fileName ->
+                val entry = uiState.cardByFile(fileName)
+                if (entry == null) {
+                    "no such card: $fileName (cards=${uiState.cards.joinToString { it.fileName }})"
+                } else if (uiState.activeCardFile == fileName) {
+                    "already active: $fileName"
+                } else {
+                    activateCard(entry)
+                    "activated $fileName (name=${entry.card.name}, spec=${entry.card.spec})"
                 }
             },
             cardSnapshot = {
@@ -3514,6 +3575,10 @@ private fun DemoScreen(
                         ?.name ?: preset.card.name
                 },
                 activePresetAsset = uiState.presetAssetByFile(uiState.activeCardFile),
+                bytesFor = { uiState.cardLibrary.bytes(it) },
+                bindingFor = { uiState.cardBindingFor(it) },
+                // 绑定音色显示短名（剥服务商引用前缀，与设置页 voiceLabel 同口径）
+                voiceLabelFor = { it.substringAfterLast(':') },
                 onSelectPreset = selectPresetCard,
                 onClearCard = deactivateCard,
                 onImport = { cardPicker.launch(arrayOf("image/png", "application/json")) },
@@ -3797,6 +3862,38 @@ private fun CameraShotLabelBadge(label: String?, modifier: Modifier = Modifier) 
  * 回看、自动贴底）+ 输入区（按输入模式切换：打字输入框 / 按住说话）。
  * `enabled = false`（未配置或未就绪）时输入区仍可见但不可交互。
  */
+/**
+ * 字幕气泡的 markdown 渲染（P2-1）：[MarkdownLineParser] 的 span 翻译成
+ * AnnotatedString。样式对齐 ST 观感——斜体=动作、粗体强调、引号对话=暖黄、
+ * 代码=等宽浅青。与 TTS 语义解耦：这里只管显示，StageDirectionFilter 的
+ * 滤除语义照旧（docs/tavern-companion-feasibility.md §5 P2-1）。
+ */
+private fun markdownBubble(text: String): androidx.compose.ui.text.AnnotatedString =
+    buildAnnotatedString {
+        for (span in MarkdownLineParser.parse(text)) {
+            if (!span.bold && !span.italic && !span.quote && !span.code) {
+                append(span.text)
+                continue
+            }
+            pushStyle(
+                SpanStyle(
+                    fontWeight = if (span.bold) FontWeight.Bold else null,
+                    fontStyle = if (span.italic) FontStyle.Italic else null,
+                    // 暖黄对话 + 等宽浅青代码（深色字幕底上的 ST 惯例配色）
+                    color = when {
+                        span.quote -> Color(0xFFFFD489)
+                        span.code -> Color(0xFF9CDCFE)
+                        else -> Color.Unspecified
+                    },
+                    fontFamily = if (span.code) FontFamily.Monospace else null,
+                    background = if (span.code) Color(0x33FFFFFF) else Color.Unspecified,
+                ),
+            )
+            append(span.text)
+            pop()
+        }
+    }
+
 @Composable
 private fun AiChatBar(
     phase: ConversationPhase,
@@ -3861,7 +3958,16 @@ private fun AiChatBar(
                         val user = line.role == ChatRole.USER
                         val system = line.role == ChatRole.SYSTEM
                         Text(
-                            text = if (user) "${s.transcriptUserPrefix}${line.text}" else line.text,
+                            text = if (user || system) {
+                                // 用户输入/系统行原样显示（不吞转义、不改字面）
+                                androidx.compose.ui.text.AnnotatedString(
+                                    if (user) "${s.transcriptUserPrefix}${line.text}" else line.text,
+                                )
+                            } else {
+                                // 虚拟人回复过 markdown 解析（P2-1）：*动作*斜体、
+                                // **粗体**、"对话"/「对话」着色、`代码`——TTS 侧语义不变
+                                markdownBubble(line.text)
+                            },
                             color = when {
                                 user -> Color(0xFF9ED8FF)
                                 // SYSTEM=元信息行（未识别标签过滤提示等），弱化区分
@@ -4491,6 +4597,9 @@ private fun CardsPanel(
     presets: List<PresetCard>,
     presetNameFor: (PresetCard) -> String,
     activePresetAsset: String?,
+    bytesFor: (String) -> ByteArray?,
+    bindingFor: (String?) -> CardBinding?,
+    voiceLabelFor: (String) -> String,
     onSelectPreset: (PresetCard) -> Unit,
     onClearCard: () -> Unit,
     onImport: () -> Unit,
@@ -4571,6 +4680,18 @@ private fun CardsPanel(
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // 卡面头像（P2-2）：PNG 卡直接解码原图，JSON 卡落占位图标
+                        rememberCardAvatar(entry.fileName, bytesFor)?.let { avatar ->
+                            Image(
+                                bitmap = avatar,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = entry.card.name.ifEmpty { s.unnamedCard },
@@ -4583,17 +4704,53 @@ private fun CardsPanel(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            // 元信息行（P2-2）：spec/版本 + 作者 + 前 3 个标签
+                            val meta = buildString {
+                                append(
+                                    entry.card.characterVersion
+                                        .takeIf { it.isNotEmpty() }
+                                        ?.let { "${entry.card.spec} · $it" }
+                                        ?: entry.card.spec,
+                                )
+                                if (entry.card.creator.isNotBlank()) {
+                                    append(" · ${s.cardCreator(entry.card.creator)}")
+                                }
+                                val tags = entry.card.tags.take(3)
+                                if (tags.isNotEmpty()) append(" · ${tags.joinToString("·")}")
+                            }
                             Text(
-                                text = entry.card.characterVersion
-                                    .takeIf { it.isNotEmpty() }
-                                    ?.let { "${entry.card.spec} · $it" }
-                                    ?: entry.card.spec,
+                                text = meta,
                                 fontSize = 11.sp,
+                                lineHeight = 14.sp,
                                 color = if (isActive)
                                     MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                                 else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            // 绑定行（P2-3）：激活卡显示「换人」档案
+                            if (isActive) {
+                                bindingFor(entry.fileName)?.let { b ->
+                                    val voice = b.voice?.let(voiceLabelFor)
+                                    val model = b.modelFile?.substringAfterLast('/')
+                                    val greeting = b.greetingIndex?.let {
+                                        if (it == 0) s.greetingDefaultShort else "#$it"
+                                    }
+                                    if (voice != null || model != null || greeting != null) {
+                                        Text(
+                                            text = s.cardBindingLine(
+                                                voice ?: "—", model ?: "—", greeting ?: "—",
+                                            ),
+                                            fontSize = 10.sp,
+                                            lineHeight = 13.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
                         }
                         if (isActive) {
                             Text(
@@ -4626,6 +4783,27 @@ private fun CardsPanel(
                 }
             }
         }
+    }
+}
+
+/**
+ * 我的卡片头像（P2-2）：卡库里的原始 bytes 直接解码（PNG 卡才有图，JSON 卡
+ * 返回 null 由调用方落占位图标）。按 ~96px 目标边解码——列表行 44dp 的缩略
+ * 图足够，避免整张 400×600 卡图进内存；解码失败（损坏图/JSON）静默回 null。
+ */
+@Composable
+private fun rememberCardAvatar(fileName: String, bytesFor: (String) -> ByteArray?): ImageBitmap? {
+    return remember(fileName) {
+        runCatching {
+            val bytes = bytesFor(fileName) ?: return@runCatching null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 && bounds.outHeight <= 0) return@runCatching null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 96) sample *= 2
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+        }.getOrNull()
     }
 }
 

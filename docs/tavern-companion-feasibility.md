@@ -132,10 +132,10 @@
 | G2 | 自定义 OpenAI 兼容端点(baseUrl+key+模型名) | 酒馆玩家入场券(中转/本地模型) | 2 人日 | **P1** |
 | G3 | mes_example/post_history_instructions 注入 + alternateGreetings 选择 | 卡还原度(高阶玩家逐字段验收) | 2 人日 | **P1** |
 | G4 | 聊天记录导出(ST jsonl 兼容)/导入 | 关系可迁移=信任 | 3 人日 | **P1** |
-| G5 | 气泡 markdown 渲染(*动作*斜体、粗体、引号对话) | 观感直接对标 ST/OMate | 3~4 人日 | P2 |
-| G6 | 卡面 PNG 头像展示+卡管理体验 | 选卡场景的基本体验 | 1~2 人日 | P2 |
-| G7 | 音色/VRM 模型绑定到卡(换卡=换人) | "角色"完整性 | 2 人日 | P2 |
-| G8 | 长对话摘要压缩(超窗历史→摘要行) | 长聊不断片(人机恋高频) | 3 人日 | P2 |
+| G5 | 气泡 markdown 渲染(*动作*斜体、粗体、引号对话) | 观感直接对标 ST/OMate | 3~4 人日 | ~~P2~~ ✅已落地(2026-10-25) |
+| G6 | 卡面 PNG 头像展示+卡管理体验 | 选卡场景的基本体验 | 1~2 人日 | ~~P2~~ ✅已落地(2026-10-25) |
+| G7 | 音色/VRM 模型绑定到卡(换卡=换人) | "角色"完整性 | 2 人日 | ~~P2~~ ✅已落地(2026-10-25) |
+| G8 | 长对话摘要压缩(超窗历史→摘要行) | 长聊不断片(人机恋高频) | 3 人日 | ~~P2~~ ✅已落地(2026-10-25) |
 | G9 | 表情分类器兜底(无标签时本地分类) | 卡不带标签也生动 | 2~3 人日 | P2(可延) |
 | G10 | 问候后台推送(WorkManager+通知;前台不定时问候已并入 G0) | 人机恋"被想起"感(锁屏触达) | 2 人日 | P3 |
 | G11 | 关系状态:好感度/纪念日/专属称呼(存记忆库) | 关系有进展 | 4 人日 | P3 |
@@ -181,13 +181,17 @@
 - 导入:ST jsonl → 剥历史气泡里 ST 专有标记后灌入 Room 作为历史上下文(注意行内标签协议是本端专属,历史里的旧标签要清洗,复用 InlineTagExtractor 的清理逻辑)。
 - 验收:ST 导出的 200 条 jsonl 导入后①气泡可见②新请求上下文包含且不被旧标签污染③再导出回 ST 可读。
 
-### P2:体验对齐(≈10 人日,目标:观感不输 OMate/ST)
+### P2:体验对齐(≈10 人日,目标:观感不输 OMate/ST)——**2026-10-25 P2-1~P2-4 全部落地+真机验收过**
 
 - **P2-1 markdown 气泡(3~4 人日)**:Compose 侧引入轻量 markdown 渲染(自写或 `compose-richtext` 类库,注意引依赖前评审);至少支持:`*...*/_..._`→斜体(动作)、`**...**`→粗体、`"..."`/「…」对话样式、换段。渲染层吃 `ChatLine` 前先过一个新的 `MarkdownLineParser`;**TTS 侧保持 StageDirectionFilter 滤除语义**(显示斜体、不朗读,正好语义一致)。这是"酒馆观感"的最大单点。
+  **✅落地**:自写零依赖 `app/…/MarkdownLine.kt`(`MarkdownLineParser` 纯函数→span,`**粗体**`/`*斜体*`/`_斜体_`〔词边界保护〕/`"…"「…」『…』引号〔含引号整体着色〕/反引号代码/`\`转义/未闭合回退字面〔流式安全〕);AiChatBar 经 `markdownBubble()` 转 AnnotatedString(粗体/斜体/引号暖黄 0xFFFFD489/代码等宽浅青),用户行与系统行原样。**真机坑**:模型爱写 `* 动作 *`(星号内侧带空格),CommonMark 空白守卫会挡掉——开标记放宽、闭标记守卫保留(`3 * 4 * 5` 不误伤),内侧衬垫空白 trim。TTS 语义未动(舞台指示滤除照旧)。
 - **P2-2 卡面与管理(1~2 人日)**:卡列表显示 PNG 头像(`CharacterCardParser.readPngTextChunks` 已能拆 PNG,直接解码显示)、tags、creator;卡库页美化。
+  **✅落地**:`CharacterCardStore.bytes()` 暴露原始卡 bytes → `rememberCardAvatar` 按 ~96px 目标边解码(44dp 行内缩略图,JSON 卡/解码失败落空由布局省略);卡行新增元信息行 spec·版本+作者(`card.creator`)+前 3 个标签。真机:插画卡(Sakana)头像/标签行实拍确认。
 - **P2-3 卡级绑定(2 人日)**:卡记录关联"音色+VRM 模型文件+开场白选择",切卡即整体换人(数据挂 CardLibrary 索引,不入卡本体)。
+  **✅落地**:`CardBindings.kt`(prefs `ai_card_bindings` JSON,kotlinx.serialization 与 PresetCardImport 同款,JVM 可测);**隐式绑定语义**=激活卡期间改的音色(`updateAiPrefs` 写回)/VRM(`selectModel` 写回)/开场白选择(`speakGreeting` 写回 greetingIndex)自动记入该卡档案,激活时(`activateEntry`)按档案恢复(音色→updateAiPrefs、模型→校验存在后 selectModel、开场白→有绑定不再弹层直接朗读);删卡清绑定。真机:种子绑定→切 Seraphina→切回 Sakana,prefs 真值实锤音色(Yunxi)与模型(10.vrm)双双自动恢复。调试面新增 `ai_cmd activate_card <文件名>`。
 - **P2-4 摘要压缩(3 人日)**:超过 `recentTurnLimit` 的历史异步摘要成一条 system 摘要行(每 20 轮滚动更新,LLM 复用当前 provider;失败保留旧摘要)。与 M1/M2 记忆并存:记忆管"事实",摘要管"剧情"。验收:50 轮后问第 3 轮的剧情细节,无摘要答不出、有摘要能答。
-- (可选)P2-5 表情兜底分类器:关键词/小模型分类兜底,优先级最低——行内标签协议已是主路径。
+  **✅落地**:`AvatarSession.Options.historySummaryEnabled`(默认开)+`historySummaryEveryMessages`(20 条新溢出消息触发)/`historySummaryMaxChars`(700);触发点=整轮落库后(`maybeSummarizeHistory`),后台任务独立于 turnJob(打断不打断摘要),「旧摘要+新溢出段」合并式滚动;注入=system 末尾(世界书段之前,`【前情摘要】`头,单条 system 保持端点兼容);`clearHistory/importHistory` 重置;失败保旧摘要下轮重试;REQUEST 日志加 `sum=` 字段。ChatConfig 透传+设置页「长对话剧情摘要」开关(记忆区)。**真机**:30 轮触发(overflow=20 covers=0→154ch),61 条历史只发最近 40 条,问第 1 轮暗号答「蓝风铃」全链实锤。**测试坑**:摘要任务可能被 unconfined 事件循环排队/在 Default 线程异步执行,断言前必须 join(新增 `awaitHistorySummaryForTest()` 观测缝),否则与断言赛跑偶发翻车。
+- (可选)P2-5 表情兜底分类器:关键词/小模型分类兜底,优先级最低——行内标签协议已是主路径。**未做**(维持可选)。
 
 ### P3:人机恋深化(≈10 人日,目标:从"玩具"变"关系")
 

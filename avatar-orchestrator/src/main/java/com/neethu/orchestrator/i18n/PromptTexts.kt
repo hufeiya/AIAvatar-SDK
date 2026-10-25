@@ -47,6 +47,15 @@ interface PromptTexts {
     val lorebookHeader: String
 
     /**
+     * 历史摘要注入块的标题行（P2-4 摘要压缩）：超出 recentTurnLimit 的早期
+     * 剧情滚动摘要，拼进 system 末尾（世界书段之前）。
+     */
+    val historySummaryHeader: String
+
+    /** 后台摘要调用的 system 指令（复用当前 provider 的 LLM，无工具无标签）。 */
+    fun historySummaryInstruction(previousSummary: String?, transcript: String): String
+
+    /**
      * 多模态协议块全文。段结构（表情/镜头/动作/移动/few-shot 示例）与中文版
      * 逐段对齐；空段（无镜头/无动作/无锚点）的省略规则在两个实现里必须一致。
      *
@@ -349,6 +358,19 @@ object PromptTextsZh : PromptTexts {
     override val userAlias: String = "你"
 
     override val lorebookHeader: String = "【世界设定】（角色所在世界的背景设定，与本轮对话相关时遵循）"
+
+    override val historySummaryHeader: String = "【前情摘要】（更早剧情的压缩记录，续写时保持连贯）"
+
+    override fun historySummaryInstruction(previousSummary: String?, transcript: String): String =
+        "你是对话记录员。把下面的对话剧情压缩成一段简洁摘要（400 字以内），" +
+            "保留：人物称呼与关系、发生的事件、做出的承诺与约定、时间线与地点、" +
+            "情绪转折。不要评论、不要补充、只输出摘要本身。\n\n" +
+            (
+                previousSummary?.takeIf { it.isNotBlank() }?.let {
+                    "已有旧摘要（把新剧情续写合并进去，不要丢失旧要点）：\n$it\n\n"
+                } ?: ""
+                ) +
+            "对话记录：\n$transcript"
 
     override fun protocolBlock(
         cameras: List<Pair<String, String>>,
@@ -827,6 +849,21 @@ object PromptTextsEn : PromptTexts {
 
     override val lorebookHeader: String =
         "[World Info] (lore of the world the character lives in; follow when relevant to this turn)"
+
+    override val historySummaryHeader: String =
+        "[Story So Far] (condensed record of earlier plot; stay consistent when continuing)"
+
+    override fun historySummaryInstruction(previousSummary: String?, transcript: String): String =
+        "You are a dialogue archivist. Condense the conversation below into one brief summary " +
+            "(under 300 words), preserving: names and relationships, events that happened, " +
+            "promises and agreements, timeline and locations, emotional turning points. " +
+            "No commentary, no additions — output only the summary itself.\n\n" +
+            (
+                previousSummary?.takeIf { it.isNotBlank() }?.let {
+                    "Existing summary (merge the new plot into it without losing old points):\n$it\n\n"
+                } ?: ""
+                ) +
+            "Conversation:\n$transcript"
 
     override fun protocolBlock(
         cameras: List<Pair<String, String>>,

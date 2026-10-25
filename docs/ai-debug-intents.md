@@ -78,6 +78,7 @@
 | `new_context` | — | 新建一个上下文并切换（随机 UUID）；旧上下文历史保留在库里，可随时切回 |
 | `select_context` | `ai_arg`=上下文 id 前缀 | 切换到指定上下文（前缀匹配，不区分大小写），历史从 Room 恢复；无匹配报错。切换会重建会话，正在播放的回合会被打断 |
 | `import_card` | `ai_arg`=文件路径 | 导入并**自动激活**一张酒馆人物卡（SillyTavern PNG/JSON）。arg 为绝对路径或相对应用外部目录（`/sdcard/Android/data/<pkg>/files/`，先 `adb push` 到这里，无需权限）的相对路径；激活即重写系统提示词，已配 TTS 时自动朗读开场白（含 `{{char}}/{{user}}` 宏替换） |
+| `activate_card` | `ai_arg`=库内文件名 | 激活已导入的一张卡（走与点选同一条 UI 路径：卡级绑定恢复+开场白逻辑全同）。文件名见 `import_card` 回显或 `active_card` 的 cards 列表 |
 | `active_card` | — | 输出当前激活卡片：文件名 / name / spec / version / 开场白长度 / 系统提示词长度与前 100 字符（卡片未激活输出 `no active card`） |
 | `transcribe` | `ai_arg`=音频文件路径 | 语音识别（任务 4）：把音频文件走与「按住说话」完全相同的 ASR 链路（OpenAI 兼容 `/audio/transcriptions`，模型按设置推断：硅基流动默认 `Qwen/Qwen3-ASR-1.7B`，OpenRouter 默认 `openai/whisper-large-v3`（OpenRouter 音频端点要求账户 ≥$0.50 余额，不足时 402 错误原样透出）），识别文本打印到 logcat。arg 为绝对路径或相对应用外部目录的相对路径（先 `adb push`）。**不需要麦克风权限**（不走 MediaRecorder），适合无手环境验证 ASR |
 | `voice_record` | `ai_arg`=秒数(1\|30) | 用与「按住说话」相同的 MediaRecorder 路径（AAC/m4a/16kHz）真录音 N 秒后自动转写，输出文件大小与识别文本；开始录音前会先打断正在播的回复（半双工）。**需要麦克风权限**：HyperOS 禁 adb 授权（`pm grant`/`install -g`/appops 均无效），首次须真手按住说话弹系统框授权；无权限时报 `录音启动失败：setAudioSource failed` |

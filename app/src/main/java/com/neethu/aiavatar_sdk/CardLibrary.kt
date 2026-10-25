@@ -51,6 +51,9 @@ internal class CardLibrary(context: Context) {
         return entry
     }
 
+    /** 原始卡 bytes（PNG 头像解码用，P2-2）；null = 缺失。 */
+    fun bytes(fileName: String): ByteArray? = store.bytes(fileName)
+
     /** 激活/取消激活（传 null）卡片；持久化到 ai_active_card。 */
     fun setActive(fileName: String?) {
         activeFile = fileName

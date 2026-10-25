@@ -196,6 +196,18 @@ class AvatarSession(
          */
         val recentTurnLimit: Int? = null,
         /**
+         * 历史摘要压缩（酒馆 P2-4，docs/tavern-companion-feasibility.md §5）：
+         * 超出 [recentTurnLimit] 的早期历史滚动摘要成一段 system 摘要块——
+         * 摘要管「剧情」，长期记忆管「事实」，两者并存。触发=新增溢出消息数
+         * 达 [historySummaryEveryMessages]；LLM 复用当前 provider（无工具无
+         * 标签），失败保留旧摘要下轮重试。默认开。
+         */
+        val historySummaryEnabled: Boolean = true,
+        /** 摘要滚动更新阈值：新增溢出消息数达到该值才再摘要一次。 */
+        val historySummaryEveryMessages: Int = 20,
+        /** 摘要文本长度上限（字符），超出截断。 */
+        val historySummaryMaxChars: Int = 700,
+        /**
          * 智能体工具调用总开关（docs/agent-feasibility.md §4.5）：关闭后请求
          * 永不带 tools 键、工具循环短路，行为与非 agent 会话逐字节一致。
          * 注册表为空时开启也是天然 no-op。
@@ -408,6 +420,18 @@ class AvatarSession(
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
     private var turnJob: Job? = null
+
+    // ── 历史摘要压缩（P2-4）───────────────────────────────────────────────
+    /** 当前摘要正文；null = 尚无（早期溢出消息在摘要生成前的请求里照旧丢弃）。 */
+    @Volatile
+    private var historySummary: String? = null
+
+    /** 摘要已覆盖的历史消息数（store.messages() 的前缀长度）。 */
+    @Volatile
+    private var historySummaryCovers: Int = 0
+
+    /** 后台摘要任务（独立于 [turnJob]——用户打断回合不打断摘要）。 */
+    private var historySummaryJob: Job? = null
     /**
      * 等待挂接的表情 cue 列表（§7.4）：标签语义上修饰"它后面的那句话"，而
      * TTS 合成+排队常把开播推迟数秒——若在 LLM 吐标签瞬间就驱动面部，3 秒
@@ -591,6 +615,9 @@ class AvatarSession(
 
     /** Clear dialog history (a fresh conversation). */
     fun clearHistory() {
+        historySummaryJob?.cancel()
+        historySummary = null
+        historySummaryCovers = 0
         store.clear()
         previousAction = null
         turnPreviousAction = null
@@ -619,6 +646,9 @@ class AvatarSession(
      */
     fun importHistory(messages: List<ChatMessage>) {
         if (turnJob?.isActive == true) interrupt("import-history")
+        historySummaryJob?.cancel()
+        historySummary = null
+        historySummaryCovers = 0
         store.clear()
         previousAction = null
         turnPreviousAction = null
@@ -920,6 +950,8 @@ class AvatarSession(
                 // 路径天然跳过（半截对话提炼出来的事实不可信）；内部达阈值才
                 // 后台提炼，fire-and-forget 永不在此处抛。
                 memoryCoordinator?.onTurnCompleted(text, cleanBuffer.toString())
+                // 历史摘要滚动触发（P2-4）：整轮落库后检查，后台执行不阻塞下一回合
+                maybeSummarizeHistory()
                 _phase.value = ConversationPhase.IDLE
                 emit(AvatarEvent.TurnCompleted(interrupted = false))
                 // 技能缝：回合结果广播给技能（猜拳 INVITED→ARMED / JUDGING→ARMED）
@@ -1363,6 +1395,76 @@ class AvatarSession(
         )
     }
 
+    /** 测试观测缝（P2-4）：等挂在飞行的后台摘要任务收尾（无任务立即返回）。 */
+    internal suspend fun awaitHistorySummaryForTest() {
+        historySummaryJob?.join()
+    }
+
+    /** 摘要注入块（system 段）：无摘要或未溢出返回 null。 */
+    private fun historySummaryBlock(historySize: Int): String? {
+        val summary = historySummary ?: return null
+        val limit = options.recentTurnLimit ?: return null
+        if (historySize <= limit) return null
+        return "${texts.historySummaryHeader}\n${summary.trim()}"
+    }
+
+    /**
+     * 滚动摘要触发（P2-4）：新增溢出消息（超出 recentTurnLimit 且未被当前
+     * 摘要覆盖的部分）达 [Options.historySummaryEveryMessages] 时，后台调一次
+     * 当前 provider 的 LLM 把「旧摘要 + 新溢出段」合并成新摘要。fire-and-forget：
+     * 失败只打日志并保留旧摘要（下轮溢出再触发重试）；进行中则跳过。
+     */
+    private fun maybeSummarizeHistory() {
+        if (!options.historySummaryEnabled) return
+        val limit = options.recentTurnLimit ?: return
+        if (historySummaryJob?.isActive == true) return
+        val history = store.messages()
+        val overflow = history.size - limit
+        if (overflow <= 0 || overflow - historySummaryCovers < options.historySummaryEveryMessages) return
+        val previous = historySummary
+        val slice = history.subList(historySummaryCovers.coerceAtMost(overflow), overflow)
+        val transcript = slice.joinToString("\n") { m ->
+            // 语言中立前缀（摘要指令本身随语言，转写不掺中文）
+            val who = if (m.role == ChatRole.ASSISTANT) "[assistant]" else "[user]"
+            "$who ${m.content.take(600)}"
+        }.take(12_000)
+        val cfg = llmConfig ?: return
+        val adapter = llm ?: return
+        Log.i(
+            PROMPT_TAG,
+            "$STREAM_PREFIX history summary: covering ${slice.size} new overflow message(s) " +
+                "(overflow=$overflow covers=$historySummaryCovers prev=${previous?.length ?: 0}ch)",
+        )
+        historySummaryJob = scope.launch {
+            try {
+                val sb = StringBuilder()
+                adapter.streamChat(
+                    listOf(
+                        ChatMessage(ChatRole.SYSTEM, texts.historySummaryInstruction(previous, transcript)),
+                        ChatMessage(ChatRole.USER, "请输出合并后的摘要。"),
+                    ),
+                    cfg.copy(tools = emptyList(), toolChoice = null, maxTokens = 1024),
+                ).collect { event ->
+                    when (event) {
+                        is LlmStreamEvent.TextDelta -> sb.append(event.text)
+                        is LlmStreamEvent.Error -> throw event.throwable
+                        else -> Unit
+                    }
+                }
+                val merged = sb.toString().trim()
+                if (merged.isEmpty()) throw IllegalStateException("empty summary reply")
+                historySummary = merged.take(options.historySummaryMaxChars)
+                historySummaryCovers = overflow
+                Log.i(PROMPT_TAG, "$STREAM_PREFIX history summary updated: ${historySummary!!.length}ch covers=$overflow")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // 失败保留旧摘要（covers 不动）：下轮新增溢出再触发重试
+                Log.w("AvatarSession", "$STREAM_PREFIX history summary failed, keeping old: ${t.message}")
+            }
+        }
+    }
+
     /** Rebuild from live assets so a removed model/anchor cannot survive in a cached allowlist. */
     private fun capabilityRegistry(): TagCapabilityRegistry = TagCapabilityRegistry(
         emotions = texts.emotionNames.map { it.substringBefore('(') }.toSet(),
@@ -1397,7 +1499,11 @@ class AvatarSession(
             history.filter { it.role == ChatRole.USER }.map { it.content },
             LorebookInjector.Config(header = texts.lorebookHeader),
         ) else null
-        val systemText = listOf(missionText, persona, protocol.orEmpty(), loreBlock.orEmpty())
+        // 历史摘要（P2-4）：超出 recentTurnLimit 的早期剧情滚动摘要，拼进
+        // system 末尾（世界书段之前）——与 lore 同属逐轮可能变化的动态段，
+        // 不进稳定前缀（protocol pin）；单条 system 消息保持多家端点兼容。
+        val summaryBlock = historySummaryBlock(history.size)
+        val systemText = listOf(missionText, persona, protocol.orEmpty(), summaryBlock.orEmpty(), loreBlock.orEmpty())
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
         if (systemText.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, systemText)
@@ -1445,7 +1551,7 @@ class AvatarSession(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
                 "view=${viewLine ?: "n/a"} mem=${memoryLine?.length ?: 0}ch skill=${skillLine?.length ?: 0}ch " +
-                "rt=${roundtableLine?.length ?: 0}ch lore=${loreBlock?.length ?: 0}ch phi=${phiLine?.length ?: 0}ch " +
+                "rt=${roundtableLine?.length ?: 0}ch lore=${loreBlock?.length ?: 0}ch sum=${summaryBlock?.length ?: 0}ch phi=${phiLine?.length ?: 0}ch " +
                 "fewshot=${fewshot.size} " +
                 "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +

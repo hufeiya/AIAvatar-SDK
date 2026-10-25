@@ -152,7 +152,11 @@ class AvatarSessionProtocolPinTest {
 
     @Test
     fun `all thirty turns keep complete stable system after history trimming`() = runTest {
-        val session = newSession(options = AvatarSession.Options(recentTurnLimit = 3))
+        // P2-4 摘要是逐轮可能变化的动态段（拼在 system 尾部、稳定前缀之后），
+        // 本测试钉的是「30 轮全等」，与滚动摘要天然互斥——显式关闭
+        val session = newSession(
+            options = AvatarSession.Options(recentTurnLimit = 3, historySummaryEnabled = false),
+        )
         session.systemPrompt = "你是测试人设。"
         session.actionCatalog = listOf(
             ActionEntry("wave", "挥手", assetPath = "animations/wave.vrma"),

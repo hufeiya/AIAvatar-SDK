@@ -49,6 +49,9 @@ class CharacterCardStore(private val rootDir: File) {
     fun read(fileName: String): CharacterCard? =
         safeFile(fileName)?.let { parseQuietly(it) }
 
+    /** Original stored bytes (PNG 卡头像缩略图解码用，P2-2)；null = 缺失/不可读。 */
+    fun bytes(fileName: String): ByteArray? = safeFile(fileName)?.readBytes()
+
     /** Delete one stored file; true when something was removed. */
     fun delete(fileName: String): Boolean = safeFile(fileName)?.delete() ?: false
 

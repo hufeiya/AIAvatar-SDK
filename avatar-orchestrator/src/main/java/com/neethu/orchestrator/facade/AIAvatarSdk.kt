@@ -147,6 +147,12 @@ class AIAvatarSdk(
         val temperature: Float = 0.6f,
         val recentTurnLimit: Int = 40,
         /**
+         * 历史摘要压缩（酒馆 P2-4）：超出 [recentTurnLimit] 的早期历史滚动
+         * 摘要成 system 摘要块（每 20 条新溢出消息更新一次，复用当前 provider）。
+         * 默认开；与长期记忆并存——记忆管「事实」，摘要管「剧情」。
+         */
+        val historySummaryEnabled: Boolean = true,
+        /**
          * 本会话 TTS 并发上限（§4.2 的全局预算缝）：多虚拟人舞台按
          * RoundtableSession.perSlotTtsBudget 均分注入（2 slot × 2 = 全局 4），
          * 单虚拟人保持默认 4 不变。
@@ -379,6 +385,7 @@ class AIAvatarSdk(
                 // 身份前言每轮恒带；人设全文+协议目录（~12K chars）只随上下文
                 // 首轮发送、失败自动重发（AvatarSession 内聚），都不进 store。
                 recentTurnLimit = config.recentTurnLimit,
+                historySummaryEnabled = config.historySummaryEnabled,
             ),
             store = store,
             skillHost = skillHost,

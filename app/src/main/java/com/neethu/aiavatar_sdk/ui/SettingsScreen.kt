@@ -679,6 +679,12 @@ internal fun SettingsScreen(
                                 subtitle = s.memoryAutoSubtitle,
                                 checked = aiPrefs.memoryAutoExtract
                             ) { onAiPrefsChange(aiPrefs.copy(memoryAutoExtract = it)) }
+                            // 历史摘要压缩（P2-4）：记忆管「事实」，摘要管「剧情」
+                            SettingsSwitchRow(
+                                title = s.summaryToggleTitle,
+                                subtitle = s.summaryToggleDesc,
+                                checked = aiPrefs.historySummary
+                            ) { onAiPrefsChange(aiPrefs.copy(historySummary = it)) }
                             SettingsGroupLabel(s.memoryPrivacyHint)
                             SettingsActionRow(
                                 title = s.memoryManageEntry,
