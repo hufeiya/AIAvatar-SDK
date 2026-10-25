@@ -92,8 +92,10 @@ internal class AutonomyRig(
     /**
      * 注入动作词汇表与作息表（场景切换/语言变化时重跑）。词汇表从交互点表
      * 投影：sit→SITTING、lie→LYING、带 look 的 stand→LOOKING、其余→WANDER；
-     * P0 道具系统 §3.1：再从活动目录 join 出 [AutonomySpot.activityId]
-     * （首个 anchor 命中的活动胜出），FSM 选点即可能带出 DoActivity。
+     * `kind=prop` 是 P1 §6.2 世界摆件的纯摆放锚点（茶具组的桌面坐标）——
+     * 不进 FSM 词汇表（走上去会撞桌子）。P0 道具系统 §3.1：再从活动目录
+     * join 出 [AutonomySpot.activityId]（首个 anchor 命中的活动胜出），
+     * FSM 选点即可能带出 DoActivity。
      */
     fun setVocabulary(
         anchors: List<InteractionAnchor>,
@@ -101,7 +103,7 @@ internal class AutonomyRig(
         lang: Lang,
         activities: ActivityCatalog = ActivityCatalog.EMPTY,
     ) {
-        val spots = anchors.map { anchor ->
+        val spots = anchors.filter { it.kind != "prop" }.map { anchor ->
             AutonomySpot(
                 id = anchor.id,
                 kind = when {

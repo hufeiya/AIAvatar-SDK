@@ -594,6 +594,64 @@ P1_PROPS.push({
   ],
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// P1 场景层补件(docs/prop-system-feasibility.md §5 P1 行点名、上期入库未含):
+// 眼罩(戴眼罩睡觉)/哑铃(举铁)/葫芦(饮酒)。同活模板,3 件全部程序化。
+// ═══════════════════════════════════════════════════════════════════════
+
+// 21. eyeMask 眼罩:遮光罩体(微拱近似为两段薄盒)+ 鼻梁缺口 + 侧边弹力带,
+//     面戴件(wearFace 模板),原点=罩体中心
+P1_PROPS.push({
+  name: 'eyeMask',
+  materials: [
+    mat('mask_pad', [0.48, 0.16, 0.20, 1], { roughness: 0.6 }),
+    mat('mask_trim', [0.85, 0.72, 0.35, 1], { roughness: 0.4 }),
+    mat('mask_strap', [0.20, 0.20, 0.22, 1], { roughness: 0.7 }),
+  ],
+  parts: [
+    { geo: translate(box(0.062, 0.030, 0.012), -0.045, 0, 0), mat: 0 },
+    { geo: translate(box(0.062, 0.030, 0.012), 0.045, 0, 0), mat: 0 },
+    { geo: translate(box(0.030, 0.024, 0.012), 0, -0.002, 0.001), mat: 1 },
+    { geo: translate(box(0.008, 0.006, 0.010), 0, -0.017, 0.001), mat: 1 },
+    { geo: translate(box(0.006, 0.012, 0.008), -0.078, 0, -0.006), mat: 2 },
+    { geo: translate(box(0.006, 0.012, 0.008), 0.078, 0, -0.006), mat: 2 },
+  ],
+});
+
+// 22. dumbbell 哑铃:横杆 + 两端大小配重片各一对,原点=杆中心(单手握点),
+//     杆沿 X(自然水平持握朝向,校准同 holdObject 模板)
+P1_PROPS.push({
+  name: 'dumbbell',
+  materials: [
+    mat('db_bar', [0.30, 0.31, 0.34, 1], { metallic: 0.85, roughness: 0.25 }),
+    mat('db_plate', [0.14, 0.14, 0.15, 1], { metallic: 0.6, roughness: 0.35 }),
+  ],
+  parts: [
+    { geo: rotateZ(cylinder(0.011, 0.34), 90), mat: 0 },
+    { geo: translate(rotateZ(cylinder(0.049, 0.017), 90), -0.128, 0, 0), mat: 1 },
+    { geo: translate(rotateZ(cylinder(0.049, 0.017), 90), 0.128, 0, 0), mat: 1 },
+    { geo: translate(rotateZ(cylinder(0.036, 0.014), 90), -0.152, 0, 0), mat: 1 },
+    { geo: translate(rotateZ(cylinder(0.036, 0.014), 90), 0.152, 0, 0), mat: 1 },
+  ],
+});
+
+// 23. gourd 饮酒葫芦:下球(酒腹) + 收腰 + 上球(口肩) + 顶塞,原点=握点(腰),
+//     总高 ~15cm,饮具类(holdBottle 模板)
+P1_PROPS.push({
+  name: 'gourd',
+  materials: [
+    mat('gourd_skin', [0.72, 0.48, 0.18, 1], { roughness: 0.45 }),
+    mat('gourd_seal', [0.80, 0.67, 0.25, 1], { metallic: 0.4, roughness: 0.3 }),
+  ],
+  parts: [
+    { geo: translate(sphere(0.041, 10, 14), 0, -0.045, 0), mat: 0 },
+    { geo: translate(frustum(0.017, 0.028, 0.026), 0, -0.008, 0), mat: 0 },
+    { geo: translate(sphere(0.026, 8, 12), 0, 0.023, 0), mat: 0 },
+    { geo: translate(cylinder(0.012, 0.016), 0, 0.044, 0), mat: 0 },
+    { geo: translate(cylinder(0.014, 0.009), 0, 0.053, 0), mat: 1 },
+  ],
+});
+
 for (const p of P1_PROPS) {
   const glb = buildGlb(p.name, p.parts, p.materials);
   fs.writeFileSync(`${p.name}.glb`, glb);

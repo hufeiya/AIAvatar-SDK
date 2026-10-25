@@ -31,11 +31,11 @@ class AccessoryOffsetProfilesTest {
     // ── 模板表 ───────────────────────────────────────────────────────────
 
     @Test
-    fun `8 templates registered with mount-point defaults`() {
+    fun `9 templates registered with mount-point defaults`() {
         assertEquals(
             setOf(
                 "holdCup", "holdBottle", "holdBook", "holdWand",
-                "holdObject", "wearHead", "holdBig", "worldProp",
+                "holdObject", "wearHead", "wearFace", "holdBig", "worldProp",
             ),
             AccessoryOffsetProfiles.byName.keys,
         )
@@ -43,6 +43,8 @@ class AccessoryOffsetProfilesTest {
         assertEquals("rightHand", AccessoryOffsetProfiles.holdCup.bone)
         assertEquals("leftHand", AccessoryOffsetProfiles.holdBook.bone)
         assertEquals("head", AccessoryOffsetProfiles.wearHead.bone)
+        // P1 场景层:面戴件(眼罩)与头戴件(耳机)分模板,互不继承对方的模板级校准
+        assertEquals("head", AccessoryOffsetProfiles.wearFace.bone)
         AccessoryOffsetProfiles.byName.values.forEach {
             assertTrue(it.scale > 0f)
             assertEquals(3, it.position.size)

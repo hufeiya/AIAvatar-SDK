@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "scene": "dream_bedroom.glb",
   "title": "Forest Reverie / 森林梦境卧室",
-  "anchorCount": 16,
+  "anchorCount": 20,
   "anchors": [
     {
       "id": "spawn",
@@ -215,6 +215,54 @@
       "y": -1.0,
       "z": -5.2,
       "yawDeg": 90
+    },
+    {
+      "id": "yoga_spot",
+      "label": "东侧空地瑜伽点",
+      "labelEn": "yoga spot",
+      "kind": "stand",
+      "x": 1.9,
+      "y": -0.932,
+      "z": -2.5,
+      "yawDeg": 0,
+      "note": "P1 §6.2 世界摆件锚点:瑜伽垫(卷,半径 0.068)落地即 y=地面+0.068;人面向电视同 rug_watch_tv"
+    },
+    {
+      "id": "desk_side",
+      "label": "书桌东侧站立点",
+      "labelEn": "desk side",
+      "kind": "stand",
+      "x": 1.85,
+      "y": -1.0,
+      "z": -5.7,
+      "yawDeg": 180,
+      "note": "P1 场景层:书桌侧站位(椅子东侧),倒饮料待客在这里;面向桌面同 desk_approach"
+    },
+    {
+      "id": "desk_top",
+      "label": "书桌桌面摆件点(茶具组)",
+      "labelEn": "desk top",
+      "kind": "prop",
+      "x": 1.5,
+      "y": -0.164,
+      "z": -6.43,
+      "yawDeg": 0,
+      "note": "P1 §6.2 纯摆放锚点(kind=prop 不进 FSM 词汇表):桌面工作面 y=-0.172(场景 GLB prim 实测)+托盘半厚 0.008;茶具组托盘 X 长边沿桌沿"
+    },
+    {
+      "id": "rug_meditate",
+      "label": "地毯打坐点",
+      "labelEn": "rug meditation",
+      "kind": "sit",
+      "x": 0.45,
+      "y": -0.961,
+      "z": -3.3,
+      "yawDeg": 0,
+      "hipsLift": 0.09,
+      "sitInClip": "animations/06_坐姿/Standing To Sitting Transition.vrma",
+      "sitLoopClip": "animations/06_坐姿/Sitting Cross Legged.vrma",
+      "standUpClip": "animations/06_坐姿/Standing Up From Seated Position.vrma",
+      "note": "P1 场景层:地毯上盘腿打坐(rug 面 y=-0.961 实测),面向电视;dream_bedroom_3 的莲台打坐走 meditation_seat"
     }
   ]
 }

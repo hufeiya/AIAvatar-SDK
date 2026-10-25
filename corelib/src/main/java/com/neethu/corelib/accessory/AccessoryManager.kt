@@ -102,26 +102,41 @@ internal class AccessoryManager(
         resources.loadResources(asset)
         asset.releaseSourceData()
 
-        // ④⑤ 挂点解析 + re-parent（骨骼局部系挂在人体层级内）
-        val boneEntity = resolveBone(spec.bone)
-        if (boneEntity == 0) {
-            loader.destroyAsset(asset)
-            return Result.failure(IllegalArgumentException("$ownerTag bone '${spec.bone}' not resolved"))
-        }
+        // ④⑤ 挂点解析 + re-parent（骨骼局部系挂在人体层级内）；世界挂载
+        //     （§6.2 地面/场景道具）不挂骨骼——无父即世界系，直接写世界 TRS
         val tm = host.accEngine.transformManager
         val propInstance = tm.getInstance(asset.root)
-        val boneInstance = tm.getInstance(boneEntity)
-        if (propInstance == 0 || boneInstance == 0) {
+        if (propInstance == 0) {
             loader.destroyAsset(asset)
-            return Result.failure(IllegalStateException("$ownerTag transform missing (prop=$propInstance bone=$boneInstance)"))
+            return Result.failure(IllegalStateException("$ownerTag transform missing (prop=$propInstance)"))
         }
-        tm.setParent(propInstance, boneInstance)
+        val world = spec.world
+        val boneEntity: Int
+        if (world != null) {
+            boneEntity = 0
+            tm.setTransform(
+                propInstance,
+                AccessoryMath.worldTransform(world, spec.position, spec.rotationEulerYXZ, spec.scale),
+            )
+        } else {
+            boneEntity = resolveBone(spec.bone)
+            if (boneEntity == 0) {
+                loader.destroyAsset(asset)
+                return Result.failure(IllegalArgumentException("$ownerTag bone '${spec.bone}' not resolved"))
+            }
+            val boneInstance = tm.getInstance(boneEntity)
+            if (boneInstance == 0) {
+                loader.destroyAsset(asset)
+                return Result.failure(IllegalStateException("$ownerTag transform missing (prop=$propInstance bone=$boneInstance)"))
+            }
+            tm.setParent(propInstance, boneInstance)
 
-        // ⑥ 局部 TRS（骨骼局部单位；unit-cube 根缩放经父链传播，不再乘 renderScale）
-        tm.setTransform(
-            propInstance,
-            AccessoryMath.localTransform(spec.position, spec.rotationEulerYXZ, spec.scale),
-        )
+            // ⑥ 局部 TRS（骨骼局部单位；unit-cube 根缩放经父链传播，不再乘 renderScale）
+            tm.setTransform(
+                propInstance,
+                AccessoryMath.localTransform(spec.position, spec.rotationEulerYXZ, spec.scale),
+            )
+        }
 
         // 阴影开关沿 spec（PCSS Adreno 悬崖默认关）；剔除沿 avatar 惯例关
         val rm = host.accEngine.renderableManager
@@ -136,10 +151,15 @@ internal class AccessoryManager(
         host.accScene.addEntities(asset.entities)
         instances[spec.id] = Instance(spec, asset, boneEntity)
         publish()
-        Log.i(TAG, "$ownerTag attach '${spec.id}' → ${spec.bone} ($sourcePath, pos=${spec.position.contentToString()}, rot=${spec.rotationEulerYXZ.contentToString()}, scale=${spec.scale})")
+        if (world != null) {
+            Log.i(TAG, "$ownerTag attach '${spec.id}' → world(${world.x},${world.y},${world.z} yaw=${world.yawDeg}) ($sourcePath, scale=${spec.scale})")
+        } else {
+            Log.i(TAG, "$ownerTag attach '${spec.id}' → ${spec.bone} ($sourcePath, pos=${spec.position.contentToString()}, rot=${spec.rotationEulerYXZ.contentToString()}, scale=${spec.scale})")
+        }
 
-        // P2-3 外部碰撞体（帽子压头发实验）：随挂载注册，随卸载注销
-        if (spec.springColliderRadius > 0f) {
+        // P2-3 外部碰撞体（帽子压头发实验）：随挂载注册，随卸载注销（世界摆件
+        // 无骨骼挂点，碰撞体缝不适用）
+        if (spec.springColliderRadius > 0f && world == null) {
             springCollider?.invoke(spec, boneEntity, true)
         }
         return Result.success(Unit)
@@ -147,7 +167,7 @@ internal class AccessoryManager(
 
     override fun detach(id: String): Boolean {
         val instance = instances.remove(id) ?: return false
-        if (instance.spec.springColliderRadius > 0f) {
+        if (instance.spec.springColliderRadius > 0f && instance.spec.world == null) {
             springCollider?.invoke(instance.spec, instance.boneEntity, false)
         }
         // SIGABRT 纪律（对齐 AvatarRuntime.destroyAsset）：先摘 scene 再毁 asset
@@ -219,7 +239,12 @@ internal class AccessoryManager(
 
     private fun publish() {
         _accessories.value = instances.map { (id, inst) ->
-            AccessoryState(id = id, bone = inst.spec.bone, visible = inst.visible)
+            // 世界摆件（§6.2）bone 字段无意义，观测面统一报 world
+            AccessoryState(
+                id = id,
+                bone = if (inst.spec.world != null) "world" else inst.spec.bone,
+                visible = inst.visible,
+            )
         }
         onChange?.invoke()
     }

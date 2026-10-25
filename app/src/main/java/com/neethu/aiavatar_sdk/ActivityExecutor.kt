@@ -2,9 +2,13 @@ package com.neethu.aiavatar_sdk
 
 import android.content.Context
 import android.util.Log
+import com.neethu.aiavatar_sdk.multiavatar.AccessoryCatalog
 import com.neethu.aiavatar_sdk.multiavatar.VfxCatalog
 import com.neethu.corelib.AvatarController
+import com.neethu.corelib.ContactPosePhase
 import com.neethu.corelib.WalkPhase
+import com.neethu.corelib.accessory.AccessorySpec
+import com.neethu.corelib.accessory.AccessoryWorldMount
 import com.neethu.orchestrator.activity.ActivityCatalog
 import com.neethu.orchestrator.activity.ActivityEntry
 import com.neethu.orchestrator.agent.ActivityFailure
@@ -25,6 +29,10 @@ import java.util.Locale
  * 目录的一条「行为配方」落到既有积木上——可选 anchor 走 [InteractionCoordinator]
  * 就位链 → 播动画（**道具显隐零新代码**：`AccessoryAnimationBinder` 查
  * bindings.json，动画起来道具自动出现）→ 可选 VFX → 可选台词 `speak()`。
+ *
+ * P1 §6.2 增量：配方 `props` 里的 `{"mount":"world"}` 世界摆件（瑜伽垫/茶具
+ * 组）没有动画可绑、不经绑定表——本执行器按其锚点坐标挂到世界（就位前先
+ * 摆好），活动收场（stop/打断/播完/顶替）一律收回。
  *
  * 与既有执行互斥同锁：就位链忙/自身忙 → [ActivityFailure.BUSY]（就位链也经
  * [InteractionCoordinator.busyProbe] 反向探测本执行器）。loop 活动 = base 槽
@@ -60,6 +68,20 @@ internal class ActivityExecutor(
     private var startedAtMs = 0L
     private var startedExternally = false
 
+    /**
+     * 当前活动挂上的世界摆件 id（§6.2：瑜伽垫/茶具组按场景锚点摆世界坐标，
+     * 无动画可绑不走绑定表——活动开始出现、结束/打断由本执行器收起）。
+     */
+    private val worldProps = mutableListOf<String>()
+
+    /**
+     * 当前活动播的特效（§2.2 可选联动层）：句柄 id（playVfx 返回）+ preset
+     * id（句柄拿不到时兜底扫）。活动收场（stop/打断/播完/失败）一律停——
+     * P1 真机验收①的教训：只播不停，magic_circle/rain/petals 永久残留。
+     */
+    private var playedVfxHandleId: String? = null
+    private var playedVfxPresetId: String? = null
+
     /** 最近 8 条启动/停止/打断记录（ai_cmd `activity last` 正本）。 */
     private val history = ArrayDeque<String>()
 
@@ -77,9 +99,14 @@ internal class ActivityExecutor(
         if (!fromAutonomy && coordinator.isBusy) return ActivityFailure.BUSY
         // 顶替语义：旧 loop 活动的看守必须先撤（否则它会在新活动播起来后
         // 误判打断、把新活动杀掉）;旧循环剪辑由新 playVrmaAnimation 顶替,
-        // 道具经绑定表自动换手。
+        // 道具经绑定表自动换手;旧活动的世界摆件与特效一并收回（§6.2/§2.2
+        // 生命周期随活动,不随剪辑）——特效句柄不在这里停,会随下方 runActivity
+        // 的登记覆写永久丢失（P1 真机验收 r2:umbrella_rain 被顶替后 fx8 rain
+        // 无限续命）。
         watchJob?.cancel()
         watchJob = null
+        detachWorldProps()
+        stopPlayedVfx()
         record(entry, if (fromAutonomy) "autonomy" else "external")
         currentId = entry.id
         currentEntry = entry
@@ -134,6 +161,10 @@ internal class ActivityExecutor(
     // ── 执行链（§2.2）───────────────────────────────────────────────────
 
     private suspend fun runActivity(entry: ActivityEntry, skipAnchor: Boolean) {
+        // 0. 世界摆件先上（§6.2）：瑜伽垫先铺地上、茶具先摆桌上,人就位时道具
+        //    已在场。锚点在当前场景交互点表里查（无此锚点 = 该场景不摆,记日志
+        //    降级——活动本体照跑）。
+        attachWorldProps(entry)
         // 1. 就位（可选）：FSM GoTo 已就过位（skipAnchor）或已在该锚上则跳过。
         //    借道就位链绕开反向互斥探测（本执行器已自行判过锁,防自锁）。
         val anchor = entry.anchor
@@ -146,21 +177,40 @@ internal class ActivityExecutor(
             }
             awaitCoordinatorIdle()
         }
-        // 2. 动画：道具显隐走绑定表（VrmaStarted → 出道具），编排器零感知
-        if (!controller.loadVrmaAnimation("animations/${entry.animation}")) {
-            Log.w(TAG, "activity '${entry.id}' animation load failed: ${entry.animation}")
-            clearCurrent()
-            return
+        // 1.5 等接触定姿对齐完再上配方（P1 真机验收⑤的根因修复）：就位链在
+        //     applyContactPose 返回 STARTED 即结束,此时 SIT/LIE 还在 ENTERING
+        //     （坐姿过渡 one-shot 在播）——立刻播活动的循环剪辑会把 one-shot 顶
+        //     出 base 槽,定姿机 `isOneShotActive()`（循环剪辑也满足）永真,
+        //     ENTERING 永不前进（真机卡 116s 不对齐）。
+        awaitPoseAligned()
+        // 2. 动画：道具显隐走绑定表（VrmaStarted → 出道具），编排器零感知。
+        //    例外：锚点定姿引擎已在播同款坐姿循环（配方动画 == 锚点
+        //    sitLoopClip,如 reading/meditate）时不重播——重播只会把剪辑拨回
+        //    首帧,道具经定姿侧的 VrmaStarted 照常出场。
+        val anchorEntry = anchor?.let { a -> coordinator.anchors.firstOrNull { it.id == a } }
+        val poseAlreadyPlayingLoop = controller.getContactPoseState()?.aligned == true &&
+            clipMatchesAnchorLoop(entry.animation, anchorEntry?.sitLoopClip)
+        if (!poseAlreadyPlayingLoop) {
+            if (!controller.loadVrmaAnimation("animations/${entry.animation}")) {
+                Log.w(TAG, "activity '${entry.id}' animation load failed: ${entry.animation}")
+                clearCurrent()
+                return
+            }
+            controller.playVrmaAnimation(loop = entry.loop)
+        } else {
+            Log.i(TAG, "activity '${entry.id}' reuses anchor sit-loop clip (${entry.animation})")
         }
-        controller.playVrmaAnimation(loop = entry.loop)
         Log.i(TAG, "activity '${entry.id}' started (anchor=${entry.anchor} loop=${entry.loop})")
-        // 3. 可选 VFX（preset 缺省锚 = 骨优先/角色实时位，同 fx play 口径）
+        // 3. 可选 VFX（preset 缺省锚 = 骨优先/角色实时位，同 fx play 口径）；
+        //    登记句柄,活动收场由 [stopPlayedVfx] 统一停
         entry.vfx?.let { vfxId ->
             val preset = VfxCatalog.find(context, vfxId)
             if (preset == null) {
                 Log.w(TAG, "activity '${entry.id}' vfx '$vfxId' not in catalog (skipped)")
             } else {
-                controller.playVfx(preset, FxTools.defaultAnchor(controller, preset))
+                playedVfxPresetId = preset.id
+                playedVfxHandleId = controller
+                    .playVfx(preset, FxTools.defaultAnchor(controller, preset))?.id
             }
         }
         // 4. 可选台词：免 LLM 开口（不进对话历史），可带 <emo:>/<act:> 标签
@@ -176,6 +226,38 @@ internal class ActivityExecutor(
     /** 已在该锚的接触位上（重复启动/坐定后再玩手机的判据）。 */
     private fun seatedAt(anchorId: String): Boolean =
         controller.getContactPoseState() != null && coordinator.lastAnchorId == anchorId
+
+    /**
+     * 等接触定姿对齐完成（HOLDING）再上配方。非接触锚（stand/原地）或已被
+     * 起身 = 无对齐可等,立即返回。超时兜底放行（退回老行为——播了总比卡死
+     * 活动链好）,不无限挂起。
+     */
+    private suspend fun awaitPoseAligned(timeoutMs: Long = POSE_ALIGN_TIMEOUT_MS) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val pose = controller.getContactPoseState() ?: return
+            if (pose.phase == ContactPosePhase.HOLDING && pose.aligned) return
+            delay(120)
+        }
+        Log.w(TAG, "contact pose not aligned in ${timeoutMs}ms — proceeding anyway")
+    }
+
+    /** 活动收场停特效：句柄 id 直停；无句柄（批容量满/渲染未就绪）按 presetId 扫在场特效兜底。 */
+    private fun stopPlayedVfx() {
+        val handle = playedVfxHandleId
+        val preset = playedVfxPresetId
+        playedVfxHandleId = null
+        playedVfxPresetId = null
+        if (handle == null && preset == null) return
+        if (handle != null && controller.stopVfx(handle)) {
+            Log.i(TAG, "activity vfx stopped: $handle")
+            return
+        }
+        // 句柄缺失或已失效（渲染层重建）→ 按 preset 兜底扫,防残留
+        val strays = controller.effects.value.filter { it.presetId == preset }.map { it.id }
+        for (id in strays) controller.stopVfx(id)
+        if (strays.isNotEmpty()) Log.i(TAG, "activity vfx stopped by preset scan: $strays")
+    }
 
     /** 等就位链跑完（链路本身 45s 超时,这里只防挂死）。 */
     private suspend fun awaitCoordinatorIdle(timeoutMs: Long = 60_000) {
@@ -223,6 +305,55 @@ internal class ActivityExecutor(
         currentId = null
         currentEntry = null
         startedExternally = false
+        detachWorldProps()
+        stopPlayedVfx()
+    }
+
+    // ── 世界摆件（§6.2 地面/场景道具）────────────────────────────────────
+
+    /**
+     * 活动配方里的 `{"mount":"world"}` 道具按锚点坐标挂到世界：目录三层合并
+     * 出规格（模板/校准同链,局部微调=锚点之上偏移）,再叠锚点 TRS（交互点表
+     * 坐标,SDK 世界米）。同一活动重复启动先清残留（顶替语义同骨骼道具）。
+     */
+    private fun attachWorldProps(entry: ActivityEntry) {
+        val modelId = controller.currentModelId ?: return
+        for (prop in entry.props.filter { it.isWorld }) {
+            val anchorId = prop.anchor?.lowercase()
+            val anchor = coordinator.anchors.firstOrNull { it.id == anchorId }
+            if (anchor == null) {
+                Log.i(TAG, "activity '${entry.id}' world prop '${prop.id}' anchor '${prop.anchor}' not in this scene (skipped)")
+                continue
+            }
+            val catalogEntry = AccessoryCatalog.find(context, prop.id)
+            if (catalogEntry == null) {
+                Log.w(TAG, "activity '${entry.id}' world prop '${prop.id}' not in accessory catalog (skipped)")
+                continue
+            }
+            controller.detachAccessory(prop.id)
+            val spec = AccessoryCatalog.specFor(context, modelId, catalogEntry).copy(
+                world = AccessoryWorldMount(
+                    x = anchor.x,
+                    y = anchor.y,
+                    z = anchor.z,
+                    yawDeg = anchor.yawDeg,
+                ),
+            )
+            controller.attachAccessory(spec).onSuccess {
+                worldProps += prop.id
+                Log.i(TAG, "activity '${entry.id}' world prop '${prop.id}' @${anchor.id}(${anchor.x},${anchor.y},${anchor.z} yaw=${anchor.yawDeg})")
+            }.onFailure {
+                Log.w(TAG, "activity '${entry.id}' world prop '${prop.id}' attach failed: ${it.message}")
+            }
+        }
+    }
+
+    /** 活动收场（stop/打断/one-shot 播完/失败）收回世界摆件。 */
+    private fun detachWorldProps() {
+        if (worldProps.isEmpty()) return
+        for (id in worldProps) controller.detachAccessory(id)
+        Log.i(TAG, "world props detached: $worldProps")
+        worldProps.clear()
     }
 
     private fun record(entry: ActivityEntry, source: String) {
@@ -259,7 +390,34 @@ internal class ActivityExecutor(
 
         /** 看守宽限：就位链转身+过渡剪辑窗口（接触姿未挂上不算打断）。 */
         private const val GRACE_MS = 10_000L
+
+        /** 等接触定姿对齐的上限（转身 0.35s+过渡剪辑 ~2s+吸附 0.35s 的数倍余量）。 */
+        private const val POSE_ALIGN_TIMEOUT_MS = 15_000L
     }
+}
+
+/**
+ * 锚点定姿引擎已在播的坐姿循环剪辑与配方动画是否同款（P1 真机验收⑤的
+ * 不重播判据）：双方统一剥 `animations/` 前缀精确比较（binder 归一同款）。
+ */
+internal fun clipMatchesAnchorLoop(animation: String, sitLoopClip: String?): Boolean {
+    if (sitLoopClip == null) return false
+    return animation.removePrefix("animations/") == sitLoopClip.removePrefix("animations/")
+}
+
+/**
+ * 活动收场的 VFX 停止目标（纯函数,JVM 可测）：句柄在 = 只停句柄（精确,
+ * 不误伤同 preset 的其他实例——如手动 fx play 的同款）;句柄缺失（批容量满/
+ * 渲染未就绪）= 按 presetId 扫在场特效兜底防残留;都没播 = 空。
+ */
+internal fun activityVfxStopTargets(
+    presetId: String?,
+    handleId: String?,
+    active: List<com.neethu.corelib.vfx.VfxInfo>,
+): List<String> {
+    if (handleId != null) return listOf(handleId)
+    if (presetId == null) return emptyList()
+    return active.filter { it.presetId == presetId }.map { it.id }
 }
 
 private const val ACTIVITIES_ASSET = "activities/activities.json"
@@ -282,7 +440,8 @@ internal fun activityDebugCommand(executor: ActivityExecutor, arg: String?): Str
                         (e.anchor?.let { " @$it" } ?: "") +
                         " loop=${e.loop}" +
                         (e.vfx?.let { " vfx=$it" } ?: "") +
-                        (e.hourRange?.let { " hours=${it.first}..${it.last}" } ?: "")
+                        (e.hourRange?.let { " hours=${it.first}..${it.last}" } ?: "") +
+                        (e.props.filter { it.isWorld }.joinToString("") { " world=${it.id}@${it.anchor}" })
                 }
             }
         }

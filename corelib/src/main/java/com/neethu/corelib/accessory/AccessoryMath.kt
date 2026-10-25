@@ -26,6 +26,39 @@ internal object AccessoryMath {
         )
     }
 
+    /**
+     * 世界挂载 TRS（P1 道具系统 §6.2 地面/场景道具）：
+     * `world = T(锚点) · Ry(yaw) · local`——锚点取交互点表坐标（SDK 世界米，
+     * yawDeg 0=+Z），local 为锚点之上的逐资产微调（出厂模板/校准 preset 同链）。
+     */
+    fun worldTransform(
+        mount: AccessoryWorldMount,
+        position: FloatArray,
+        rotationEulerYXZ: FloatArray,
+        scale: Float,
+    ): FloatArray {
+        val local = localTransform(position, rotationEulerYXZ, scale)
+        val yaw = Math.toRadians(mount.yawDeg.toDouble()).toFloat()
+        val c = kotlin.math.cos(yaw)
+        val s = kotlin.math.sin(yaw)
+        // W = T·Ry·L：Ry 作用于 L 的全部四列（三个基向量列 + 平移列，列主序
+        // 逐列旋转），锚点平移最后加——局部微调偏移随 yaw 一同转向
+        val out = FloatArray(16)
+        for (col in 0..3) {
+            val i = col * 4
+            val x = local[i]
+            val z = local[i + 2]
+            out[i] = c * x + s * z
+            out[i + 1] = local[i + 1]
+            out[i + 2] = -s * x + c * z
+            out[i + 3] = if (col == 3) 1f else 0f
+        }
+        out[12] += mount.x
+        out[13] += mount.y
+        out[14] += mount.z
+        return out
+    }
+
     /** `R = Ry·Rx·Rz` 的 3×3（行主序 9 元）。 */
     internal fun rotationYXZ(rx: Float, ry: Float, rz: Float): FloatArray {
         val cx = kotlin.math.cos(rx); val sx = kotlin.math.sin(rx)

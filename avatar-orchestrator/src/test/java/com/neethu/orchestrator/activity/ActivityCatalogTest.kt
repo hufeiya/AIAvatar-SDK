@@ -56,7 +56,7 @@ class ActivityCatalogTest {
         assertEquals("typing at the desk", typing.nameEn)
         assertEquals("work", typing.category)
         assertEquals("desk_seat", typing.anchor)
-        assertEquals(listOf("laptop"), typing.props)
+        assertEquals(listOf(PropRef("laptop")), typing.props)
         assertEquals(listOf(0f, -0.25f, 0.05f), typing.bindingOffset?.position)
         assertEquals("坐姿放腿上", typing.bindingOffset?.note)
         assertTrue(typing.loop)
@@ -122,5 +122,52 @@ class ActivityCatalogTest {
         assertEquals("裸条目", bare.desc)
         assertEquals("daily", bare.category)
         assertTrue(bare.loop)
+    }
+
+    // ── P1 §6.2：props 对象形态（世界摆件 {id, mount:"world", anchor}）──────
+
+    @Test
+    fun `props 混排——字符串与对象两种写法并存`() {
+        val json = """
+            { "activities": [ {
+                "id": "yoga", "name": "瑜伽", "animation": "A.vrma",
+                "props": ["kettle", { "id": "yogaMat", "mount": "world", "anchor": "YOGA_SPOT" }]
+            } ] }
+        """.trimIndent()
+        val props = ActivityCatalog.parse(json).find("yoga")!!.props
+        assertEquals(2, props.size)
+        assertEquals(PropRef("kettle"), props[0])
+        assertFalse(props[0].isWorld)
+        assertEquals(PropRef("yogaMat", "world", "yoga_spot"), props[1])
+        assertTrue(props[1].isWorld)
+    }
+
+    @Test
+    fun `mount 大小写不敏感且 anchor 归一——非 world 挂载不算世界摆件`() {
+        val json = """
+            { "activities": [ {
+                "id": "x", "name": "x", "animation": "A.vrma",
+                "props": [
+                    { "id": "mat", "mount": "World", "anchor": "Yoga_Spot" },
+                    { "id": "mug", "mount": "bone" }
+                ]
+            } ] }
+        """.trimIndent()
+        val props = ActivityCatalog.parse(json).find("x")!!.props
+        assertTrue(props[0].isWorld)
+        assertEquals("yoga_spot", props[0].anchor)
+        assertFalse(props[1].isWorld)
+    }
+
+    @Test
+    fun `props 脏元素跳过——对象缺 id 或非原始类型不炸条目`() {
+        val json = """
+            { "activities": [ {
+                "id": "x", "name": "x", "animation": "A.vrma",
+                "props": [ "ok", { "mount": "world" }, { "id": "" }, 42, true, null ]
+            } ] }
+        """.trimIndent()
+        val props = ActivityCatalog.parse(json).find("x")!!.props
+        assertEquals(listOf(PropRef("ok")), props)
     }
 }

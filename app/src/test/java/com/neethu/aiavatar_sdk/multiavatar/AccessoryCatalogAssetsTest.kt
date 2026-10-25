@@ -33,11 +33,11 @@ class AccessoryCatalogAssetsTest {
         )
 
     @Test
-    fun `catalog has 31 entries - 11 legacy + 20 P1 props`() {
+    fun `catalog has 34 entries - 11 legacy + 23 P1 props`() {
         val entries = sidecarEntries()
-        assertEquals(31, entries.size)
+        assertEquals(34, entries.size)
         val withProfile = entries.filter { it.offsetProfile != null }
-        assertEquals("P1 道具批量入库 20 件", 20, withProfile.size)
+        assertEquals("P1 道具入库 20 件 + 场景层补件 3 件(眼罩/哑铃/葫芦)", 23, withProfile.size)
     }
 
     @Test
@@ -79,10 +79,10 @@ class AccessoryCatalogAssetsTest {
     }
 
     @Test
-    fun `all 8 templates are referenced by at least one prop`() {
+    fun `all 9 templates are referenced by at least one prop`() {
         val used = sidecarEntries().mapNotNull { it.offsetProfile }.toSet()
         assertEquals(
-            "8 模板应全部被引用（~8 模板×2 模型=16 次校准的基数）",
+            "9 模板应全部被引用（P1 场景层加 wearFace 面戴件后 9 个；模板×2 模型=18 次校准的基数）",
             AccessoryOffsetProfiles.byName.keys,
             used,
         )
@@ -129,5 +129,26 @@ class AccessoryCatalogAssetsTest {
         assertEquals("guitar", byAnimation["Playing A Guitar.vrma"])
         assertEquals("staff", byAnimation["Pointing With Arm Bent.vrma"])
         assertEquals("gamepad", byAnimation["Sitting To Typing.vrma"])
+    }
+
+    /**
+     * P1 场景层上线绑定（§5 P1 行点名;绑定表 animation→accessory 1:1,与既有
+     * 键冲突的场景按「旗舰优先 + 就近换剪辑」统筹——见 activities.json 注释）。
+     */
+    @Test
+    fun `p1 scene bindings cover the new activity props`() {
+        val byAnimation = bindings().associate { it.animation.substringAfterLast('/') to it.accessory }
+        assertEquals("box", byAnimation["Carrying A Box.vrma"])                       // P0 carry_box 遗留补绑
+        assertEquals("mug", byAnimation["Standing Idle Holding Suitcase.vrma"])        // 窗边端热饮(Holding Idle 归抱枕)
+        assertEquals("milkTea", byAnimation["Holding An Object While Turning Left.vrma"]) // 喝奶茶(While Walking 归伞)
+        assertEquals("eyeMask", byAnimation["Reclined, Right Leg Crossed, Hands Behind Head.vrma"])
+        assertEquals("cup", byAnimation["Pumping A Fist.vrma"])                        // 举杯庆贺
+        assertEquals("book", byAnimation["Kneeling And Inspecting Element With Hands.vrma"]) // 拿文件检查
+        assertEquals("headphones", byAnimation["Doing The Shuffling Dance.vrma"])      // 耳机听歌摇摆
+        assertEquals("sparkler", byAnimation["Emotional Waving Forward.vrma"])         // 挥仙女棒
+        assertEquals("balloon", byAnimation["Happy Idle Variation 1.vrma"])            // 手拿气球
+        assertEquals("dumbbell", byAnimation["Male Fitness Idle.vrma"])                // 哑铃举铁
+        assertEquals("gourd", byAnimation["Drunk Idle Variation Hiccup.vrma"])         // 饮酒葫芦
+        assertEquals("tablet", byAnimation["Female Using Touchscreen Tablet.vrma"])    // 平板换真平板
     }
 }

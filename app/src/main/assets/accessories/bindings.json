@@ -6,7 +6,7 @@
   { "animation": "07_日常互动/Female Walking And Texting On Phone.vrma", "accessory": "phone", "note": "边走边看手机(完整步行剪辑)" },
   { "animation": "07_日常互动/Male Walking While Texting On A Smartphone.vrma", "accessory": "phone" },
   { "animation": "07_日常互动/Female Answers A Phone While Walking.vrma", "accessory": "phone" },
-  { "animation": "07_日常互动/Female Using Touchscreen Tablet.vrma", "accessory": "phone", "note": "平板动画先复用手机(同手持语义)" },
+  { "animation": "07_日常互动/Female Using Touchscreen Tablet.vrma", "accessory": "tablet", "note": "平板阅读(活动 tablet_read,P1 场景层换真平板)" },
   { "animation": "08_舞蹈与表演/MC Rapping On The Microphone.vrma", "accessory": "microphone", "note": "手持麦说唱" },
   { "animation": "08_舞蹈与表演/Singing While Walking On Stage.vrma", "accessory": "microphone", "note": "边走边唱" },
   { "animation": "07_日常互动/Sitting At A Computer And Typing.vrma", "accessory": "laptop", "note": "坐姿打字,笔记本在右手(活动 desk_typing,P0 道具系统)" },
@@ -27,5 +27,16 @@
   { "animation": "07_日常互动/Pick Up Object And Examine.vrma", "accessory": "giftBox", "note": "递礼物盒兜底(场景表 #53,与递花错开剪辑)" },
   { "animation": "07_日常互动/Sitting To Typing.vrma", "accessory": "gamepad", "note": "打手柄近似(双手搭腿=握手柄;源库无打手柄动画)" },
   { "animation": "08_舞蹈与表演/Playing A Guitar.vrma", "accessory": "guitar", "note": "抱吉他弹唱(场景表 #34,大件单骨挂右手+动画握姿)" },
-  { "animation": "04_交流手势/Pointing With Arm Bent.vrma", "accessory": "staff", "note": "持杖施法(场景表 #59 组合技旗舰,配 magic_circle VFX:杖起→阵现)" }
+  { "animation": "04_交流手势/Pointing With Arm Bent.vrma", "accessory": "staff", "note": "持杖施法(场景表 #59 组合技旗舰,配 magic_circle VFX:杖起→阵现)" },
+  { "animation": "07_日常互动/Carrying A Box.vrma", "accessory": "box", "note": "抱纸箱收拾房间(P0 活动 carry_box 遗留补绑,纸箱入手)" },
+  { "animation": "01_待机与站姿/Standing Idle Holding Suitcase.vrma", "accessory": "mug", "note": "窗边端热饮兜底(场景表 #9;Holding An Object Idle 已归抱枕,拎持 idle 同语义)" },
+  { "animation": "07_日常互动/Holding An Object While Turning Left.vrma", "accessory": "milkTea", "note": "喝奶茶(场景表 #17;Holding An Object While Walking 已归伞,持物转身同族剪辑)" },
+  { "animation": "06_坐姿/Reclined, Right Leg Crossed, Hands Behind Head.vrma", "accessory": "eyeMask", "note": "戴眼罩睡觉(场景表 #13;枕手躺姿+面戴眼罩,Laying Idle 已归手机错开)" },
+  { "animation": "05_情绪表达/Pumping A Fist.vrma", "accessory": "cup", "note": "举杯庆贺(场景表 #21,以茶代酒举手挥杯)" },
+  { "animation": "07_日常互动/Kneeling And Inspecting Element With Hands.vrma", "accessory": "book", "note": "拿文件检查兜底(场景表 #28;查验剪辑已归花/盒,文件=册子入手细看)" },
+  { "animation": "08_舞蹈与表演/Doing The Shuffling Dance.vrma", "accessory": "headphones", "note": "戴耳机听歌摇摆(场景表 #38,头戴耳机+shuffle 摇摆)" },
+  { "animation": "03_打招呼与礼仪/Emotional Waving Forward.vrma", "accessory": "sparkler", "note": "挥仙女棒(场景表 #54,配 spark_burst VFX;静持 idle 已归抱枕,挥手更出效果)" },
+  { "animation": "01_待机与站姿/Happy Idle Variation 1.vrma", "accessory": "balloon", "note": "手拿气球(场景表 #55,牵线在手+开心小晃;持物 idle 已归抱枕)" },
+  { "animation": "01_待机与站姿/Male Fitness Idle.vrma", "accessory": "dumbbell", "note": "哑铃举铁(场景表 #46;健身 idle 循环比文档点名的过渡剪辑更适合 loop)" },
+  { "animation": "Drunk Idle Variation Hiccup.vrma", "accessory": "gourd", "note": "饮酒葫芦(场景表 #61;Male Drinking 已归水瓶,醉后打嗝 idle 更贴酒仙扮演)" }
 ]

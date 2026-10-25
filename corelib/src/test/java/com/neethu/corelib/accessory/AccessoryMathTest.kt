@@ -111,4 +111,54 @@ class AccessoryMathTest {
         assertEquals(-sx, r[5], 1e-5f)
         assertEquals(cy * cx, r[8], 1e-5f)
     }
+
+    // ── P1 §6.2 世界挂载 TRS：world = T(锚点)·Ry(yaw)·local ────────────────
+
+    @Test
+    fun `world mount identity - anchor lands at its own coordinates`() {
+        val mat = AccessoryMath.worldTransform(
+            mount = AccessoryWorldMount(1.9f, -0.932f, -2.5f),
+            position = FloatArray(3),
+            rotationEulerYXZ = FloatArray(3),
+            scale = 1f,
+        )
+        assertClose(1.9f, mat[12]); assertClose(-0.932f, mat[13]); assertClose(-2.5f, mat[14])
+        assertClose(1f, mat[0]); assertClose(1f, mat[5]); assertClose(1f, mat[10])
+    }
+
+    @Test
+    fun `world mount yaw rotates the prop basis - tea tray turns with the anchor`() {
+        val mat = AccessoryMath.worldTransform(
+            mount = AccessoryWorldMount(1.5f, -0.164f, -6.43f, yawDeg = 180f),
+            position = FloatArray(3),
+            rotationEulerYXZ = FloatArray(3),
+            scale = 1f,
+        )
+        // 托盘自身 +X 端（局部 (1,0,0)）转 180° 后指向世界 -X（锚点分量不动）
+        val v = apply(mat, 1f, 0f, 0f)
+        assertClose(1.5f - 1f, v[0]); assertClose(-0.164f, v[1]); assertClose(-6.43f, v[2])
+    }
+
+    @Test
+    fun `world mount local offset rotates with yaw - not dropped or axis-fixed`() {
+        // 局部微调 (0,0,0.1)（校准链的抬升/前移量）：yaw 0 = 原样前移;yaw 90 =
+        // 转到 +X——锁死「局部偏移列随 Ry 一同旋转」而非只旋基向量
+        val m0 = AccessoryMath.worldTransform(
+            AccessoryWorldMount(0f, 0f, 0f), floatArrayOf(0f, 0f, 0.1f), FloatArray(3), 1f,
+        )
+        assertClose(0.1f, m0[14])
+        val m90 = AccessoryMath.worldTransform(
+            AccessoryWorldMount(0f, 0f, 0f, yawDeg = 90f), floatArrayOf(0f, 0f, 0.1f), FloatArray(3), 1f,
+        )
+        assertClose(0.1f, m90[12]); assertClose(0f, m90[14])
+    }
+
+    @Test
+    fun `world mount scale composes - per-asset calibration still applies`() {
+        val mat = AccessoryMath.worldTransform(
+            AccessoryWorldMount(-1f, -1f, -1f), FloatArray(3), FloatArray(3), scale = 2f,
+        )
+        assertClose(2f, mat[0]); assertClose(2f, mat[5]); assertClose(2f, mat[10])
+        assertClose(-1f, mat[12]); assertClose(-1f, mat[13]); assertClose(-1f, mat[14])
+    }
 }

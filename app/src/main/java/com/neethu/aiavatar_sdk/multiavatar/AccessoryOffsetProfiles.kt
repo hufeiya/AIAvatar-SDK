@@ -5,7 +5,8 @@ package com.neethu.aiavatar_sdk.multiavatar
  * sidecar 条目可引用「挂点×道具形状类别」模板（`offsetProfile`），模板出厂
  * 偏移 + **每模型只校准一次**的模板级 preset 替代逐件手填 defaultOffset——
  * 道具扩到 45+ 件后校准次数从 模型×道具（2×45=90 次）降到 模板×模型
- * （8×2=16 次），新道具引用模板即近似正确，个别再 `accessory cal` 微调。
+ * （9×2=18 次，P1 场景层加面戴件模板后 9 个），新道具引用模板即近似正确，
+ * 个别再 `accessory cal` 微调。
  *
  * 合并层级（低 → 高，越靠外优先级越高）：
  * 1. sidecar 条目出厂默认（无模板时的既有行为，11 件旧配饰保持不动）；
@@ -49,6 +50,13 @@ internal object AccessoryOffsetProfiles {
     /** 头戴件：耳机 / 眼罩。 */
     val wearHead = Profile("head", floatArrayOf(0f, 0.02f, 0f), floatArrayOf(0f, 0f, 0f), 1f)
 
+    /**
+     * 面戴件（P1 §5-#13 戴眼罩睡觉）：贴脸部件（眼罩/面具）——与 [wearHead]
+     * 头箍类分开模板,避免耳机类的模板级校准 preset 被面罩继承（同理反向）。
+     * 出厂值 = 头骨前侧眼线位（P1 场景层新增的第 9 个模板）。
+     */
+    val wearFace = Profile("head", floatArrayOf(0f, 0.035f, 0.10f), floatArrayOf(0f, 0f, 0f), 1f)
+
     /** 双手大件（挂单骨 + 动画握姿约束）：吉他。 */
     val holdBig = Profile("rightHand", floatArrayOf(0f, 0.05f, 0.08f), floatArrayOf(0f, 0f, 0f), 1f)
 
@@ -66,6 +74,7 @@ internal object AccessoryOffsetProfiles {
         "holdWand" to holdWand,
         "holdObject" to holdObject,
         "wearHead" to wearHead,
+        "wearFace" to wearFace,
         "holdBig" to holdBig,
         "worldProp" to worldProp,
     )

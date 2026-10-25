@@ -269,6 +269,30 @@
       "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
       "defaultBone": "rightHand",
       "offsetProfile": "holdObject"
+    },
+    {
+      "id": "eyeMask",
+      "name": "睡眠眼罩",
+      "file": "eyeMask.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "head",
+      "offsetProfile": "wearFace"
+    },
+    {
+      "id": "dumbbell",
+      "name": "哑铃",
+      "file": "dumbbell.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "gourd",
+      "name": "饮酒葫芦",
+      "file": "gourd.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBottle"
     }
   ]
 }

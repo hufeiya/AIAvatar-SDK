@@ -1,5 +1,5 @@
 {
-  "comment": "自主生命体作息先验表（docs/autonomy-feasibility.md §4.2）：hour→状态权重乘子。from 含 to 舍；weights 缺省 1。quietHours 同时是深夜判定（躺卧时长加长）与问候静默的参考。activityWeights（P0 道具系统 docs/prop-system-feasibility.md §3.1）= 活动 category→倍率,只影响 FSM 选点层（LLM/用户指令不受限）,缺省 1：深夜收敛 food/daily、上午放大 work、晚间放大 play。",
+  "comment": "自主生命体作息先验表（docs/autonomy-feasibility.md §4.2）：hour→状态权重乘子。from 含 to 舍；weights 缺省 1。quietHours 同时是深夜判定（躺卧时长加长）与问候静默的参考。activityWeights（P0 道具系统 docs/prop-system-feasibility.md §3.1）= 活动 category→倍率,只影响 FSM 选点层（LLM/用户指令不受限）,缺省 1：深夜收敛 food/daily、上午放大 work、晚间放大 play。P1 场景层补齐 sport/social/fantasy/festival 四类作息（默认保守：白天适度运动/社交,晚间放大仙侠与节日氛围,深夜全部收敛）。",
   "weights": {
     "IDLE_STAND": 1.0,
     "WANDER": 1.2,
@@ -9,9 +9,11 @@
   },
   "activityWeights": {},
   "hours": [
-    { "from": 0, "to": 6, "weights": { "LYING": 5.0, "SITTING": 0.5 }, "activityWeights": { "food": 0.2, "daily": 0.2 } },
-    { "from": 9, "to": 17, "weights": { "SITTING": 3.0 }, "activityWeights": { "work": 2.0 } },
-    { "from": 18, "to": 23, "weights": { "LOOKING": 2.0 }, "activityWeights": { "play": 1.5 } }
+    { "from": 0, "to": 6, "weights": { "LYING": 5.0, "SITTING": 0.5 }, "activityWeights": { "food": 0.2, "daily": 0.2, "sport": 0.1, "social": 0.3, "fantasy": 0.3, "festival": 0.2 } },
+    { "from": 6, "to": 9, "weights": { "WANDER": 1.5 }, "activityWeights": { "sport": 1.5, "food": 1.2 } },
+    { "from": 9, "to": 17, "weights": { "SITTING": 3.0 }, "activityWeights": { "work": 2.0, "sport": 1.2 } },
+    { "from": 17, "to": 18, "weights": { "SITTING": 1.5 }, "activityWeights": { "social": 1.5, "sport": 1.2, "play": 1.2 } },
+    { "from": 18, "to": 23, "weights": { "LOOKING": 2.0 }, "activityWeights": { "play": 1.5, "fantasy": 1.5, "festival": 1.2 } }
   ],
   "quietHours": { "from": 23, "to": 8, "enabled": true }
 }
