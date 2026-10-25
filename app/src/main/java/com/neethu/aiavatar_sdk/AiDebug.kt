@@ -123,7 +123,10 @@ fun aiDebugHelp(): String = """
     |  accessory <sub>          Accessory family (P1.5): list / attach <id> [bone]
     |                           [dx dy dz rx ry rz scale colliderR] / detach|show|hide
     |                           <id> / bind|unbind <id> <animation path> / bindings /
-    |                           import <glb path> / cal [show|clear] <id>. Phone
+    |                           import <glb path> / cal <id> | cal profile <id> (P1
+    |                           offset-profile calibration: saves to the prop's
+    |                           offsetProfile preset, all same-class props inherit)
+    |                           / cal [show|clear] <id | profile:name>. Phone
     |                           animations auto-show the phone via the built-in
     |                           binding table (registered on model ready)
     |  fx <sub>                 VFX family (P1): list / play <preset> [ai_x ai_y

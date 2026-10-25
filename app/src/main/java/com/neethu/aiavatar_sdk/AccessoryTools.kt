@@ -72,12 +72,13 @@ internal object AccessoryTools {
 
     private fun usage() = "usage: accessory <list|attach <id> [bone] [dx dy dz rx ry rz scale [colliderR]]|" +
         "detach|show|hide <id>|bind|unbind <id> <动画路径>|bindings|import <glb路径>|" +
-        "cal [show|clear] <id>>"
+        "cal <id> | cal profile <id> | cal [show|clear] <id|profile:模板名>>"
 
     private fun listLine(context: Context, controller: AvatarController): String {
         val all = AccessoryCatalog.all(context)
         val catalog = all.joinToString(", ") { e ->
             "${e.id}(${e.license}, bone=${e.defaultBone}" +
+                (e.offsetProfile?.let { ", profile=$it" } ?: "") +
                 (if (e.source is AccessorySource.File) ", imported" else "") + ")"
         }
         val bound = AccessoryCatalog.loadBindings(context)
@@ -117,6 +118,7 @@ internal object AccessoryTools {
                 lastAttachSpec[entry.id] = spec
                 "accessory attach ${entry.id}@${spec.bone} ok (pos=${spec.position.contentToString()} " +
                     "rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale}" +
+                    (entry.offsetProfile?.let { " profile=$it" } ?: "") +
                     (if (spec.springColliderRadius > 0f) " colliderR=${spec.springColliderRadius}" else "") + ")"
             },
             onFailure = { "accessory attach failed: ${it.message}" },
@@ -165,20 +167,58 @@ internal object AccessoryTools {
 
     private fun cal(context: Context, controller: AvatarController, t: List<String>): String {
         val modelId = controller.currentModelId ?: return "no model loaded"
+        // `cal show|clear profile:<模板名>`：模板级 preset 的查看/清除
+        fun profileArg(raw: String?): String? = raw?.trim()?.removePrefix("profile:")?.takeIf { raw.startsWith("profile:") }
         return when (t.getOrNull(1)?.lowercase()) {
             "clear" -> {
-                val id = t.getOrNull(2) ?: return "usage: accessory cal clear <id>"
+                val id = t.getOrNull(2) ?: return "usage: accessory cal clear <id|profile:模板名>"
+                profileArg(id)?.let { name ->
+                    val gone = AccessoryCalibrationStore.clearProfile(context, modelId, name)
+                    return "accessory cal clear profile:$name@$modelId = $gone"
+                }
                 val gone = AccessoryCalibrationStore.clear(context, modelId, id)
                 "accessory cal clear $id@$modelId = $gone"
             }
             "show" -> {
-                val id = t.getOrNull(2) ?: return "usage: accessory cal show <id>"
+                val id = t.getOrNull(2) ?: return "usage: accessory cal show <id|profile:模板名>"
+                profileArg(id)?.let { name ->
+                    val p = AccessoryCalibrationStore.loadProfiles(context, modelId)[name]
+                    return "accessory cal profile:$name@$modelId = ${p ?: "none"}"
+                }
                 val p = AccessoryCalibrationStore.load(context, modelId, id)
                 "accessory cal $id@$modelId = ${p ?: "none"}"
             }
+            // §6.4 模板级校准：把 <id> 最近一次 attach 的规格落成其 offsetProfile
+            // 的模板 preset——每模板×每模型只做一次，同类道具全部继承（90→16）。
+            "profile" -> {
+                val id = t.getOrNull(2)
+                    ?: return "usage: accessory cal profile <id> (id 需引用 offsetProfile 模板)"
+                val entry = AccessoryCatalog.find(context, id)
+                    ?: return "unknown accessory '$id' (try: accessory list)"
+                val profile = entry.offsetProfile
+                    ?: return "'$id' has no offsetProfile (直连模板的道具才能 cal profile;普通道具用 accessory cal $id)"
+                val spec = lastAttachSpec[entry.id]
+                    ?: return "no attach record for ${entry.id} (accessory attach first, then accessory cal profile)"
+                AccessoryCalibrationStore.saveProfile(
+                    context, modelId, profile,
+                    AccessoryCalibrationStore.Preset(
+                        bone = spec.bone,
+                        position = spec.position.toList(),
+                        rotationEulerYXZ = spec.rotationEulerYXZ.toList(),
+                        scale = spec.scale,
+                    ),
+                ).fold(
+                    onSuccess = {
+                        "accessory cal profile:$profile@$modelId saved (from ${entry.id}): bone=${spec.bone} " +
+                            "pos=${spec.position.contentToString()} " +
+                            "rot=${spec.rotationEulerYXZ.contentToString()} scale=${spec.scale}"
+                    },
+                    onFailure = { "accessory cal profile save failed: ${it.message}" },
+                )
+            }
             else -> {
                 val id = t.getOrNull(1)
-                    ?: return "usage: accessory cal <id> [clear|show <id>]"
+                    ?: return "usage: accessory cal <id> | cal profile <id> | cal [show|clear] <id|profile:模板名>"
                 val spec = lastAttachSpec[id]
                     ?: return "no attach record for $id (accessory attach first, then accessory cal)"
                 AccessoryCalibrationStore.save(

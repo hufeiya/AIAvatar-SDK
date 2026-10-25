@@ -52,6 +52,50 @@ internal object AccessoryCalibrationStore {
     fun clear(context: Context, modelId: String, accessoryId: String): Boolean =
         file(context, modelId, accessoryId).delete()
 
+    // ── 模板级 preset（P1 §6.4：每模板×每模型只校准一次）──────────────────
+    // 单文件集中存（<modelId>/offsetProfiles.json），与条目级 <accessoryId>.json
+    // 文件名空间天然隔离；schema 同 [Preset]，键 = 模板名（holdCup 等）。
+
+    @Serializable
+    data class ProfilePresets(val profiles: Map<String, Preset> = emptyMap())
+
+    private fun profilesFile(context: Context, modelId: String): File =
+        File(File(dir(context), sanitizeModelId(modelId)), "offsetProfiles.json")
+
+    fun loadProfiles(context: Context, modelId: String): Map<String, Preset> = try {
+        val f = profilesFile(context, modelId)
+        if (f.isFile) {
+            json.decodeFromString(ProfilePresets.serializer(), f.readText()).profiles
+        } else {
+            emptyMap()
+        }
+    } catch (_: Exception) {
+        emptyMap()
+    }
+
+    fun saveProfile(
+        context: Context,
+        modelId: String,
+        profileName: String,
+        preset: Preset,
+    ): Result<Unit> = runCatching {
+        val f = profilesFile(context, modelId)
+        f.parentFile?.mkdirs()
+        val merged = loadProfiles(context, modelId) + (profileName to preset)
+        f.writeText(json.encodeToString(ProfilePresets.serializer(), ProfilePresets(merged)))
+    }
+
+    fun clearProfile(context: Context, modelId: String, profileName: String): Boolean =
+        runCatching {
+            val f = profilesFile(context, modelId)
+            if (!f.isFile) return@runCatching false
+            val merged = loadProfiles(context, modelId) - profileName
+            if (merged.isEmpty()) f.delete() else f.writeText(
+                json.encodeToString(ProfilePresets.serializer(), ProfilePresets(merged))
+            )
+            true
+        }.getOrDefault(false)
+
     // ── 纯函数（JVM 单测直测）────────────────────────────────────────────
 
     /** modelId 是路径段：模型文件名里的非法字符（空格/中文/斜杠）压成下划线。 */

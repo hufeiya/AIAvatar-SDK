@@ -109,6 +109,166 @@
       "position": [0, 0.02, 0.03],
       "rotationEulerYXZ": [0, 0, 0],
       "scale": 1.0
+    },
+    {
+      "id": "book",
+      "name": "单本书",
+      "file": "book.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "leftHand",
+      "offsetProfile": "holdBook"
+    },
+    {
+      "id": "pen",
+      "name": "钢笔",
+      "file": "pen.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "mug",
+      "name": "马克杯",
+      "file": "mug.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdCup"
+    },
+    {
+      "id": "waterBottle",
+      "name": "水瓶",
+      "file": "waterBottle.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBottle"
+    },
+    {
+      "id": "cannedDrink",
+      "name": "易拉罐",
+      "file": "cannedDrink.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBottle"
+    },
+    {
+      "id": "milkTea",
+      "name": "奶茶杯",
+      "file": "milkTea.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdCup"
+    },
+    {
+      "id": "kettle",
+      "name": "水壶",
+      "file": "kettle.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "cup",
+      "name": "茶杯",
+      "file": "cup.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdCup"
+    },
+    {
+      "id": "guitar",
+      "name": "吉他",
+      "file": "guitar.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBig"
+    },
+    {
+      "id": "headphones",
+      "name": "耳机",
+      "file": "headphones.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "head",
+      "offsetProfile": "wearHead"
+    },
+    {
+      "id": "flowers",
+      "name": "花束",
+      "file": "flowers.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "giftBox",
+      "name": "礼物盒",
+      "file": "giftBox.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "sparkler",
+      "name": "仙女棒",
+      "file": "sparkler.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "balloon",
+      "name": "气球",
+      "file": "balloon.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "umbrella",
+      "name": "雨伞",
+      "file": "umbrella.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "staff",
+      "name": "法杖",
+      "file": "staff.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "yogaMat",
+      "name": "瑜伽垫(卷)",
+      "file": "yogaMat.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "worldProp"
+    },
+    {
+      "id": "teaSet",
+      "name": "茶具组",
+      "file": "teaSet.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "worldProp"
+    },
+    {
+      "id": "tablet",
+      "name": "平板电脑",
+      "file": "tablet.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "leftHand",
+      "offsetProfile": "holdBook"
+    },
+    {
+      "id": "gamepad",
+      "name": "游戏手柄",
+      "file": "gamepad.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
     }
   ]
 }

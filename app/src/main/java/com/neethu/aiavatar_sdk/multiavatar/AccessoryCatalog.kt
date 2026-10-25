@@ -12,6 +12,12 @@ import kotlinx.serialization.json.Json
  * [AccessoryCalibrationStore] 的 per-model preset 叠加在其上（只覆盖标定过
  * 的维度），命令行显式参数再叠加在 preset 上——三层合并，越靠外优先级越高。
  *
+ * P1 道具系统 §6.4 插入**模板层**：sidecar 条目可带 `offsetProfile` 引用
+ * 「挂点×道具形状类别」模板（[AccessoryOffsetProfiles]），此时条目出厂值由
+ * 模板出厂默认接管，其上再叠**模板级** per-model 校准（每模板×每模型只校准
+ * 一次，90 次→16 次），然后才是条目级 preset 与显式参数——五层见
+ * [AccessoryOffsetProfiles]。
+ *
  * 外置导入（[ImportedAccessoryLibrary]，filesDir/accessories 下的 .glb）以
  * 文件名 stem 为 id 自动进目录，默认挂 rightHand/scale=1（外置资产没有
  * sidecar，走 `acc attach` 参数链路微调 + `acc cal` 落 preset）。
@@ -30,6 +36,8 @@ internal object AccessoryCatalog {
         val position: List<Float>? = null,
         val rotationEulerYXZ: List<Float>? = null,
         val scale: Float = 1f,
+        /** 「挂点×道具形状类别」模板（§6.4）：引用后出厂偏移由模板接管。 */
+        val offsetProfile: String? = null,
     )
 
     @Serializable
@@ -48,6 +56,8 @@ internal object AccessoryCatalog {
         val position: FloatArray,
         val rotationEulerYXZ: FloatArray,
         val scale: Float,
+        /** 「挂点×道具形状类别」模板引用（§6.4）；null = 既有逐件默认路径。 */
+        val offsetProfile: String? = null,
         /** 来自 per-model 校准 preset（attach 时合并，list 里标注）。 */
         val calibratedFor: Set<String> = emptySet(),
     )
@@ -68,6 +78,7 @@ internal object AccessoryCatalog {
                 position = (e.position ?: listOf(0f, 0f, 0f)).toFloatArray(),
                 rotationEulerYXZ = (e.rotationEulerYXZ ?: listOf(0f, 0f, 0f)).toFloatArray(),
                 scale = e.scale,
+                offsetProfile = e.offsetProfile,
             )
         }
     } catch (e: Exception) {
@@ -97,8 +108,10 @@ internal object AccessoryCatalog {
         all(context).firstOrNull { it.id.equals(id, ignoreCase = true) }
 
     /**
-     * 三层合并出挂载规格：sidecar/导入默认 → per-model 校准 preset（只覆盖
-     * 标定维度）→ 命令行显式参数（boneOverride/偏移非空才生效）。
+     * 三层合并出挂载规格（§6.4 后为「条目默认 → 模板层 → 校准 preset → 显式
+     * 参数」）：sidecar/导入默认（引用模板时由模板出厂值接管）→ 模板级
+     * per-model 校准 → 条目级 per-model 校准（只覆盖标定维度）→ 命令行显式
+     * 参数（boneOverride/偏移非空才生效）。无模板条目与既有行为逐位一致。
      * [modelId] = 模型文件名（[com.neethu.corelib.stage.AvatarSpec.displayName]）。
      */
     fun specFor(
@@ -111,14 +124,23 @@ internal object AccessoryCatalog {
         scaleOverride: Float? = null,
     ): AccessorySpec {
         val preset = AccessoryCalibrationStore.load(context, modelId, entry.id)
-        val bone = boneOverride ?: preset?.bone ?: entry.defaultBone
-        val pos = positionOverride
-            ?: preset?.position?.toFloatArray()
-            ?: entry.position
-        val rot = rotationOverride
-            ?: preset?.rotationEulerYXZ?.toFloatArray()
-            ?: entry.rotationEulerYXZ
-        val scale = scaleOverride ?: preset?.scale ?: entry.scale
+        val profilePreset = entry.offsetProfile
+            ?.let { AccessoryCalibrationStore.loadProfiles(context, modelId)[it] }
+        val merged = AccessoryOffsetProfiles.resolve(
+            entryDefault = AccessoryOffsetProfiles.Mount(
+                bone = entry.defaultBone,
+                position = entry.position,
+                rotationEulerYXZ = entry.rotationEulerYXZ,
+                scale = entry.scale,
+            ),
+            profileName = entry.offsetProfile,
+            profilePreset = profilePreset,
+            accessoryPreset = preset,
+        )
+        val bone = boneOverride ?: merged.bone
+        val pos = positionOverride ?: merged.position
+        val rot = rotationOverride ?: merged.rotationEulerYXZ
+        val scale = scaleOverride ?: merged.scale
         return AccessorySpec(
             id = entry.id,
             source = entry.source,

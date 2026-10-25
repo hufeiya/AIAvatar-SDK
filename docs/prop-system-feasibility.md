@@ -1,6 +1,6 @@
 # 道具系统(Prop/Activity):从"被动配饰"到"自主使用道具"落地设计
 
-日期:2026-10-25 · 代码基线:`c5b2ce7`(自主生命体 P0 验收通过) · 地位:**P0 已落地:2026-10-25 真机验收 6/6 通过(落地记录见 §7);P1/P2 未开发**
+日期:2026-10-25 · 代码基线:`c5b2ce7`(自主生命体 P0 验收通过) · 地位:**P0 已落地:2026-10-25 真机验收 6/6 通过;P1 第 1~3 项(模板层/道具入库/动画补采)已落地:2026-10-25 真机验收 5/5 通过,第 4~6 项与 P2 未开发(落地记录见 §7)**
 一句话:让大模型和自主状态机能"决定做一件事"——「我看会书」一句话(或 FSM 作息自发)完成:走到阅读椅、坐下、手里变出一本书、翻开看 20 分钟;道具不再只是"给用户戴上看的挂件",而是**行为叙事的一部分**。
 
 ---
@@ -13,6 +13,7 @@
 4. 场景大表 70 个(§5),其中 **15 个零采购、2 个有替代跑法**(现有道具×现有动画直接组合,P0 验收编排器);道具 11→45+ 件的采购/生成清单(§6);动画缺口 ~20 个且**优先从本地 445 个 VRMA 源库补**(§6.3)。
 5. 工作量 ≈ **14 人日**:P0 编排器+零采购场景 4 天,P1 资产扩充第一波 5 天,P2 深度联动(VFX 组合技/场景道具/节日包/古风包)5 天。
 6. **P0 已落地(2026-10-25,真机验收 6/6 通过)**:活动目录 16 条(15 零采购+看书替代跑法)上线,`start_activity/stop_activity` 与 FSM `DoActivity` 真机全过——发送到道具 7.3s≤8s、25min 放置窗 2 次自主带道具活动、对话打断道具不消失、stop 干净收场、穿戴叠加共存、fps 60 零崩溃;全仓 1354 单测全绿。明细与新坑见 §7 落地记录。
+7. **P1 资产层已落地(2026-10-25,真机验收 5/5 通过)**:校准偏移模板层(8 模板,校准 90→16 次)、道具批量入库 20 件(11→31,程序化生成+校验器全检零告警)、动画补采走兜底绑定(本地源库搜尽证伪,绑定表 17→29);模板命中抽查微调率 14.3%≤20%,出/收循环、新补动画、fps/崩溃稳定性全过,全仓 1370 单测全绿。明细见 §7 落地记录。
 
 ---
 
@@ -354,6 +355,10 @@ LLM 自发决策(没人说话也想换活动)走 autonomy-feasibility §4.2 的"
 4. 地面道具挂载(6.2,瑜伽垫+茶具验证)。
 5. 场景上线:看书(P1 旗舰)、喝饮料×2、瑜伽、吉他弹唱、耳机听歌、送花、撑伞(天气联动)、施法(VFX 组合技旗舰)、打坐(VFX)、仙女棒、气球、平板换真平板等。
 6. **真机验收**:每新道具出/收+校准模板命中抽查;吉他双手持大件穿模检查;施法=法杖+魔法阵时序(杖起→阵现)。
+
+> **落地记录(2026-10-25,P1 第 1~3 项已落地,真机验收 5/5 通过,4~6 待后续;全仓 1370 单测全绿)**:①模板层——`AccessoryOffsetProfiles`(app multiavatar,8 模板 holdCup/holdBottle/holdBook/holdWand/holdObject/wearHead/holdBig/worldProp)插入三层合并,合并链成为「条目默认→模板出厂→模板级 per-model 校准(`calibration/<modelId>/offsetProfiles.json` 单文件集中存)→条目级校准→显式参数」;`accessory cal profile <id>` 把某道具最后一次 attach 规格落成模板 preset(同类全继承),`cal show|clear` 支持 `profile:<名>`;旧 11 件条目不迁移零行为变化。②道具入库 20 件(11→31),全部 `make-prop-glb.js` 程序化生成(Kenney 家具包无杯/笔/乐器类,程序化即文档 §6.1 首选路径),零依赖校验器全检零告警、单件 3~29KB,sidecar 全部引用 offsetProfile,LICENSES.md 更新;瑜伽垫/茶具组按 worldProp 模板占位入库(挂载类别=世界坐标是第 4 项)。③动画补采:实测本地源库 445 精选+1510 全库**均无**坐姿看书/躺姿玩手机/打手柄/递花/站立书写(多轮关键词搜尽,英文原名即语义的命名约定下无近似拼写),按文档渠道 3 兜底——补采唯一可用的 `06_坐姿/Laying On A Bed Idle.vrma`(躺姿循环,绑 phone=躺姿刷手机近似),其余绑定兜底:book→Elbows On Legs(阅读椅循环即捧书)、pen→Male Writing While Seated、flowers→Taking An Item And Examining It、giftBox→Pick Up Object And Examine、gamepad→Sitting To Typing、guitar→Playing A Guitar、staff→Pointing With Arm Bent(施法旗舰)、umbrella→Holding An Object While Walking、cannedDrink/waterBottle/kettle 各得场景表点名剪辑;绑定表 17→29 条。新增 16 个单测(模板合并 8+资产树四向对拍 8,后者锁「绑定动画文件存在/动画键不重复/offsetProfile 合法/8 模板全被引用」)。
+>
+> 验收(真机 5/5)——①注册完整:`accessory list` 32 条=11 旧+20 新+1 设备侧历史导入 myradio,bindings 29 全注册,逐类点数 holdWand5/holdObject4/holdCup3/holdBook2/holdBottle2/worldProp2/holdBig1/wearHead1(资产实数 20 件,§9 门禁写 21 件系约数)。②模板命中抽查 14 件:12 件出厂模板即合理,2 件微调(headphones 出厂值被厚发淹没,微调后 `cal profile` 落成模板级 preset 并裸 attach 复验继承;yogaMat worldProp 占位与躯干穿模)=14.3%≤20%;前置 run-as 已验当前模型零存量 preset,跑的是纯出厂模板值(仅 VRM1 默认模型,VRM0.x 180° 校准路径未测)。③出/收循环 5 类(book/waterBottle/kettle/umbrella/guitar):起播出现、播完 2 例+顶替 2 例收起无残留,worn 行佐证结束后全部 (hidden)。④新补动画 9 剪辑 OK 播零 FAIL(Laying On A Bed Idle 躺姿正常;其 2.12s 太短,截图通道延迟落在播完隐藏后,phone 显现时刻未拍到,「可播不崩」已验)。⑤fps 三采样全 60、0 FATAL、dropbox 崩溃记录均在安装窗前、冷启动 pid 全程未变。新坑——其一,精选库 445 的非走跑类已 309 个全内置,「补采本地库」可行空间比 §6.3 假设小得多(Mixamo 本就不收生活细动作),后续缺口基本只能走渠道 2/3;其二,绑定表 animation→accessory 是 1:1,场景表多道具共指同一剪辑(奶茶与撑伞都要 Holding An Object While Walking)无法同时满足,按「旗舰场景优先」分配,余记 deferred 由第 5 项场景上线统筹;其三,book→Elbows On Legs 有已知副作用:该剪辑是 reading_seat 的 sitLoopClip,坐阅读椅即出书,与 P0 books→Seated Idle 同款已接受惯例(bindings note 已写明)。小坑三处:Kotlin 反引号测试名不允许冒号(JVM 方法名字符集,首次编译被拦改名后过);模板级 preset 单文件 offsetProfiles.json 与条目级 <accessoryId>.json 文件名空间天然隔离,免 profile_ 前缀碰撞防御;生成器扩展用 md5 对拍锁 microphone/lightstick 再生成字节级不变(复用生成器不扰动旧产物)。
 
 ### P2 深度联动(≈5 人日)——场景 +34,生态位
 

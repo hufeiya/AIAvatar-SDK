@@ -35,3 +35,4 @@
 
 - `validate-glb.js`：零依赖 GLB/glTF 校验器（JSON chunk 解析、面数/贴图统计、包围盒、DRACO/KTX2/unlit/骨骼动画告警）。用法：`node validate-glb.js [目录|文件]`。
 - `make-phone-glb.js`：程序化生成 `phone.glb`（改几何参数可再造其他简单道具）。
+- `make-prop-glb.js`：批量程序化生成道具（麦克风/应援棒 → P2 首批；P1 道具系统再扩 20 件：book/pen/mug/waterBottle/cannedDrink/milkTea/kettle/cup/guitar/headphones/flowers/giftBox/sparkler/balloon/umbrella/staff/yogaMat/teaSet/tablet/gamepad，2026-10-25 全部转正进 `app/src/main/assets/accessories/`，零告警过校验器；几何原语 cylinder/frustum/box/sphere/rotateX/rotateZ 可组合再造）。

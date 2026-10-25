@@ -15,6 +15,26 @@
 | `cardboardBoxClosed.glb` | Kenney Furniture Kit | CC0 1.0 |
 | `microphone.glb` | 自制（`tools/accessory-samples/make-prop-glb.js` 程序化生成） | CC0 |
 | `lightstick.glb` | 自制（`tools/accessory-samples/make-prop-glb.js` 程序化生成） | CC0 |
+| `book.glb` | 自制（`tools/accessory-samples/make-prop-glb.js` 程序化生成，P1 道具系统） | CC0 |
+| `pen.glb` | 自制（同上） | CC0 |
+| `mug.glb` | 自制（同上） | CC0 |
+| `waterBottle.glb` | 自制（同上） | CC0 |
+| `cannedDrink.glb` | 自制（同上） | CC0 |
+| `milkTea.glb` | 自制（同上） | CC0 |
+| `kettle.glb` | 自制（同上） | CC0 |
+| `cup.glb` | 自制（同上） | CC0 |
+| `guitar.glb` | 自制（同上） | CC0 |
+| `headphones.glb` | 自制（同上） | CC0 |
+| `flowers.glb` | 自制（同上） | CC0 |
+| `giftBox.glb` | 自制（同上） | CC0 |
+| `sparkler.glb` | 自制（同上） | CC0 |
+| `balloon.glb` | 自制（同上） | CC0 |
+| `umbrella.glb` | 自制（同上） | CC0 |
+| `staff.glb` | 自制（同上） | CC0 |
+| `yogaMat.glb` | 自制（同上） | CC0 |
+| `teaSet.glb` | 自制（同上） | CC0 |
+| `tablet.glb` | 自制（同上） | CC0 |
+| `gamepad.glb` | 自制（同上） | CC0 |
 
 Kenney 许可证全文：<https://kenney.nl/support>（CC0 1.0 Universal，资产页内标注
 "license: Creative Commons Zero (CC0)"）。样例库存档与逐资产校验数据见

@@ -15,5 +15,17 @@
   { "animation": "06_坐姿/Tapping Fingers From A Sitting Position.vrma", "accessory": "bear", "note": "坐姿抱熊(活动 bed_bear)" },
   { "animation": "07_日常互动/Petting An Animal.vrma", "accessory": "bear", "note": "撸熊(活动 pet_bear,P0 熊在左手近似场景摆放)" },
   { "animation": "08_舞蹈与表演/Basic Rock Beat.vrma", "accessory": "radio", "note": "打碟放歌(活动 dj_radio,radio 在右手静持)" },
-  { "animation": "03_打招呼与礼仪/Waving.vrma", "accessory": "lightstick", "note": "挥灯牌应援(活动 lightstick_cheer,配 lightstick_spark VFX)" }
+  { "animation": "03_打招呼与礼仪/Waving.vrma", "accessory": "lightstick", "note": "挥灯牌应援(活动 lightstick_cheer,配 lightstick_spark VFX)" },
+  { "animation": "06_坐姿/Elbows On Legs Leaning Forward.vrma", "accessory": "book", "note": "坐姿看书(俯身看手=翻书;reading_seat 坐姿循环同款剪辑,坐阅读椅即捧书,同 books 惯例)" },
+  { "animation": "06_坐姿/Laying On A Bed Idle.vrma", "accessory": "phone", "note": "躺姿刷手机近似(P1 补采躺姿循环,手上抬持机;源库无专属躺姿玩手机动画)" },
+  { "animation": "07_日常互动/Male Writing While Seated.vrma", "accessory": "pen", "note": "坐姿写日记出钢笔(站立书写源库缺,坐姿书写兜底)" },
+  { "animation": "07_日常互动/Having A Seat And Drinking A Canned Beverage.vrma", "accessory": "cannedDrink", "note": "坐床边喝罐装饮料(场景表 #5)" },
+  { "animation": "07_日常互动/Male Drinking.vrma", "accessory": "waterBottle", "note": "站着喝水(场景表 #6);饮酒葫芦/奶茶后续经条目级校准复用" },
+  { "animation": "07_日常互动/Pouring And Serving Drinks.vrma", "accessory": "kettle", "note": "倒饮料待客(场景表 #20);双道具(水壶+杯)单动画只出一把,杯待活动层叠加" },
+  { "animation": "07_日常互动/Holding An Object While Walking.vrma", "accessory": "umbrella", "note": "雨天撑伞走路(场景表 #56,配 rain VFX)" },
+  { "animation": "07_日常互动/Taking An Item And Examining It.vrma", "accessory": "flowers", "note": "递花兜底(场景表 #52,设计文档点名;源库无递花动画)" },
+  { "animation": "07_日常互动/Pick Up Object And Examine.vrma", "accessory": "giftBox", "note": "递礼物盒兜底(场景表 #53,与递花错开剪辑)" },
+  { "animation": "07_日常互动/Sitting To Typing.vrma", "accessory": "gamepad", "note": "打手柄近似(双手搭腿=握手柄;源库无打手柄动画)" },
+  { "animation": "08_舞蹈与表演/Playing A Guitar.vrma", "accessory": "guitar", "note": "抱吉他弹唱(场景表 #34,大件单骨挂右手+动画握姿)" },
+  { "animation": "04_交流手势/Pointing With Arm Bent.vrma", "accessory": "staff", "note": "持杖施法(场景表 #59 组合技旗舰,配 magic_circle VFX:杖起→阵现)" }
 ]
