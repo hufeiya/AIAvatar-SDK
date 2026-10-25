@@ -128,14 +128,50 @@ internal class CompanionUiState(
         context.assets.list("scene")?.filter { it.endsWith(".glb") }.orEmpty().sorted()
     }.getOrDefault(emptyList())
 
-    var selectedScene by mutableStateOf(prefs.getString(KEY_SELECTED_SCENE, null))
+    /**
+     * 场景选择：null = 无场景（纯色背景）。持久化空串 = 无场景，demo 同款
+     * [SharedPreferences.contains] 判定区分「无存档」（首启 → 默认卧室 =
+     * 防遮挡 + 家具交互的旗舰场景）与「存档 = 无」——Elvis 兜底会把后者吞回默认。
+     */
+    var selectedScene by mutableStateOf(
+        if (prefs.contains(KEY_SELECTED_SCENE)) {
+            prefs.getString(KEY_SELECTED_SCENE, null)?.takeIf { it.isNotBlank() }
+        } else {
+            sceneFiles.firstOrNull { it == DEFAULT_SCENE } ?: sceneFiles.firstOrNull()
+        }
+    )
         private set
 
     fun setScene(name: String?) {
-        selectedScene = name
-        prefs.edit().putString(KEY_SELECTED_SCENE, name).apply()
+        val norm = name?.takeIf { it.isNotBlank() }
+        selectedScene = norm
+        prefs.edit().putString(KEY_SELECTED_SCENE, norm ?: "").apply()
         // 卡激活期间的场景选择写回卡绑定（companion 分叉:P3-3）
-        activeCardFile?.let { cardBindings.update(it, CardBinding(sceneFile = name)) }
+        activeCardFile?.let { cardBindings.update(it, CardBinding(sceneFile = norm)) }
+    }
+
+    // ── 天空盒（360° 全景壁纸，assets/skybox 与 :app 共享）───────────────────
+    val skyboxFiles: List<String> = runCatching {
+        context.assets.list("skybox")
+            ?.filter { n -> listOf(".jpg", ".jpeg", ".png", ".webp").any { n.endsWith(it, ignoreCase = true) } }
+            ?.sorted()
+            .orEmpty()
+    }.getOrDefault(emptyList())
+
+    /** 当前天空盒（null = 纯色背景）；持久化空串 = 纯色，contains 判定同场景。 */
+    var selectedSkybox by mutableStateOf(
+        if (prefs.contains(KEY_SELECTED_SKYBOX)) {
+            prefs.getString(KEY_SELECTED_SKYBOX, null)?.takeIf { it.isNotBlank() && it in skyboxFiles }
+        } else {
+            DEFAULT_SKYBOX.takeIf { it in skyboxFiles } ?: skyboxFiles.firstOrNull()
+        }
+    )
+        private set
+
+    fun setSkybox(name: String?) {
+        val norm = name?.takeIf { it in skyboxFiles }
+        selectedSkybox = norm
+        prefs.edit().putString(KEY_SELECTED_SKYBOX, norm ?: "").apply()
     }
 
     // ── 灯光氛围 ──────────────────────────────────────────────────────────
@@ -341,6 +377,7 @@ internal class CompanionUiState(
         private const val KEY_CONTEXT_ID = "ai_context_id"
         private const val KEY_SELECTED_MODEL = "selected_model"
         private const val KEY_SELECTED_SCENE = "selected_scene"
+        private const val KEY_SELECTED_SKYBOX = "selected_skybox"
         private const val KEY_AMBIENCE = "ambience"
         private const val KEY_VOICE_MODE = "voice_input_mode"
         private const val KEY_DATE_PREV_SCENE = "date_mode_prev_scene"
@@ -351,6 +388,12 @@ internal class CompanionUiState(
 
         /** 默认模型（与 demo 同款,内置资产必有）。 */
         const val DEFAULT_MODEL = "FreeTestCharacterAsuna_1024.vrm"
+
+        /** 首启默认场景（存档缺失时）：闭室卧室 = 防遮挡 + 家具交互旗舰场景。 */
+        const val DEFAULT_SCENE = "dream_bedroom.glb"
+
+        /** 首启默认天空盒（assets/skybox 真 equirect 全景，Polyhaven CC0）。 */
+        const val DEFAULT_SKYBOX = "forest_grove.jpg"
 
         fun newContextId(): String = java.util.UUID.randomUUID().toString()
     }
@@ -384,6 +427,29 @@ internal fun builtinAnimationPaths(context: Context): List<String> = runCatching
     walk("animations")
     out.sorted()
 }.getOrDefault(emptyList())
+
+/**
+ * 默认待机解析（demo resolveIdleAction 产品版，产品 v1 无待机选择面）：按内置
+ * 优先级挑文件名精确命中（Arms Down = 单帧静态站姿，最接近「安静站着」的预期，
+ * 注意其文件名不含 idle，不能先按名字过滤），再回落任一文件名含 idle 的。
+ * 模型就绪后挂上，无动作播放时引擎自动进待机循环——冷启动不再是 T-pose。
+ */
+internal fun resolveIdleAnimation(assetPaths: List<String>): String? {
+    val preference = listOf(
+        "Arms Down",
+        "Idle Stand Looking Around",
+        "Standing Idle",
+        "Female Idle",
+        "Male Idle",
+        "Idle",
+    )
+    preference.forEach { key ->
+        assetPaths.firstOrNull {
+            it.substringAfterLast('/').removeSuffix(".vrma").equals(key, ignoreCase = true)
+        }?.let { return it }
+    }
+    return assetPaths.firstOrNull { it.substringAfterLast('/').contains("idle", ignoreCase = true) }
+}
 
 /** demo ensureWalkGaits 产品版（首回 <move:> 前步态就绪）。 */
 internal fun ensureWalkGaits(controller: AvatarController) {

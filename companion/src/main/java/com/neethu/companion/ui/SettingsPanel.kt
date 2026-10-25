@@ -79,6 +79,13 @@ internal fun SettingsPanel(
     onExportHistoryJsonl: () -> Unit,
     onExportHistoryMarkdown: () -> Unit,
     onImportHistoryJsonl: () -> Unit,
+    // 场景与背景
+    sceneFiles: List<String>,
+    selectedScene: String?,
+    onSceneChange: (String?) -> Unit,
+    skyboxFiles: List<String>,
+    selectedSkybox: String?,
+    onSkyboxChange: (String?) -> Unit,
     // 画质
     ambienceNames: List<Pair<String, String>>,
     selectedAmbience: String,
@@ -275,6 +282,25 @@ internal fun SettingsPanel(
                         TextButton(onClick = onNewContext) { Text("＋ 新建上下文(重新开始)", fontSize = 12.sp) }
                     }
                 }
+                item { SectionTitle("场景与背景") }
+                item {
+                    DropdownRow(
+                        label = "场景",
+                        options = listOf("" to "无场景（纯色背景）") +
+                            sceneFiles.map { it to sceneDisplayName(it) },
+                        selected = selectedScene ?: "",
+                        onSelect = onSceneChange,
+                    )
+                }
+                item {
+                    DropdownRow(
+                        label = "天空盒",
+                        options = listOf("" to "纯色背景") +
+                            skyboxFiles.map { it to it.substringBeforeLast('.') },
+                        selected = selectedSkybox ?: "",
+                        onSelect = onSkyboxChange,
+                    )
+                }
                 item { SectionTitle("画质氛围") }
                 item {
                     DropdownRow(
@@ -292,6 +318,14 @@ internal fun SettingsPanel(
             }
         }
     }
+}
+
+/** 场景下拉的显示名（知名场景给中文名，其余回落文件名去后缀）。 */
+private fun sceneDisplayName(file: String): String = when (file) {
+    "dream_bedroom.glb" -> "卧室"
+    "dream_bedroom_2.glb" -> "星潮玻璃小屋"
+    "dream_bedroom_3.glb" -> "桃隐仙居"
+    else -> file.removeSuffix(".glb")
 }
 
 @Composable

@@ -3,8 +3,11 @@ package com.neethu.companion.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -40,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +77,7 @@ import com.neethu.companion.mimeForFileName
 import com.neethu.companion.notify.GreetingWorker
 import com.neethu.companion.parseSceneMeta
 import com.neethu.companion.parseSceneSpawn
+import com.neethu.companion.resolveIdleAnimation
 import com.neethu.companion.sceneMetaAssetName
 import com.neethu.companion.show.MusicPlayer
 import com.neethu.corelib.AvatarConfig
@@ -122,22 +128,45 @@ internal fun CompanionScreen(
     }
     LaunchedEffect(ui.selectedModel) { loadSelectedModel(true) }
 
-    // ── 场景切换（meta + spawn 投影；卡绑场景走 ui.selectedScene 同一条路）────
+    // ── 待机动作（demo 同款接线）：模型每次就绪后挂默认待机，无动作播放时
+    // 引擎自动进待机循环，冷启动/说话间隙不再是 T-pose（同源重复挂载由渲染器
+    // 去重，不重解析）。与 AI 会话解耦，未配置服务也一样有。
+    val assetAnimationPaths = remember { builtinAnimationPaths(context) }
+    LaunchedEffect(state) {
+        resolveIdleAnimation(assetAnimationPaths)?.let { controller.setVrmaIdleAnimation(it) }
+    }
+
+    // ── 场景切换（meta 投影；卡绑场景走 ui.selectedScene 同一条路）────────
+    // 出生点等模型 Ready 再落且按场景只落一次：冷启动时场景与模型加载异步，
+    // 模型未就绪时 setAvatarWorldPosition 是 renderer==null 的静默 no-op，
+    // 立刻投会丢（demo spawnedForScene 同款护栏）。
+    var spawnedForScene by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(ui.selectedScene) {
         val scene = ui.selectedScene
         if (scene.isNullOrBlank()) {
+            spawnedForScene = null
             controller.removeScene()
         } else {
             val metaJson = runCatching {
                 context.assets.open(sceneMetaAssetName(scene)).bufferedReader().use { it.readText() }
             }.getOrNull()
             controller.loadScene("scene/$scene", metaJson?.let { parseSceneMeta(it) })
-            metaJson?.let { json ->
-                parseSceneSpawn(json)?.let { sp ->
-                    controller.setAvatarWorldPosition(sp.x, sp.y, sp.z, sp.yawDeg)
-                }
-            }
         }
+    }
+    LaunchedEffect(state, ui.selectedScene) {
+        val scene = ui.selectedScene ?: return@LaunchedEffect
+        if (state !is AvatarState.Ready || spawnedForScene == scene) return@LaunchedEffect
+        spawnedForScene = scene
+        val spawn = runCatching {
+            context.assets.open(sceneMetaAssetName(scene)).bufferedReader().use { it.readText() }
+        }.getOrNull()?.let { parseSceneSpawn(it) }
+        if (spawn != null) controller.setAvatarWorldPosition(spawn.x, spawn.y, spawn.z, spawn.yawDeg)
+    }
+
+    // ── 天空盒（360° 全景壁纸，assets/skybox；null = 纯色背景）────────────
+    LaunchedEffect(ui.selectedSkybox) {
+        val skybox = ui.selectedSkybox
+        if (skybox != null) controller.setSkybox("skybox/$skybox") else controller.clearSkybox()
     }
 
     // ── AI 会话装配（800ms 防抖；配置/上下文/语言变化即重建）─────────────────
@@ -537,6 +566,15 @@ internal fun CompanionScreen(
 
     var groupChatOpen by remember { mutableStateOf(false) }
 
+    // ── 弹层返回键（demo 抽屉同款坑：不拦返回就退出应用）：逐层收，群聊 > 关系卡 > 面板
+    BackHandler(enabled = groupChatOpen || relationshipSheet || panel != PanelType.NONE) {
+        when {
+            groupChatOpen -> groupChatOpen = false
+            relationshipSheet -> relationshipSheet = false
+            else -> panel = PanelType.NONE
+        }
+    }
+
     // ── ai_cmd 调试通道（真机验收;demo 同款 logcat 回读惯例）──────────────────
     LaunchedEffect(Unit) {
         val hooks = com.neethu.companion.debug.CompanionDebugHooks(
@@ -611,7 +649,9 @@ internal fun CompanionScreen(
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                // statusBarsPadding：edge-to-edge 下按钮排上半部会落进状态栏
+                // 触摸区被系统吃掉（真机实锤：y≈94 的点击全无响应），必须先让位
+                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp),
             ) {
                 Surface(shape = RoundedCornerShape(14.dp), color = Color.Black.copy(alpha = 0.45f)) {
                     Row(modifier = Modifier.padding(2.dp)) {
@@ -638,7 +678,7 @@ internal fun CompanionScreen(
                     }
                 }
             }
-            Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+            Row(modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
                 Surface(shape = RoundedCornerShape(14.dp), color = Color.Black.copy(alpha = 0.45f)) {
                     Row(modifier = Modifier.padding(2.dp)) {
                         IconButton(onClick = { panel = if (panel == PanelType.CARDS) PanelType.NONE else PanelType.CARDS }) {
@@ -690,90 +730,120 @@ internal fun CompanionScreen(
             onDismiss = { groupChatOpen = false },
         )
       }
-    }
 
-    when (panel) {
-        PanelType.CARDS -> CardsPanel(
-            cards = ui.cards,
-            activeFile = ui.activeCardFile,
-            presets = ui.presetCards,
-            presetNameFor = { preset -> ui.localizedCardName(preset) },
-            activePresetAsset = ui.activeCardFile?.let { ui.presetAssetByFile(it) },
-            bytesFor = { ui.cardLibrary.bytes(it) },
-            bindingFor = { ui.cardBindings.forCard(it) },
-            voiceLabelFor = { com.neethu.companion.voiceLabel(it) },
-            onSelectPreset = { preset ->
-                ui.selectPresetCard(preset)?.let { activateEntry(it) }
-            },
-            onClearCard = { deactivateCard() },
-            onImport = { cardPicker.launch(arrayOf("image/png", "application/json")) },
-            onActivate = { entry -> activateEntry(entry) },
-            onDelete = { entry -> deleteCard(entry) },
-        )
-        PanelType.MODELS -> ListPanel(
-            title = "模型（点切换）",
-            entries = ui.modelFiles,
-            selectedItem = ui.selectedModel,
-            displayName = { it },
-            onItemClick = { ui.selectModel(it) },
-            header = {
-                TextButton(onClick = { modelPicker.launch(arrayOf("application/octet-stream", "model/gltf-binary")) }) {
-                    Text("＋ 导入 VRM 文件…", fontSize = 13.sp)
-                }
-            },
-        )
-        PanelType.SETTINGS -> SettingsPanel(
-            aiPrefs = ui.aiPrefs,
-            voicePrefs = ui.voicePrefs,
-            appLangZh = ui.langZh,
-            onAiPrefsChange = { ui.updateAiPrefs(it) },
-            onVoicePrefsChange = { ui.updateVoicePrefs(it) },
-            onAppLangChange = { ui.changeLang(it) },
-            relationshipTracking = ui.relationshipTracking,
-            onRelationshipTrackingChange = { ui.setRelationshipTracking(it, aiChat) },
-            greetingNotify = ui.greetingNotifyEnabled,
-            onGreetingNotifyChange = { enabled ->
-                if (enabled) {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                        ui.setGreetingNotify(true)
-                    } else {
-                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                } else {
-                    ui.setGreetingNotify(false)
-                }
-            },
-            onResetRelationship = { scope.launch { aiChat.session?.relationship?.reset() } },
-            memoryPanelOpen = { panel = PanelType.MEMORY },
-            lorebooks = ui.lorebooks,
-            lorebookEnabled = ui.lorebookEnabled,
-            lorebookGlobalFile = ui.lorebookLibrary.globalFile,
-            onLorebookEnabledChange = { ui.setLorebookEnabled(it, session) },
-            onImportLorebook = { lorebookPicker.launch(arrayOf("application/json")) },
-            onLorebookSetGlobal = { ui.setGlobalLorebook(it, session) },
-            onLorebookDelete = { ui.deleteLorebook(it, session) },
-            contexts = contextList,
-            activeContextId = ui.contextId,
-            historyMessageCount = historyCount,
-            onNewContext = { ui.newContext() },
-            onSelectContext = { ui.switchContext(it) },
-            onDeleteContext = { ui.deleteContext(it) },
-            onExportHistoryJsonl = { exportJsonl.launch("companion-chat-${System.currentTimeMillis()}.jsonl") },
-            onExportHistoryMarkdown = { exportMarkdown.launch("companion-chat-${System.currentTimeMillis()}.md") },
-            onImportHistoryJsonl = { importHistoryPicker.launch(arrayOf("application/octet-stream")) },
-            ambienceNames = listOf(
-                "STUDIO" to "摄影棚", "BRIGHT" to "明亮", "DIM" to "夜话",
-                "SPOTLIGHT" to "聚光", "DREAMY" to "梦幻",
-            ),
-            selectedAmbience = ui.ambience,
-            onAmbienceChange = { ui.setAmbience(it, controller) },
-            historySummaryEnabled = ui.aiPrefs.historySummary,
-            onHistorySummaryChange = { ui.updateAiPrefs(ui.aiPrefs.copy(historySummary = it)) },
-            onDismiss = { panel = PanelType.NONE },
-            modifier = Modifier.padding(8.dp),
-        )
-        PanelType.MEMORY -> MemoryPanel(store = aiChat.memoryStore, lang = ui.lang, onDismiss = { panel = PanelType.NONE })
-        PanelType.NONE -> Unit
+      // ── 面板层：底部对齐（不挡顶部按钮排），点遮罩/返回键关闭 ───────────────
+      // 卡库/模型/设置面板原先渲染在组合根、贴左上角——把能切它们的按钮排整个
+      // 盖住，且卡库/模型面板无关闭按钮（「无法关闭」的真凶）。现挪进根 Box，
+      // 加暗遮罩；面板本体消费点击防穿透误关。记忆面板是自带关闭钮的全屏层。
+      if (panel == PanelType.MEMORY) {
+          MemoryPanel(store = aiChat.memoryStore, lang = ui.lang, onDismiss = { panel = PanelType.NONE })
+      } else if (panel != PanelType.NONE) {
+          Box(
+              modifier = Modifier
+                  .fillMaxSize()
+                  .background(Color.Black.copy(alpha = 0.35f))
+                  .pointerInput(Unit) { detectTapGestures { panel = PanelType.NONE } },
+              contentAlignment = Alignment.BottomCenter,
+          ) {
+              Box(
+                  modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(12.dp)
+                      // 吃掉落在面板本体上的点击，防穿透到遮罩误关
+                      .pointerInput(Unit) { detectTapGestures { } },
+              ) {
+                  when (panel) {
+                      PanelType.CARDS -> CardsPanel(
+                          cards = ui.cards,
+                          activeFile = ui.activeCardFile,
+                          presets = ui.presetCards,
+                          presetNameFor = { preset -> ui.localizedCardName(preset) },
+                          activePresetAsset = ui.activeCardFile?.let { ui.presetAssetByFile(it) },
+                          bytesFor = { ui.cardLibrary.bytes(it) },
+                          bindingFor = { ui.cardBindings.forCard(it) },
+                          voiceLabelFor = { com.neethu.companion.voiceLabel(it) },
+                          onSelectPreset = { preset ->
+                              ui.selectPresetCard(preset)?.let { activateEntry(it) }
+                          },
+                          onClearCard = { deactivateCard() },
+                          onImport = { cardPicker.launch(arrayOf("image/png", "application/json")) },
+                          onActivate = { entry -> activateEntry(entry) },
+                          onDelete = { entry -> deleteCard(entry) },
+                      )
+                      PanelType.MODELS -> ListPanel(
+                          title = "模型（点切换）",
+                          entries = ui.modelFiles,
+                          selectedItem = ui.selectedModel,
+                          displayName = { it },
+                          onItemClick = { ui.selectModel(it); panel = PanelType.NONE },
+                          header = {
+                              TextButton(onClick = { modelPicker.launch(arrayOf("application/octet-stream", "model/gltf-binary")) }) {
+                                  Text("＋ 导入 VRM 文件…", fontSize = 13.sp)
+                              }
+                          },
+                      )
+                      PanelType.SETTINGS -> SettingsPanel(
+                          aiPrefs = ui.aiPrefs,
+                          voicePrefs = ui.voicePrefs,
+                          appLangZh = ui.langZh,
+                          onAiPrefsChange = { ui.updateAiPrefs(it) },
+                          onVoicePrefsChange = { ui.updateVoicePrefs(it) },
+                          onAppLangChange = { ui.changeLang(it) },
+                          relationshipTracking = ui.relationshipTracking,
+                          onRelationshipTrackingChange = { ui.setRelationshipTracking(it, aiChat) },
+                          greetingNotify = ui.greetingNotifyEnabled,
+                          onGreetingNotifyChange = { enabled ->
+                              if (enabled) {
+                                  if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+                                      ui.setGreetingNotify(true)
+                                  } else {
+                                      notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                  }
+                              } else {
+                                  ui.setGreetingNotify(false)
+                              }
+                          },
+                          onResetRelationship = { scope.launch { aiChat.session?.relationship?.reset() } },
+                          memoryPanelOpen = { panel = PanelType.MEMORY },
+                          lorebooks = ui.lorebooks,
+                          lorebookEnabled = ui.lorebookEnabled,
+                          lorebookGlobalFile = ui.lorebookLibrary.globalFile,
+                          onLorebookEnabledChange = { ui.setLorebookEnabled(it, session) },
+                          onImportLorebook = { lorebookPicker.launch(arrayOf("application/json")) },
+                          onLorebookSetGlobal = { ui.setGlobalLorebook(it, session) },
+                          onLorebookDelete = { ui.deleteLorebook(it, session) },
+                          contexts = contextList,
+                          activeContextId = ui.contextId,
+                          historyMessageCount = historyCount,
+                          onNewContext = { ui.newContext() },
+                          onSelectContext = { ui.switchContext(it) },
+                          onDeleteContext = { ui.deleteContext(it) },
+                          onExportHistoryJsonl = { exportJsonl.launch("companion-chat-${System.currentTimeMillis()}.jsonl") },
+                          onExportHistoryMarkdown = { exportMarkdown.launch("companion-chat-${System.currentTimeMillis()}.md") },
+                          onImportHistoryJsonl = { importHistoryPicker.launch(arrayOf("application/octet-stream")) },
+                          sceneFiles = ui.sceneFiles,
+                          selectedScene = ui.selectedScene,
+                          onSceneChange = { ui.setScene(it) },
+                          skyboxFiles = ui.skyboxFiles,
+                          selectedSkybox = ui.selectedSkybox,
+                          onSkyboxChange = { ui.setSkybox(it) },
+                          ambienceNames = listOf(
+                              "STUDIO" to "摄影棚", "BRIGHT" to "明亮", "DIM" to "夜话",
+                              "SPOTLIGHT" to "聚光", "DREAMY" to "梦幻",
+                          ),
+                          selectedAmbience = ui.ambience,
+                          onAmbienceChange = { ui.setAmbience(it, controller) },
+                          historySummaryEnabled = ui.aiPrefs.historySummary,
+                          onHistorySummaryChange = { ui.updateAiPrefs(ui.aiPrefs.copy(historySummary = it)) },
+                          onDismiss = { panel = PanelType.NONE },
+                      )
+                      // MEMORY 走上面的全屏分支，这里不可达，仅为 when 穷尽
+                      PanelType.MEMORY -> Unit
+                      PanelType.NONE -> Unit
+                  }
+              }
+          }
+      }
     }
 
     if (relationshipSheet) {
