@@ -43,6 +43,9 @@ interface PromptTexts {
     /** 开场白 `{{user}}` 宏的口语替身（spokenGreeting 用）。 */
     val userAlias: String
 
+    /** 世界书注入块的标题行（LorebookInjector，逐轮变化段的第一行）。 */
+    val lorebookHeader: String
+
     /**
      * 多模态协议块全文。段结构（表情/镜头/动作/移动/few-shot 示例）与中文版
      * 逐段对齐；空段（无镜头/无动作/无锚点）的省略规则在两个实现里必须一致。
@@ -344,6 +347,8 @@ object PromptTextsZh : PromptTexts {
         "本轮额外允许动作 <act:名字>（与常用动作清单合并）：" + tags.joinToString(", ")
 
     override val userAlias: String = "你"
+
+    override val lorebookHeader: String = "【世界设定】（角色所在世界的背景设定，与本轮对话相关时遵循）"
 
     override fun protocolBlock(
         cameras: List<Pair<String, String>>,
@@ -819,6 +824,9 @@ object PromptTextsEn : PromptTexts {
         "Additional allowed actions <act:name> for this turn (alongside common actions): " + tags.joinToString(", ")
 
     override val userAlias: String = "you"
+
+    override val lorebookHeader: String =
+        "[World Info] (lore of the world the character lives in; follow when relevant to this turn)"
 
     override fun protocolBlock(
         cameras: List<Pair<String, String>>,

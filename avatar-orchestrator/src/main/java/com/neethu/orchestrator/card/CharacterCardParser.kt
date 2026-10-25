@@ -70,6 +70,7 @@ object CharacterCardParser {
         tags = data["tags"]?.jsonArrayOrNull()?.mapNotNull { it.jsonPrimitiveOrNull()?.content } ?: emptyList(),
         spec = spec,
         extensions = data["extensions"]?.jsonObjectOrNull(),
+        characterBook = data["character_book"]?.jsonObjectOrNull()?.let { LorebookParser.fromEmbedded(it) },
     )
 
     /** Character Card V1: flat fields, no `data` wrapper. */

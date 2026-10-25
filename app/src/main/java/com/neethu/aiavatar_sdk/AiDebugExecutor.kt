@@ -34,6 +34,14 @@ internal class AiChatDebugHooks(
     val importCard: (ByteArray) -> String? = { null },
     /** One-line snapshot of the active card + system prompt for `active_card`. */
     val cardSnapshot: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd import_lorebook：独立世界书 JSON 导入（绑当前卡/设全局）。 */
+    val importLorebook: (ByteArray, String?) -> String? = { _, _ -> null },
+    /** ai_cmd lorebook：世界书库快照（开关/列表/生效书条目）。 */
+    val lorebookSnapshot: () -> String = { "AI chat not wired in this screen" },
+    /** ai_cmd export_history jsonl|md：当前上下文历史导出到 app 外存，返回路径。 */
+    val exportHistory: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd import_history：ST jsonl 灌入当前上下文（覆盖），返回条数行。 */
+    val importHistory: (ByteArray) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_idle：(相对路径, 是否外置) → 设为待机并持久化，返回结果行。 */
     val setIdle: (String, Boolean) -> String = { _, _ -> "AI chat not wired in this screen" },
     /** ai_cmd idle_off：清除待机，回 rest pose。 */
@@ -60,6 +68,8 @@ internal class AiChatDebugHooks(
     val showButtons: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_provider siliconflow|volcano|openrouter|deepseek|bailian：切大模型服务商（模型清单随之切换）。 */
     val setProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
+    /** ai_cmd set_custom <baseUrl>|<apiKey>|<model>：自定义端点三件套一次配齐（并切到 CUSTOM）。 */
+    val setCustomEndpoint: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_tts_provider siliconflow|volcano|openrouter|bailian：TTS 独立服务商切换（自动取消同服务商勾选；deepseek 无 TTS 会被改道 Edge）。 */
     val setTtsProvider: (String?) -> String = { _ -> "AI chat not wired in this screen" },
     /** ai_cmd set_llm_model <清单id>：当前服务商下的大模型切换（清单校验，视频模式验证用）。 */
@@ -358,6 +368,34 @@ internal suspend fun executeAiCommand(
             }
             "active_card" -> chat?.cardSnapshot()
                 ?: throw IllegalStateException("AI chat not wired in this screen")
+            "import_lorebook" -> {
+                val arg = command.arg
+                    ?: throw IllegalArgumentException(
+                        "import_lorebook expects ai_arg = a ST World Info JSON path (absolute, or relative " +
+                            "to the app's external files dir; adb push it there first)"
+                    )
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                val file = resolveAppFile(context, arg)
+                chat.importLorebook(file.readBytes(), file.name)
+                    ?: throw IllegalArgumentException(
+                        "not a parseable ST World Info JSON: ${file.absolutePath}"
+                    )
+            }
+            "lorebook" -> chat?.lorebookSnapshot()
+                ?: throw IllegalStateException("AI chat not wired in this screen")
+            "export_history" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.exportHistory(command.arg)
+            }
+            "import_history" -> {
+                val arg = command.arg
+                    ?: throw IllegalArgumentException(
+                        "import_history expects ai_arg = a ST jsonl path (absolute, or relative " +
+                            "to the app's external files dir; adb push it there first)"
+                    )
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.importHistory(resolveAppFile(context, arg).readBytes())
+            }
             "transcribe" -> {
                 val arg = command.arg
                     ?: throw IllegalArgumentException(
@@ -387,6 +425,10 @@ internal suspend fun executeAiCommand(
             "set_provider" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
                 chat.setProvider(command.arg)
+            }
+            "set_custom" -> {
+                if (chat == null) throw IllegalStateException("AI chat not wired in this screen")
+                chat.setCustomEndpoint(command.arg)
             }
             "set_tts_provider" -> {
                 if (chat == null) throw IllegalStateException("AI chat not wired in this screen")

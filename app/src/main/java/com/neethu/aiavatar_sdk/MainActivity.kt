@@ -126,6 +126,7 @@ import com.neethu.orchestrator.face.MimicFaceMapper
 import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
+import com.neethu.orchestrator.history.StChatTranscript
 import com.neethu.orchestrator.session.AvatarEvent
 import com.neethu.orchestrator.session.AvatarSession
 import com.neethu.orchestrator.session.ConversationPhase
@@ -319,6 +320,19 @@ private fun localizedCard(
 ): CharacterCard {
     val assetFile = uiState.presetAssetByFile(entry.fileName)?.substringAfterLast('/')
     return PresetCardsEn.translate(entry.card, assetFile, uiState.lang) ?: entry.card
+}
+
+/**
+ * 聊天记录导出（P1-4）的说话人名对：(角色名, 用户名)。角色名取当前激活卡
+ * （无卡用 "Char"），用户名用 ST 惯例的 "User"。
+ */
+private fun exportNames(uiState: DemoUiState): Pair<String, String> {
+    val charName = uiState.activeCardFile
+        ?.let { uiState.cardByFile(it) }
+        ?.let { localizedCardName(it, uiState.lang, uiState::presetAssetByFile) }
+        ?.takeIf { it.isNotBlank() }
+        ?: "Char"
+    return charName to "User"
 }
 
 /** 卡片显示名（英文模式下预置中文卡显示英文名）。 */
@@ -652,6 +666,60 @@ internal class DemoUiState(context: Context) {
     /** 人物卡库：bytes 落 filesDir/cards，索引/激活卡持久化到 demo_settings。 */
     val cardLibrary = CardLibrary(context)
 
+    // ── 世界书（酒馆 P1-1，docs/tavern-companion-feasibility.md）─────────────
+    /** 世界书库：filesDir/lorebooks 落盘 + 卡绑定/全局书/开关持久化。 */
+    val lorebookLibrary = LorebookLibrary(context)
+
+    /** 已导入的世界书（镜像 lorebookLibrary.entries，驱动 UI 重组）。 */
+    var lorebooks by mutableStateOf(lorebookLibrary.entries)
+        private set
+
+    /** 世界书总开关（镜像 library.enabled，驱动 UI 重组；请求时生效不重建会话）。 */
+    var lorebookEnabled by mutableStateOf(lorebookLibrary.enabled)
+        private set
+
+    /**
+     * 导入独立世界书 JSON（字节级入口，SAF/ai_cmd 共用）；绑定当前卡，
+     * 无卡则设全局书。返回 null = 不可解析。会话应用（applyLorebookToSession）
+     * 由组合层跟进——DemoUiState 不持有 session。
+     */
+    fun importLorebookBytes(bytes: ByteArray, suggestedName: String? = null): LorebookLibrary.Entry? {
+        val entry = lorebookLibrary.import(bytes, suggestedName) ?: return null
+        lorebooks = lorebookLibrary.entries
+        val card = activeCardFile
+        if (card != null) {
+            lorebookLibrary.bindCard(card, entry.fileName)
+        } else {
+            lorebookLibrary.setGlobal(entry.fileName)
+        }
+        return entry
+    }
+
+    /** 生效书（当前卡绑定 > 全局）应用到会话；世界书开关同步。 */
+    fun applyLorebookToSession(session: AvatarSession?) {
+        session ?: return
+        lorebookLibrary.applyTo(session, activeCardFile)
+    }
+
+    /** 世界书总开关（持久化 + 状态；会话同步由组合层跟进）。 */
+    fun updateLorebookEnabled(value: Boolean) {
+        lorebookEnabled = value
+        lorebookLibrary.setEnabled(value)
+    }
+
+    /** 库变更后刷新镜像（删除回调用；导入路径各自已刷新）。 */
+    fun refreshLorebooks() {
+        lorebooks = lorebookLibrary.entries
+    }
+
+    /** 卡导入自动提取内嵌书（OMate 同款行为）：落库+绑定；无书返回 null。 */
+    private fun extractEmbeddedLorebook(cardFile: String, card: com.neethu.orchestrator.card.CharacterCard) {
+        card.characterBook?.let { book ->
+            lorebookLibrary.importFromCard(cardFile, book)
+            lorebooks = lorebookLibrary.entries
+        }
+    }
+
     // ── 对话上下文（任务 3：Room 持久化的多套对话历史）────────────────────
 
     /**
@@ -775,6 +843,7 @@ internal class DemoUiState(context: Context) {
     fun importCard(context: Context, uri: Uri): CharacterCardStore.Entry? {
         val entry = cardLibrary.import(context, uri) ?: return null
         cards = cardLibrary.cards
+        extractEmbeddedLorebook(entry.fileName, entry.card)
         return entry
     }
 
@@ -782,6 +851,7 @@ internal class DemoUiState(context: Context) {
     fun importCardBytes(bytes: ByteArray): CharacterCardStore.Entry? {
         val entry = cardLibrary.importBytes(bytes) ?: return null
         cards = cardLibrary.cards
+        extractEmbeddedLorebook(entry.fileName, entry.card)
         return entry
     }
 
@@ -952,8 +1022,10 @@ private fun parseProviderArg(arg: String?): AiProvider = when (arg?.lowercase())
     "deepseek", "ds" -> AiProvider.DEEPSEEK
     // 百炼 TTS/ASR 齐活，set_tts_provider 直连原生协议
     "bailian", "bl", "aliyun" -> AiProvider.BAILIAN
+    // 自定义端点（酒馆 P1-2）：baseUrl/模型名用 set_custom 系列命令单独给
+    "custom", "relay", "ollama", "openai_compat" -> AiProvider.CUSTOM
     else -> throw IllegalArgumentException(
-        "expects siliconflow|volcano|openrouter|deepseek|bailian, got '$arg'"
+        "expects siliconflow|volcano|openrouter|deepseek|bailian|custom, got '$arg'"
     )
 }
 
@@ -1256,12 +1328,19 @@ private fun DemoScreen(
                 val deferredActivation = uiState.pendingGreetingFile == file
                 if (deferredActivation) s.clearHistory()
                 applyCardToSession(s, entry, { fileName -> uiState.cardPromptOverride(fileName) }, uiState.lang, uiState::presetAssetByFile)
+                // 世界书（酒馆 P1-1）：卡人设重放会把书重置为卡内嵌书，这里
+                // 再覆盖为库绑定（卡绑定 > 全局）；无卡时下面走全局书
+                uiState.applyLorebookToSession(s)
                 if (deferredActivation) {
                     uiState.pendingGreetingFile = null
                     val greeting = localizedCard(uiState, entry).spokenGreeting(promptTextsOf(uiState.lang).userAlias)
                     if (greeting.isNotEmpty()) launch { runCatching { s.speak(greeting) } }
                 }
             }
+        } ?: run {
+            // 未激活卡：全局书（若设了）仍然生效
+            s.lorebook = uiState.lorebookLibrary.activeBookFor(null)
+            s.lorebookEnabled = uiState.lorebookEnabled
         }
         launch { s.phase.collect { chatPhase = it } }
         launch {
@@ -2092,8 +2171,12 @@ private fun DemoScreen(
             uiState.setActiveCard(null)
             session?.clearCharacterCard()
             session?.clearHistory()
+            // 世界书回退：无卡 = 全局书（若设了）
+            session?.let { uiState.applyLorebookToSession(it) }
         }
     }
+    /** 开场白选择弹层（P1-3 alternateGreetings）：非空 = 待选择。 */
+    var greetingChooserFile by remember { mutableStateOf<String?>(null) }
     val activateEntry: (CharacterCardStore.Entry) -> Unit = { entry ->
         if (uiState.activeCardFile != entry.fileName) {
             uiState.setActiveCard(entry.fileName)
@@ -2101,12 +2184,35 @@ private fun DemoScreen(
             when {
                 s != null -> {
                     applyCardToSession(s, entry, applyOverrideFor, uiState.lang, uiState::presetAssetByFile)
+                    // 卡人设重放重置书为内嵌书 → 库绑定覆盖（P1-1）
+                    uiState.applyLorebookToSession(s)
                     s.clearHistory()
-                    val greeting = localizedCard(uiState, entry).spokenGreeting(promptTextsOf(uiState.lang).userAlias)
-                    if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+                    val card = localizedCard(uiState, entry)
+                    // 备选开场白存在时弹层选择（P1-3），否则直接朗读默认
+                    if (card.alternateGreetings.isEmpty()) {
+                        val greeting = card.spokenGreeting(promptTextsOf(uiState.lang).userAlias)
+                        if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
+                    } else {
+                        greetingChooserFile = entry.fileName
+                    }
                 }
                 else -> uiState.pendingGreetingFile = entry.fileName
             }
+        }
+    }
+    /** 开场白选择弹层的朗读动作（默认/备选统一走这里）。 */
+    val speakGreeting: (String) -> Unit = { raw ->
+        val file = greetingChooserFile
+        greetingChooserFile = null
+        val s = session
+        if (s != null) {
+            val card = file?.let { uiState.cardByFile(it) }?.let { localizedCard(uiState, it) }
+            val greeting = com.neethu.orchestrator.card.expandCardMacros(
+                raw,
+                card?.name.orEmpty(),
+                promptTextsOf(uiState.lang).userAlias,
+            ).trim()
+            if (greeting.isNotEmpty()) scope.launch { runCatching { s.speak(greeting) } }
         }
     }
     // 导入列表保持旧行为：点已激活的卡 = 取消激活（预置 grid 的取消走空卡片）
@@ -2126,9 +2232,12 @@ private fun DemoScreen(
         val wasActive = uiState.activeCardFile == entry.fileName
         uiState.deleteCard(entry.fileName)
         uiState.setCardPromptOverride(entry.fileName, null)
+        // 世界书绑定随卡解除（书本体保留在库里，可另行绑定/删除）
+        uiState.lorebookLibrary.bindCard(entry.fileName, null)
         if (wasActive) {
             session?.clearCharacterCard()
             session?.clearHistory()
+            session?.let { uiState.applyLorebookToSession(it) }
         }
     }
 
@@ -2141,6 +2250,107 @@ private fun DemoScreen(
             } else {
                 activateCard(entry)
             }
+        }
+    }
+
+    // ── 世界书（酒馆 P1-1）：SAF 选 ST World Info JSON → 落库+绑定 → 会话生效
+    val lorebookPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val bytes = runCatching {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull()
+            val entry = bytes?.let { uiState.importLorebookBytes(it, uri.lastPathSegment) }
+            if (entry == null) {
+                chatError = uiState.strings().lorebookImportFailed
+            } else {
+                session?.let { uiState.applyLorebookToSession(it) }
+                Toast.makeText(
+                    context,
+                    uiState.strings().lorebookImportedOk(
+                        entry.book.name.ifBlank { entry.fileName.removeSuffix(".json") },
+                        entry.book.entries.size,
+                    ),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+    /** 世界书库操作（删除/绑定/全局/开关）后的会话同步（各回调自行刷新状态）。 */
+    fun refreshLorebook(session: AvatarSession?) {
+        session?.let { uiState.applyLorebookToSession(it) }
+    }
+
+    // ── 聊天记录导出/导入（酒馆 P1-4）：ST jsonl 双向 + markdown ────────────
+    val exportPrefix = "aiavatar-chat"
+    val exportJsonl = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null) scope.launch {
+            val result = runCatching {
+                val msgs = session?.historyMessages().orEmpty()
+                if (msgs.isEmpty()) {
+                    uiState.strings().historyEmpty
+                } else {
+                    val (charName, userName) = exportNames(uiState)
+                    val text = StChatTranscript.toJsonl(charName, userName, msgs)
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(text.toByteArray(Charsets.UTF_8))
+                    } ?: return@launch
+                    uiState.strings().exportOk(uri.lastPathSegment?.substringAfterLast('/') ?: exportPrefix)
+                }
+            }.getOrElse { uiState.strings().exportFailed + " (${it.message})" }
+            Toast.makeText(context, result, Toast.LENGTH_SHORT).show()
+        }
+    }
+    val exportMarkdown = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown"),
+    ) { uri ->
+        if (uri != null) scope.launch {
+            val result = runCatching {
+                val msgs = session?.historyMessages().orEmpty()
+                if (msgs.isEmpty()) {
+                    uiState.strings().historyEmpty
+                } else {
+                    val (charName, userName) = exportNames(uiState)
+                    val text = StChatTranscript.toMarkdown(charName, userName, msgs)
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(text.toByteArray(Charsets.UTF_8))
+                    } ?: return@launch
+                    uiState.strings().exportOk(uri.lastPathSegment?.substringAfterLast('/') ?: exportPrefix)
+                }
+            }.getOrElse { uiState.strings().exportFailed + " (${it.message})" }
+            Toast.makeText(context, result, Toast.LENGTH_SHORT).show()
+        }
+    }
+    // 导入走两段式：SAF 选文件 → 确认弹窗（覆盖当前上下文历史）→ 执行
+    var pendingHistoryImport by remember { mutableStateOf<android.net.Uri?>(null) }
+    val importHistoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) pendingHistoryImport = uri
+    }
+    val runHistoryImport: () -> Unit = {
+        val uri = pendingHistoryImport
+        pendingHistoryImport = null
+        if (uri != null) {
+            val result = runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("unreadable")
+                val msgs = StChatTranscript.toMessages(StChatTranscript.parseJsonl(String(bytes, Charsets.UTF_8)))
+                val s = session ?: throw IllegalStateException("session not ready")
+                if (msgs.isEmpty()) throw IllegalStateException("empty")
+                s.importHistory(msgs)
+                // 字幕面板可见化（上限与 ChatTranscript 一致）：旧标签已清洗。
+                // adapter ChatRole → 面板 ChatRole 映射（ASSISTANT→AVATAR）
+                val filled = msgs.takeLast(ChatTranscript.MAX_LINES).map {
+                    ChatLine(
+                        if (it.role == com.neethu.aiadapter.model.ChatRole.USER) ChatRole.USER else ChatRole.AVATAR,
+                        it.content,
+                    )
+                }
+                chatLines.clear()
+                chatLines.addAll(filled)
+                uiState.strings().importHistoryOk(msgs.size)
+            }.getOrElse { uiState.strings().importHistoryFailed + " (${it.message})" }
+            Toast.makeText(context, result, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -2229,7 +2439,72 @@ private fun DemoScreen(
                         val prompt = session?.systemPrompt.orEmpty()
                         "active=$file name=${entry.card.name} spec=${entry.card.spec} " +
                             "version=${entry.card.characterVersion} firstMes=${entry.card.firstMessage.length}ch " +
+                            "book=${entry.card.characterBook?.entries?.size ?: 0}entries " +
                             "sysPromptChars=${prompt.length} sysPromptHead=${prompt.take(100)}"
+                    }
+                }
+            },
+            importLorebook = { bytes, suggestedName ->
+                val entry = uiState.importLorebookBytes(bytes, suggestedName)
+                if (entry == null) null
+                else {
+                    session?.let { uiState.applyLorebookToSession(it) }
+                    "imported lorebook ${entry.fileName} (${entry.book.entries.size} entries, " +
+                        "bound=" + (uiState.activeCardFile ?: "global") + ")"
+                }
+            },
+            lorebookSnapshot = {
+                buildString {
+                    append("enabled=${uiState.lorebookEnabled}")
+                    append(" books=${uiState.lorebooks.size}")
+                    append(" global=${uiState.lorebookLibrary.globalFile ?: "none"}")
+                    append(" boundToCard=${uiState.lorebookLibrary.boundFile(uiState.activeCardFile) ?: "none"}")
+                    val active = uiState.lorebookLibrary.activeBookFor(uiState.activeCardFile)
+                    if (active == null) {
+                        append(" active=none")
+                    } else {
+                        append(" active=\"${active.name.ifBlank { "?" }}\" entries=${active.entries.size}")
+                        active.entries.take(12).forEachIndexed { i, e ->
+                            append("\n  [${i}] " + (e.name.ifBlank { e.keys.joinToString("|").ifBlank { "(no keys)" } }) +
+                                (if (e.constant) " [constant]" else "") +
+                                (if (!e.enabled) " [disabled]" else "") +
+                                " keys=${e.keys.take(4)}")
+                        }
+                    }
+                }
+            },
+            exportHistory = { format ->
+                val s = session
+                if (s == null) {
+                    "no session"
+                } else {
+                    val msgs = s.historyMessages()
+                    if (msgs.isEmpty()) {
+                        "history empty (context=${uiState.contextId})"
+                    } else {
+                        val (charName, userName) = exportNames(uiState)
+                        val dir = java.io.File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
+                        val (text, ext) = when (format?.lowercase()) {
+                            "md", "markdown" -> StChatTranscript.toMarkdown(charName, userName, msgs) to "md"
+                            else -> StChatTranscript.toJsonl(charName, userName, msgs) to "jsonl"
+                        }
+                        val out = java.io.File(dir, "chat-${uiState.contextId.takeLast(6)}.${ext}")
+                        out.writeText(text)
+                        "exported ${msgs.size} messages (${charName}) → ${out.absolutePath}"
+                    }
+                }
+            },
+            importHistory = { bytes ->
+                val s = session
+                if (s == null) {
+                    "no session"
+                } else {
+                    val msgs = StChatTranscript.toMessages(StChatTranscript.parseJsonl(String(bytes, Charsets.UTF_8)))
+                    if (msgs.isEmpty()) {
+                        "no parseable lines in the jsonl"
+                    } else {
+                        s.importHistory(msgs)
+                        "imported ${msgs.size} messages into context=${uiState.contextId} (tags sanitized)"
                     }
                 }
             },
@@ -2337,6 +2612,30 @@ private fun DemoScreen(
                 "LLM provider=${provider.name.lowercase()} (${provider.label}) " +
                     "llmModel=${resolveLlmModel(provider, uiState.aiPrefs.llmModel)} " +
                     "key=${if (uiState.aiPrefs.apiKeyFor(provider).isNotBlank()) "set" else "MISSING"}"
+            },
+            // 自定义端点三件套（酒馆 P1-2）：ai_cmd set_custom <baseUrl>|<apiKey>|<model>
+            //（中转站/本地模型真机验收入口；本地模型 key 可传 - 占位）
+            setCustomEndpoint = { arg ->
+                val parts = (arg ?: "").split('|').map { it.trim() }
+                val base = parts.getOrNull(0).orEmpty()
+                val key = parts.getOrNull(1).orEmpty()
+                val model = parts.getOrNull(2).orEmpty()
+                require(base.startsWith("http")) {
+                    "set_custom expects ai_arg = <baseUrl>|<apiKey>|<model>, e.g. " +
+                        "https://relay.example.com/v1|sk-xxx|deepseek-v4 (local model key can be '-')"
+                }
+                require(model.isNotEmpty()) { "set_custom: model name must not be empty" }
+                uiState.updateAiPrefs(
+                    uiState.aiPrefs.copy(
+                        provider = AiProvider.CUSTOM,
+                        customBaseUrl = base.trimEnd('/'),
+                        apiKeyCustom = if (key == "-") "sk-local" else key,
+                        llmModel = model,
+                    ),
+                )
+                val effTts = if (uiState.aiPrefs.ttsModel.isBlank()) "edge(fallback)" else "custom-endpoint"
+                "custom endpoint set: base=${base.trimEnd('/')} model=$model " +
+                    "key=${if (key.isNotEmpty()) "set" else "MISSING"} tts=$effTts"
             },
             // TTS 独立服务商切换：自动取消「与大模型同服务商」勾选
             setTtsProvider = { arg ->
@@ -3307,11 +3606,124 @@ private fun DemoScreen(
                 },
                 onDismiss = { uiState.activePanel = PanelType.NONE },
                 onOpenMemoryPanel = { uiState.activePanel = PanelType.MEMORY },
+                // ── 世界书（酒馆 P1-1）────────────────────────────────────
+                lorebooks = uiState.lorebooks,
+                lorebookEnabled = uiState.lorebookEnabled,
+                lorebookBoundFile = uiState.lorebookLibrary.boundFile(uiState.activeCardFile),
+                lorebookGlobalFile = uiState.lorebookLibrary.globalFile,
+                onLorebookEnabledChange = { v ->
+                    uiState.updateLorebookEnabled(v)
+                    session?.lorebookEnabled = v
+                },
+                onImportLorebook = { lorebookPicker.launch(arrayOf("application/json", "text/*", "application/octet-stream")) },
+                onLorebookSetGlobal = { file ->
+                    uiState.lorebookLibrary.setGlobal(file)
+                    refreshLorebook(session)
+                },
+                onLorebookBindCard = { file ->
+                    uiState.activeCardFile?.let { card ->
+                        uiState.lorebookLibrary.bindCard(card, file)
+                        refreshLorebook(session)
+                    }
+                },
+                onLorebookUnbind = {
+                    uiState.activeCardFile?.let { card ->
+                        uiState.lorebookLibrary.bindCard(card, null)
+                        refreshLorebook(session)
+                    }
+                },
+                onLorebookDelete = { file ->
+                    uiState.lorebookLibrary.delete(file)
+                    uiState.refreshLorebooks()
+                    refreshLorebook(session)
+                },
+                // ── 聊天记录导出/导入（酒馆 P1-4）─────────────────────────
+                onExportHistoryJsonl = {
+                    exportJsonl.launch("aiavatar-chat-${uiState.contextId.takeLast(6)}.jsonl")
+                },
+                onExportHistoryMarkdown = {
+                    exportMarkdown.launch("aiavatar-chat-${uiState.contextId.takeLast(6)}.md")
+                },
+                onImportHistoryJsonl = {
+                    importHistoryPicker.launch(arrayOf("application/json", "application/octet-stream", "text/*"))
+                },
+                historyMessageCount = session?.historyMessages()?.size ?: 0,
                 activeVfx = activeVfx,
                 onPlayVfx = { preset ->
                     controller.playVfx(preset, FxTools.defaultAnchor(controller, preset))
                 },
                 onStopAllVfx = { controller.stopAllVfx() },
+            )
+        }
+
+        // ── 开场白选择弹层（P1-3 alternateGreetings）：默认 + 备选列表 ──────
+        greetingChooserFile?.let { file ->
+            val card = uiState.cardByFile(file)?.let { localizedCard(uiState, it) }
+            if (card == null) {
+                greetingChooserFile = null
+            } else {
+                val greetings = listOf(card.firstMessage) + card.alternateGreetings
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { greetingChooserFile = null },
+                    title = { Text(text = uiState.strings().greetingChooseTitle) },
+                    text = {
+                        Column {
+                            greetings.forEachIndexed { index, greeting ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { speakGreeting(greeting) }
+                                        .padding(vertical = 10.dp),
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = if (index == 0) {
+                                                uiState.strings().greetingDefault
+                                            } else {
+                                                uiState.strings().greetingAlt(index)
+                                            },
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                        Text(
+                                            text = greeting.replace("\n", " "),
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = { greetingChooserFile = null }) {
+                            Text(text = uiState.strings().cancel)
+                        }
+                    },
+                )
+            }
+        }
+
+        // ── 聊天记录导入确认弹窗（P1-4：覆盖当前上下文历史）──────────────────
+        pendingHistoryImport?.let {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { pendingHistoryImport = null },
+                title = { Text(text = uiState.strings().importHistoryTitle) },
+                text = {
+                    Text(text = uiState.strings().importHistoryConfirmText(session?.historyMessages()?.size ?: 0))
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = runHistoryImport) {
+                        Text(text = uiState.strings().ok)
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { pendingHistoryImport = null }) {
+                        Text(text = uiState.strings().cancel)
+                    }
+                },
             )
         }
 

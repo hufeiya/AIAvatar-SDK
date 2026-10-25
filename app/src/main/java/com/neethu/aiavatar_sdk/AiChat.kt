@@ -40,6 +40,13 @@ data class AiChatPrefs(
     val apiKeyDeepseek: String = "",
     /** 阿里云百炼 API Key——一把通吃大模型/TTS/ASR（chat 专属端点三端通用）。 */
     val apiKeyBailian: String = "",
+    /**
+     * 自定义端点 baseUrl（酒馆 P1-2，OpenAI 兼容，如中转站/本地 ollama）。
+     * 非空 = SDK ChatConfig 的自定义端点模式（模型/音色透传不走目录校验）。
+     */
+    val customBaseUrl: String = "",
+    /** 自定义端点的 API Key（中转站需要；本地模型随意填占位）。 */
+    val apiKeyCustom: String = "",
     /** TTS 与大模型同服务商（默认勾选）。 */
     val ttsSameProvider: Boolean = true,
     /** [ttsSameProvider]=false 时生效的 TTS 服务商。 */
@@ -129,32 +136,38 @@ data class AiChatPrefs(
      * 显示/分支判定认这个值，实际装配由 SDK 同款规则兜底）：DeepSeek 官方无
      * 语音合成端点（/audio/speech 实测 404），OpenAI 兼容引擎选到它（同商跟随
      * 或显式指定）时整体回落 Edge-TTS——免费无 Key，模型/音色/Key 全按 Edge 解析。
+     * 自定义端点同商跟随且未填 TTS 模型名时同样回落 Edge（第三方中转多数不
+     * 代理 /audio/speech，留空=没打算用自端点合成）。
      */
     val ttsEngineResolved: TtsEngine
-        get() = if (ttsEngine == TtsEngine.OPENAI_COMPATIBLE &&
-            ttsProviderResolved == AiProvider.DEEPSEEK
+        get() = if (ttsEngine == TtsEngine.OPENAI_COMPATIBLE && (
+                ttsProviderResolved == AiProvider.DEEPSEEK ||
+                    (provider == AiProvider.CUSTOM && ttsSameProvider && ttsModel.isBlank())
+                )
         ) {
             TtsEngine.EDGE
         } else {
             ttsEngine
         }
 
-    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter / DeepSeek / 百炼）。 */
+    /** 大模型服务的 API Key（硅基流动 / 火山方舟 / OpenRouter / DeepSeek / 百炼 / 自定义端点）。 */
     fun apiKeyFor(p: AiProvider): String = when (p) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcano
         AiProvider.OPENROUTER -> apiKeyOpenrouter
         AiProvider.DEEPSEEK -> apiKeyDeepseek
         AiProvider.BAILIAN -> apiKeyBailian
+        AiProvider.CUSTOM -> apiKeyCustom
     }
 
-    /** 语音合成服务的 API Key（硅基流动/OpenRouter/百炼共用一份；火山语音用豆包语音那把；DeepSeek 无 TTS 走 Edge 不读 Key）。 */
+    /** 语音合成服务的 API Key（硅基流动/OpenRouter/百炼/自定义共用一份；火山语音用豆包语音那把；DeepSeek 无 TTS 走 Edge 不读 Key）。 */
     fun apiKeyForTts(): String = when (ttsProviderResolved) {
         AiProvider.SILICONFLOW -> apiKeySiliconflow
         AiProvider.VOLCANO -> apiKeyVolcanoTts
         AiProvider.OPENROUTER -> apiKeyOpenrouter
         AiProvider.DEEPSEEK -> apiKeyDeepseek
         AiProvider.BAILIAN -> apiKeyBailian
+        AiProvider.CUSTOM -> apiKeyCustom
     }
 
     /** TTS 侧的就绪条件：Edge 免费（无 Key 也算就绪），OpenAI 兼容需 Key。 */
@@ -175,6 +188,9 @@ data class AiChatPrefs(
     fun toChatConfig(contextId: String, characterId: String?, lang: Lang): AIAvatarSdk.ChatConfig =
         AIAvatarSdk.ChatConfig(
             provider = provider.sdk,
+            // 自定义端点（P1-2）：非空 baseUrl = SDK 的自定义端点模式
+            //（模型/音色透传不走目录校验，llmModel 手填）
+            baseUrl = if (provider == AiProvider.CUSTOM) customBaseUrl.trim() else null,
             apiKey = apiKeyFor(provider),
             llmModel = llmModel,
             ttsEngine = ttsEngine,
@@ -204,6 +220,8 @@ private const val KEY_AI_API_KEY_VOLCANO_TTS = "ai_api_key_volcano_tts" // 豆�
 private const val KEY_AI_API_KEY_OPENROUTER = "ai_api_key_openrouter"
 private const val KEY_AI_API_KEY_DEEPSEEK = "ai_api_key_deepseek"
 private const val KEY_AI_API_KEY_BAILIAN = "ai_api_key_bailian"
+private const val KEY_AI_CUSTOM_BASE_URL = "ai_custom_base_url"
+private const val KEY_AI_API_KEY_CUSTOM = "ai_api_key_custom"
 private const val KEY_AI_LLM_MODEL = "ai_llmModel"
 private const val KEY_AI_TTS_SAME_PROVIDER = "ai_tts_same_provider"
 private const val KEY_AI_TTS_PROVIDER = "ai_tts_provider"
@@ -247,6 +265,8 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         apiKeyOpenrouter = getString(KEY_AI_API_KEY_OPENROUTER, "").orEmpty(),
         apiKeyDeepseek = getString(KEY_AI_API_KEY_DEEPSEEK, "").orEmpty(),
         apiKeyBailian = getString(KEY_AI_API_KEY_BAILIAN, "").orEmpty(),
+        customBaseUrl = getString(KEY_AI_CUSTOM_BASE_URL, "").orEmpty(),
+        apiKeyCustom = getString(KEY_AI_API_KEY_CUSTOM, "").orEmpty(),
         ttsSameProvider = getBoolean(KEY_AI_TTS_SAME_PROVIDER, true),
         ttsProvider = prefsEnum<AiProvider>(this, KEY_AI_TTS_PROVIDER) ?: AiProvider.SILICONFLOW,
         ttsModel = getString(KEY_AI_TTS_MODEL, "").orEmpty(),
@@ -277,6 +297,8 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putString(KEY_AI_API_KEY_OPENROUTER, p.apiKeyOpenrouter.trim())
         .putString(KEY_AI_API_KEY_DEEPSEEK, p.apiKeyDeepseek.trim())
         .putString(KEY_AI_API_KEY_BAILIAN, p.apiKeyBailian.trim())
+        .putString(KEY_AI_CUSTOM_BASE_URL, p.customBaseUrl.trim())
+        .putString(KEY_AI_API_KEY_CUSTOM, p.apiKeyCustom.trim())
         .putBoolean(KEY_AI_TTS_SAME_PROVIDER, p.ttsSameProvider)
         .putString(KEY_AI_TTS_PROVIDER, p.ttsProvider.name)
         .putString(KEY_AI_TTS_MODEL, p.ttsModel.trim())
@@ -355,9 +377,14 @@ fun SharedPreferences.saveVoicePrefs(p: VoicePrefs) {
  * 协议里的表情/动作目录由所配模型实现决定，切换签名即同步轮换对话上下文
  * （历史清空、新上下文首请求带新目录，见 MainActivity.updateAiPrefs）。
  * 语音/镜头开关与 API Key 不在此列——它们不改变模型能力，历史可以延续。
+ * 自定义端点的 baseUrl 同列（换中转/换本地模型 = 换模型能力面）。
  */
 fun llmIdentitySignature(p: AiChatPrefs): String =
-    "${p.provider.name}|${resolveLlmModel(p.provider, p.llmModel)}"
+    if (p.provider == AiProvider.CUSTOM) {
+        "CUSTOM|${p.customBaseUrl.trim()}|${resolveLlmModel(p.provider, p.llmModel)}"
+    } else {
+        "${p.provider.name}|${resolveLlmModel(p.provider, p.llmModel)}"
+    }
 
 /**
  * Demo 的会话装配器：把 [AiChatPrefs] + 上下文 id 变成一条 [AvatarSession]。

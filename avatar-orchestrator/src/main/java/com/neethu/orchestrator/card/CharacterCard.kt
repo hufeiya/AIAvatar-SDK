@@ -28,6 +28,12 @@ data class CharacterCard(
     val spec: String = "unknown",
     /** Unmodified `data.extensions` (or root `extensions` for V1), for forward compatibility. */
     val extensions: JsonObject? = null,
+    /**
+     * 卡内嵌世界书（CCv2/v3 `data.character_book`，docs/tavern-companion-
+     * feasibility.md P1-1）。null = 卡不带书；注入仍受会话级开关与绑定覆盖
+     * （见 AvatarSession.lorebook）。
+     */
+    val characterBook: Lorebook? = null,
 )
 
 // SillyTavern's two core macros. Greetings are spoken aloud, so they must not
@@ -37,11 +43,17 @@ private val CHAR_MACRO = Regex("""\{\{\s*char\s*\}\}""", RegexOption.IGNORE_CASE
 private val USER_MACRO = Regex("""\{\{\s*user\s*\}\}""", RegexOption.IGNORE_CASE)
 
 /**
+ * `{{char}}` → [charName]、`{{user}}` → [userAlias]（大小写/空白容忍）。
+ * 开场白、mes_example、post_history_instructions 三处共用；无卡宏字段原样。
+ */
+fun expandCardMacros(text: String, charName: String, userAlias: String): String =
+    text
+        .replace(CHAR_MACRO, charName)
+        .replace(USER_MACRO, userAlias)
+
+/**
  * [CharacterCard.firstMessage] prepared for [com.neethu.orchestrator.session.AvatarSession.speak]:
  * `{{char}}` → the card's name, `{{user}}` → [userAlias].
  */
 fun CharacterCard.spokenGreeting(userAlias: String = "你"): String =
-    firstMessage
-        .replace(CHAR_MACRO, name)
-        .replace(USER_MACRO, userAlias)
-        .trim()
+    expandCardMacros(firstMessage, name, userAlias).trim()

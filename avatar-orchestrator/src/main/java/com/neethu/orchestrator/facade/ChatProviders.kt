@@ -211,6 +211,29 @@ enum class ChatProvider(
         voices = listOf("Cherry", "Serena", "Ethan", "Chelsie", "Jennifer", "Ryan"),
         defaultVoice = "Cherry",
     ),
+    /**
+     * 自定义 OpenAI 兼容端点（酒馆 P1-2，docs/tavern-companion-feasibility.md）：
+     * 中转站/本地模型（ollama/llama.cpp 等）的 BYOK 入场券。目录性字段全部
+     * 留空——baseUrl/模型名/音色由集成方经 [AIAvatarSdk.ChatConfig.baseUrl]
+     * + `llmModel`/`ttsModel`/`voice` 显式提供（自定义端点模式下
+     * [resolveLlmModel]/[resolveVoice] 透传不走目录校验）。第三方端点兼容度
+     * 参差：请求体不带任何服务商专属参数（[llmExtraBody] 无此臂），工具不
+     * 支持时沿用既有 400 自动降级链。
+     */
+    CUSTOM(
+        // 空串端点在 ChatConfig.llmBaseUrl 里必须被集成方的 baseUrl 覆盖
+        //（app 层保证非空才配 CUSTOM）；防误用：漏配时请求直接失败可见
+        baseUrl = "",
+        // 占位非空清单：defaultLlmModel 取 first() 防崩；resolvedLlmModel 在
+        // isCustomEndpoint 下透传，此清单不参与校验
+        llmModels = listOf(""),
+        visionLlmModels = emptyList(),
+        ttsModels = listOf(""),
+        defaultTtsModel = "",
+        voicePrefix = null,
+        voices = emptyList(),
+        defaultVoice = "",
+    ),
     ;
 
     /**
@@ -355,7 +378,8 @@ fun llmExtraBody(provider: ChatProvider, model: String): JsonObject? {
  * 百炼走自家 chat+input_audio 形态（同商直连，见
  * [com.neethu.aiadapter.bailian.BailianAsrAdapter]）；火山与 DeepSeek 官方不
  * 提供云端 ASR 端点，回落硅基流动（既有行为：这两家的大模型用户需另填硅基
- * 流动 Key 做语音识别，或改用系统识别引擎）。
+ * 流动 Key 做语音识别，或改用系统识别引擎）；自定义端点原样跟随（OpenAI
+ * 兼容 multipart 直打同端点）。
  */
 fun asrProviderFor(llmProvider: ChatProvider): ChatProvider =
     if (llmProvider == ChatProvider.VOLCANO || llmProvider == ChatProvider.DEEPSEEK) {
@@ -370,6 +394,9 @@ fun asrExplicitAsrModels(provider: ChatProvider): List<String> = when (provider)
     ChatProvider.OPENROUTER -> listOf("openai/whisper-large-v3")
     ChatProvider.BAILIAN -> listOf("qwen3-asr-flash")
     ChatProvider.VOLCANO, ChatProvider.DEEPSEEK -> emptyList()
+    // 自定义端点按 OpenAI 兼容 multipart 直打同端点（one-api 系中转通常代理
+    // /audio/transcriptions）；不支持时用户可切系统识别引擎
+    ChatProvider.CUSTOM -> emptyList()
 }
 
 /**

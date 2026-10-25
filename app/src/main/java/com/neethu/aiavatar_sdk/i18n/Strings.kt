@@ -71,6 +71,7 @@ class Strings(val lang: Lang) {
         AiProvider.OPENROUTER -> "OpenRouter"
         AiProvider.DEEPSEEK -> "DeepSeek"
         AiProvider.BAILIAN -> zh("阿里云百炼", "Alibaba Bailian")
+        AiProvider.CUSTOM -> zh("自定义端点", "Custom endpoint")
     }
 
     /** 服务商 API Key 字段标签（大模型侧）。 */
@@ -80,6 +81,7 @@ class Strings(val lang: Lang) {
         AiProvider.OPENROUTER -> "OpenRouter API key"
         AiProvider.DEEPSEEK -> "DeepSeek API Key"
         AiProvider.BAILIAN -> zh("阿里云百炼 API Key", "Alibaba Bailian API key")
+        AiProvider.CUSTOM -> zh("API Key（中转站用，本地模型可任意占位）", "API key (for relays; any placeholder works for local models)")
     }
 
     /** 服务商 API Key 字段标签（语音合成侧；火山是另一把豆包语音 key）。 */
@@ -88,6 +90,7 @@ class Strings(val lang: Lang) {
         AiProvider.VOLCANO -> zh("豆包语音 API Key（语音合成用）", "Doubao Voice API key (for TTS)")
         AiProvider.OPENROUTER -> "OpenRouter API key (for TTS)"
         AiProvider.BAILIAN -> zh("阿里云百炼 API Key（语音合成用）", "Alibaba Bailian API key (for TTS)")
+        AiProvider.CUSTOM -> zh("API Key（语音合成用）", "API key (for TTS)")
         // DeepSeek 无 TTS 端点：TTS 服务商下拉不出现它，此臂仅为穷尽占位
         AiProvider.DEEPSEEK -> "DeepSeek API Key"
     }
@@ -418,6 +421,73 @@ class Strings(val lang: Lang) {
     fun protocolIntro(chars: Int): String =
         zh("以下 $chars 字符与实际发给大模型的 system 提示词逐字一致：",
             "The following $chars characters match the system prompt actually sent to the LLM, verbatim:")
+
+    // ── 自定义端点（酒馆 P1-2，docs/tavern-companion-feasibility.md）────────
+    val customBaseUrlTitle: String get() = zh("端点 Base URL（OpenAI 兼容）", "Endpoint base URL (OpenAI-compatible)")
+    val customBaseUrlHint: String get() = zh("https://your-relay.example.com/v1 或 http://192.168.x.x:11434/v1", "https://your-relay.example.com/v1 or http://192.168.x.x:11434/v1")
+    val customModelTitle: String get() = zh("模型名（手填）", "Model name (manual)")
+    val customModelHint: String get() = zh("端点 /models 目录里的 id，如 deepseek-v4 / qwen3:32b", "An id from the endpoint's /models, e.g. deepseek-v4 / qwen3:32b")
+    val customTestTitle: String get() = zh("测试连接", "Test connection")
+    val customTestSubtitle: String get() =
+        zh("GET {baseUrl}/models 验证端点与 Key；成功后模型名可从目录挑选", "GET {baseUrl}/models to verify the endpoint and key; on success model ids can be picked from the catalog")
+    fun customTestOk(n: Int): String = zh("连接成功，目录共 $n 个模型", "Connected — catalog has $n models")
+    fun customTestFail(msg: String): String = zh("连接失败：$msg", "Connection failed: $msg")
+    val customTtsHint: String get() =
+        zh("语音合成跟随自定义端点：未填 TTS 模型名时自动改用 Edge-TTS（免费无 Key）",
+            "TTS follows the custom endpoint: without a TTS model name it falls back to Edge-TTS (free, no key)")
+
+    // ── 世界书（酒馆 P1-1）──────────────────────────────────────────────────
+    val sectionLorebook: String get() = zh("世界书 (World Info · 酒馆 Lorebook)", "World Info (SillyTavern lorebook)")
+    val lorebookEnabledTitle: String get() = zh("启用世界书", "Enable world info")
+    val lorebookEnabledSubtitle: String get() =
+        zh("每轮扫描最近 2 条用户消息，命中关键词的条目注入 system（常驻条目恒注入，字符预算 1500）",
+            "Scans the last 2 user messages each turn; entries whose keys match get injected into the system prompt (constant entries always; 1500-char budget)")
+    val lorebookImportTitle: String get() = zh("导入世界书 JSON", "Import lorebook JSON")
+    val lorebookImportSubtitle: String get() =
+        zh("ST World Info 导出格式；绑当前卡（无卡则设为全局）", "ST World Info export format; binds to the current card (global when no card)")
+    val lorebookEmptyHint: String get() =
+        zh("还没有世界书：导入独立 JSON，或导入带内嵌世界书的角色卡（自动提取）。",
+            "No lorebooks yet: import a standalone JSON, or a card with an embedded book (auto-extracted).")
+    fun lorebookCardBound(file: String): String = zh("绑定当前卡：$file", "Bound to current card: $file")
+    val lorebookGlobalTag: String get() = zh("全局", "global")
+    val lorebookEmbeddedTag: String get() = zh("卡内嵌", "embedded")
+    val lorebookImportedTag: String get() = zh("导入", "imported")
+    val lorebookConstantTag: String get() = zh("常驻", "constant")
+    fun lorebookEntryCount(n: Int): String = zh("$n 条", "$n entries")
+    val lorebookSetGlobal: String get() = zh("设为全局书", "Set as global")
+    val lorebookBindCurrent: String get() = zh("绑定当前卡", "Bind to current card")
+    val lorebookUnbind: String get() = zh("解绑当前卡", "Unbind from card")
+    val lorebookDelete: String get() = zh("删除", "Delete")
+    fun lorebookImportedOk(name: String, n: Int): String =
+        zh("已导入世界书「$name」（$n 条）", "Imported lorebook \"$name\" ($n entries)")
+    val lorebookImportFailed: String get() =
+        zh("世界书导入失败：不是可解析的 ST World Info JSON", "Import failed: not a parseable ST World Info JSON")
+    fun lorebookEntriesTitle(name: String): String = zh("《$name》条目", "Entries of \"$name\"")
+    val lorebookNoKeys: String get() = zh("（无关键词=常驻/手动）", "(no keys = constant/manual)")
+
+    // ── 聊天记录导出/导入（酒馆 P1-4）──────────────────────────────────────
+    val exportJsonlTitle: String get() = zh("导出聊天记录（ST jsonl）", "Export chat (ST jsonl)")
+    val exportJsonlSubtitle: String get() =
+        zh("当前上下文 → SillyTavern jsonl，可回灌 ST", "Current context → SillyTavern jsonl, re-importable into ST")
+    val exportMarkdownTitle: String get() = zh("导出聊天记录（Markdown）", "Export chat (Markdown)")
+    val exportMarkdownSubtitle: String get() = zh("当前上下文 → 人读 markdown", "Current context → human-readable markdown")
+    val importHistoryTitle: String get() = zh("导入聊天记录（ST jsonl）", "Import chat (ST jsonl)")
+    val importHistorySubtitle: String get() =
+        zh("覆盖当前上下文历史，作为后续对话的上下文", "Replaces the current context's history and feeds it into future turns")
+    fun importHistoryConfirmText(n: Int): String =
+        zh("将清空当前上下文的 $n 条历史并灌入所选 jsonl（旧记录不可恢复）。", "This clears the current context's $n messages and loads the chosen jsonl (irreversible).")
+    fun importHistoryOk(n: Int): String = zh("已导入 $n 条记录", "Imported $n messages")
+    val importHistoryFailed: String get() = zh("导入失败：不是可读的 ST jsonl", "Import failed: not a readable ST jsonl")
+    val historyEmpty: String get() = zh("当前上下文还没有聊天记录", "No chat messages in this context yet")
+    fun exportOk(name: String): String = zh("已导出 $name", "Exported $name")
+    val exportFailed: String get() = zh("导出失败", "Export failed")
+    val confirmTitle: String get() = zh("确认", "Confirm")
+    val ok: String get() = zh("确定", "OK")
+
+    // ── 开场白选择（P1-3 alternateGreetings）───────────────────────────────
+    val greetingChooseTitle: String get() = zh("选择开场白", "Choose a greeting")
+    val greetingDefault: String get() = zh("默认开场白", "Default greeting")
+    fun greetingAlt(n: Int): String = zh("备选开场白 $n", "Alternate greeting $n")
 
     val sectionAnimations: String get() = zh("动画资源 (Animations)", "Animations")
     val animBuiltInTitle: String get() = zh("APK 内置动画", "Built-in animations (APK)")

@@ -76,6 +76,17 @@ enum class AiProvider(
         ttsKeyLabel = "阿里云百炼 API Key（语音合成用）",
         ttsKeyHint = "sk-...",
     ),
+    CUSTOM(
+        label = "自定义端点（OpenAI 兼容）",
+        sdk = ChatProvider.CUSTOM,
+        // 酒馆 P1-2（docs/tavern-companion-feasibility.md）：中转/本地模型的
+        // BYOK 入场券。baseUrl/模型名手填（设置页表单+连通性测试）；TTS 跟随
+        // 同端点（未填 TTS 模型名自动回落 Edge-TTS，见 AiChatPrefs）
+        llmKeyLabel = "API Key",
+        llmKeyHint = "sk-...（本地模型可留空占位任意字符）",
+        ttsKeyLabel = "API Key（语音合成用）",
+        ttsKeyHint = "sk-...",
+    ),
     ;
 
     /** OpenAI 兼容端点（火山即方舟 Ark v3，chat/completions 同构）。 */
@@ -151,7 +162,13 @@ fun composeVoiceRef(provider: AiProvider, voice: String): String =
 
 /** LLM 模型解析 = 校验 + 默认（清单外/留空/跨服务商残留一律落服务商默认）。 */
 fun resolveLlmModel(provider: AiProvider, configured: String): String =
-    com.neethu.orchestrator.facade.resolveLlmModel(provider.sdk, configured)
+    if (provider == AiProvider.CUSTOM) {
+        // 自定义端点模型名透传不走目录校验（手填任意 id）；就绪判定由
+        // isConfigured 的 isNotBlank 兜住「没填模型名」
+        configured.trim()
+    } else {
+        com.neethu.orchestrator.facade.resolveLlmModel(provider.sdk, configured)
+    }
 
 /** TTS 模型解析 = 校验 + 默认（同 [resolveLlmModel] 的跨服务商防泄漏语义）。 */
 fun resolveTtsModel(provider: AiProvider, configured: String): String =
@@ -173,6 +190,7 @@ fun asrProviderFor(llmProvider: AiProvider): AiProvider =
         ChatProvider.OPENROUTER -> AiProvider.OPENROUTER
         ChatProvider.DEEPSEEK -> AiProvider.DEEPSEEK
         ChatProvider.BAILIAN -> AiProvider.BAILIAN
+        ChatProvider.CUSTOM -> AiProvider.CUSTOM
     }
 
 /** ASR 模型下拉的显式候选（「自动」之外）；留空时按端点推断见 [resolveAsrModel]。 */
@@ -181,4 +199,10 @@ fun asrExplicitAsrModels(provider: AiProvider): List<String> =
 
 /** 模型是否支持图片输入（视频模式准入门控；先经 [resolveLlmModel] 归位）。 */
 fun isVisionLlm(provider: AiProvider, configured: String): Boolean =
-    com.neethu.orchestrator.facade.isVisionLlm(provider.sdk, configured)
+    if (provider == AiProvider.CUSTOM) {
+        // 自定义端点无静态视觉清单：走命名启发式（vl/vision/omni 词元；
+        // 误标宁缺——把图发给纯文本模型比漏标伤）
+        com.neethu.orchestrator.facade.looksLikeVisionModel(provider.sdk, configured.trim())
+    } else {
+        com.neethu.orchestrator.facade.isVisionLlm(provider.sdk, configured)
+    }

@@ -86,6 +86,7 @@ import com.neethu.aiavatar_sdk.ModelOption
 import com.neethu.aiavatar_sdk.chatModelOptions
 import com.neethu.aiavatar_sdk.EdgeTtsCatalog
 import com.neethu.aiavatar_sdk.FreeSpeechSettings
+import com.neethu.aiavatar_sdk.LorebookLibrary
 import com.neethu.aiavatar_sdk.TtsEngine
 import com.neethu.aiavatar_sdk.VoicePrefs
 import com.neethu.aiavatar_sdk.asrExplicitAsrModels
@@ -114,6 +115,7 @@ import kotlin.math.roundToInt
 
 /** 折叠类别的稳定 key。 */
 internal const val SECTION_AI = "ai"
+internal const val SECTION_LOREBOOK = "lorebook"
 internal const val SECTION_CARD = "card"
 internal const val SECTION_CONTEXT = "context"
 internal const val SECTION_ANIMATIONS = "animations"
@@ -146,6 +148,7 @@ private fun withApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String): A
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
         AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
         AiProvider.BAILIAN -> prefs.copy(apiKeyBailian = key)
+        AiProvider.CUSTOM -> prefs.copy(apiKeyCustom = key)
     }
 
 /** 写语音合成服务的 API Key（火山写豆包语音那把，与大模型 key 互不通用）。 */
@@ -155,6 +158,7 @@ private fun withTtsApiKey(prefs: AiChatPrefs, provider: AiProvider, key: String)
         AiProvider.VOLCANO -> prefs.copy(apiKeyVolcanoTts = key)
         AiProvider.OPENROUTER -> prefs.copy(apiKeyOpenrouter = key)
         AiProvider.BAILIAN -> prefs.copy(apiKeyBailian = key)
+        AiProvider.CUSTOM -> prefs.copy(apiKeyCustom = key)
         // DeepSeek 不出现在 TTS 服务商下拉（无 TTS 端点），此臂仅为穷尽占位
         AiProvider.DEEPSEEK -> prefs.copy(apiKeyDeepseek = key)
     }
@@ -240,6 +244,26 @@ internal fun SettingsScreen(
     /** 点按预设即播（锚点语义 = FxTools.defaultAnchor：缺省骨 > 角色实时位）。 */
     onPlayVfx: (VfxSpec) -> Unit = {},
     onStopAllVfx: () -> Unit = {},
+    /** 世界书库条目（酒馆 P1-1，filesDir/lorebooks 落盘书的解析快照）。 */
+    lorebooks: List<LorebookLibrary.Entry> = emptyList(),
+    lorebookEnabled: Boolean = true,
+    /** 当前卡绑定的书文件名；null = 卡未绑定。 */
+    lorebookBoundFile: String? = null,
+    /** 全局书文件名；null = 未设。 */
+    lorebookGlobalFile: String? = null,
+    onLorebookEnabledChange: (Boolean) -> Unit = {},
+    /** 触发 SAF 选世界书 JSON（导入后由 MainActivity 决定绑定）。 */
+    onImportLorebook: () -> Unit = {},
+    onLorebookSetGlobal: (String) -> Unit = { _ -> },
+    onLorebookBindCard: (String) -> Unit = { _ -> },
+    onLorebookUnbind: () -> Unit = {},
+    onLorebookDelete: (String) -> Unit = { _ -> },
+    /** 聊天记录导出/导入（酒馆 P1-4；SAF 归 MainActivity）。 */
+    onExportHistoryJsonl: () -> Unit = {},
+    onExportHistoryMarkdown: () -> Unit = {},
+    onImportHistoryJsonl: () -> Unit = {},
+    /** 当前上下文消息数（导入确认弹窗的计数）。 */
+    historyMessageCount: Int = 0,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -419,13 +443,31 @@ internal fun SettingsScreen(
                                 placeholder = s.keyHint(aiPrefs.provider, tts = false),
                                 password = true
                             ) { onAiPrefsChange(withApiKey(aiPrefs, aiPrefs.provider, it)) }
-                            // 模型下拉 = /models 实时目录（展开时拉取，内存缓存重启
-                            // 失效）+ 静态清单兜底；带「视觉」标签的模型可看图
-                            SettingsModelDropdownRow(
-                                provider = aiPrefs.provider,
-                                selectedValue = resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel),
-                                apiKey = aiPrefs.apiKeyFor(aiPrefs.provider),
-                            ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
+                            if (aiPrefs.provider == AiProvider.CUSTOM) {
+                                // 自定义端点（酒馆 P1-2）：baseUrl/模型名手填 +
+                                // 连通性测试（GET /models），模型不走目录校验
+                                SettingsTextFieldRow(
+                                    title = s.customBaseUrlTitle,
+                                    value = aiPrefs.customBaseUrl,
+                                    placeholder = s.customBaseUrlHint,
+                                    password = false
+                                ) { onAiPrefsChange(aiPrefs.copy(customBaseUrl = it)) }
+                                SettingsTextFieldRow(
+                                    title = s.customModelTitle,
+                                    value = aiPrefs.llmModel,
+                                    placeholder = s.customModelHint,
+                                    password = false
+                                ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
+                                CustomEndpointTestRow(baseUrl = aiPrefs.customBaseUrl, apiKey = aiPrefs.apiKeyFor(aiPrefs.provider))
+                            } else {
+                                // 模型下拉 = /models 实时目录（展开时拉取，内存缓存重启
+                                // 失效）+ 静态清单兜底；带「视觉」标签的模型可看图
+                                SettingsModelDropdownRow(
+                                    provider = aiPrefs.provider,
+                                    selectedValue = resolveLlmModel(aiPrefs.provider, aiPrefs.llmModel),
+                                    apiKey = aiPrefs.apiKeyFor(aiPrefs.provider),
+                                ) { onAiPrefsChange(aiPrefs.copy(llmModel = it)) }
+                            }
 
                             // ── 语音合成（TTS）─────────────────────────────
                             // 下文 ASR 区块也引用（硅基流动 Key 显隐判定），提在引擎分支外。
@@ -484,6 +526,23 @@ internal fun SettingsScreen(
                                     ) { onAiPrefsChange(withTtsApiKey(aiPrefs, ttsProvider, it)) }
                                 }
                             }
+                            if (ttsProvider == AiProvider.CUSTOM && aiPrefs.ttsSameProvider) {
+                                // 自定义端点的 TTS = 同端点 OpenAI 兼容合成；
+                                // 模型名留空自动回落 Edge（免费无 Key）
+                                SettingsGroupLabel(s.customTtsHint)
+                                SettingsTextFieldRow(
+                                    title = s.ttsModelTitle,
+                                    value = aiPrefs.ttsModel,
+                                    placeholder = s.customModelHint,
+                                    password = false
+                                ) { onAiPrefsChange(aiPrefs.copy(ttsModel = it)) }
+                                SettingsTextFieldRow(
+                                    title = s.voiceTitle,
+                                    value = aiPrefs.voice,
+                                    placeholder = s.customModelHint,
+                                    password = false
+                                ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
+                            } else {
                             SettingsDropdownRow(
                                 title = s.ttsModelTitle,
                                 options = ttsProvider.ttsModels.map { DropdownOption(it, ttsProvider.ttsModelLabel(it)) },
@@ -494,6 +553,7 @@ internal fun SettingsScreen(
                                 options = voiceOptionsWithFetched(ttsProvider, fetchedVoices, resolveVoice(ttsProvider, aiPrefs.voice)),
                                 selectedValue = resolveVoice(ttsProvider, aiPrefs.voice),
                             ) { onAiPrefsChange(aiPrefs.copy(voice = it)) }
+                            }
                             }
 
                             // ── 语音识别（ASR）─────────────────────────────
@@ -627,6 +687,50 @@ internal fun SettingsScreen(
                         }
                     }
 
+                    // ── 世界书（酒馆 P1-1，docs/tavern-companion-feasibility.md）──
+                    item {
+                        CollapsibleSection(
+                            title = s.sectionLorebook,
+                            expanded = SECTION_LOREBOOK in expandedSections,
+                            onToggle = { toggleSection(SECTION_LOREBOOK) }
+                        ) {
+                            SettingsSwitchRow(
+                                title = s.lorebookEnabledTitle,
+                                subtitle = s.lorebookEnabledSubtitle,
+                                checked = lorebookEnabled
+                            ) { onLorebookEnabledChange(it) }
+                            SettingsActionRow(
+                                title = s.lorebookImportTitle,
+                                subtitle = s.lorebookImportSubtitle
+                            ) { onImportLorebook() }
+                            if (lorebooks.isEmpty()) {
+                                SettingsGroupLabel(s.lorebookEmptyHint)
+                            }
+                            lorebooks.forEach { entry ->
+                                LorebookRow(
+                                    entry = entry,
+                                    isGlobal = entry.fileName == lorebookGlobalFile,
+                                    isBound = entry.fileName == lorebookBoundFile,
+                                    globalTag = s.lorebookGlobalTag,
+                                    embeddedTag = s.lorebookEmbeddedTag,
+                                    importedTag = s.lorebookImportedTag,
+                                    constantTag = s.lorebookConstantTag,
+                                    noKeys = s.lorebookNoKeys,
+                                    entriesTitle = { s.lorebookEntriesTitle(it) },
+                                    countLabel = { s.lorebookEntryCount(it) },
+                                    bindLabel = s.lorebookBindCurrent,
+                                    unbindLabel = s.lorebookUnbind,
+                                    globalLabel = s.lorebookSetGlobal,
+                                    deleteLabel = s.lorebookDelete,
+                                    onSetGlobal = { onLorebookSetGlobal(entry.fileName) },
+                                    onBind = { onLorebookBindCard(entry.fileName) },
+                                    onUnbind = onLorebookUnbind,
+                                    onDelete = { onLorebookDelete(entry.fileName) },
+                                )
+                            }
+                        }
+                    }
+
                     // ── 人物卡提示词 ──────────────────────────────────────
                     item {
                         CollapsibleSection(
@@ -655,6 +759,20 @@ internal fun SettingsScreen(
                                 title = s.newContextTitle,
                                 subtitle = s.newContextSubtitle
                             ) { onNewContext() }
+                            // 聊天记录导出/导入（酒馆 P1-4）：ST jsonl 双向 +
+                            // 人读 markdown；SAF 由 MainActivity 持有
+                            SettingsActionRow(
+                                title = s.exportJsonlTitle,
+                                subtitle = s.exportJsonlSubtitle
+                            ) { onExportHistoryJsonl() }
+                            SettingsActionRow(
+                                title = s.exportMarkdownTitle,
+                                subtitle = s.exportMarkdownSubtitle
+                            ) { onExportHistoryMarkdown() }
+                            SettingsActionRow(
+                                title = s.importHistoryTitle,
+                                subtitle = s.importHistorySubtitle
+                            ) { onImportHistoryJsonl() }
                             SettingsGroupLabel(s.contextHistoryLabel)
                             if (contexts.isEmpty()) {
                                 SettingsGroupLabel(s.contextEmptyHint)
@@ -1992,5 +2110,187 @@ private fun SettingsCheckRow(
             )
         }
         Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * 自定义端点连通性测试（酒馆 P1-2）：GET {baseUrl}/models 验证端点与 Key。
+ * 结果内联展示在行下；成功时目录顺带入 ModelCatalogCache（进程内存活）。
+ */
+@Composable
+private fun CustomEndpointTestRow(baseUrl: String, apiKey: String) {
+    val scope = rememberCoroutineScope()
+    val s = LocalStrings.current
+    var result by remember { mutableStateOf<String?>(null) }
+    Column {
+        SettingsActionRow(title = s.customTestTitle, subtitle = s.customTestSubtitle) {
+            val base = baseUrl.trim().trimEnd('/')
+            if (base.isBlank()) {
+                result = s.customTestFail(s.customBaseUrlHint)
+            } else {
+                scope.launch {
+                    result = try {
+                        val entries =
+                            com.neethu.aiadapter.openai.OpenAiCompatibleModelCatalog().fetch(base, apiKey.trim())
+                        if (entries.isEmpty()) s.customTestFail("/models empty") else s.customTestOk(entries.size)
+                    } catch (t: Throwable) {
+                        s.customTestFail(t.message ?: t.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+        result?.let { SettingsGroupLabel(it) }
+    }
+}
+
+/**
+ * 世界书单行（酒馆 P1-1）：书名+条目数+来源徽标，点开看条目（关键词/常驻/
+ * 正文），行内操作 = 设全局 / 绑当前卡(或解绑) / 删除。
+ */
+@Composable
+private fun LorebookRow(
+    entry: LorebookLibrary.Entry,
+    isGlobal: Boolean,
+    isBound: Boolean,
+    globalTag: String,
+    embeddedTag: String,
+    importedTag: String,
+    constantTag: String,
+    noKeys: String,
+    entriesTitle: (String) -> String,
+    countLabel: (Int) -> String,
+    bindLabel: String,
+    unbindLabel: String,
+    globalLabel: String,
+    deleteLabel: String,
+    onSetGlobal: () -> Unit,
+    onBind: () -> Unit,
+    onUnbind: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { expanded = !expanded }
+            ) {
+                Text(
+                    text = entry.book.name.ifBlank {
+                        entry.fileName.removeSuffix(".json")
+                    },
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = listOf(
+                        countLabel(entry.book.entries.size),
+                        when (entry.source) {
+                            "embedded" -> embeddedTag
+                            else -> importedTag
+                        },
+                        if (isGlobal) globalTag else null,
+                    ).filterNotNull().joinToString(" · "),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (isBound) {
+                    Text(
+                        text = "$unbindLabel ✓",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = deleteLabel,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .clickable { expanded = !expanded }
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(onClick = onSetGlobal, enabled = !isGlobal) {
+                        Text(text = globalLabel, fontSize = 12.sp)
+                    }
+                    FilledTonalButton(
+                        onClick = if (isBound) onUnbind else onBind,
+                        enabled = true,
+                    ) {
+                        Text(text = if (isBound) unbindLabel else bindLabel, fontSize = 12.sp)
+                    }
+                }
+                entry.book.entries.take(30).forEach { e ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                    ) {
+                        Text(
+                            text = listOf(
+                                e.name.ifBlank { null },
+                                if (e.constant) constantTag else null,
+                                if (e.keys.isEmpty() && !e.constant) noKeys else null,
+                            ).filterNotNull().joinToString(" · ")
+                                .ifBlank { e.keys.joinToString(", ") },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (e.name.isNotBlank() || e.constant || e.keys.isNotEmpty()) {
+                            if (e.keys.isNotEmpty()) {
+                                Text(
+                                    text = e.keys.joinToString(", "),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Text(
+                            text = e.content,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (entry.book.entries.size > 30) {
+                    Text(
+                        text = "… +${entry.book.entries.size - 30}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }

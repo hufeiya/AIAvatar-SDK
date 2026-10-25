@@ -44,7 +44,10 @@ import com.neethu.orchestrator.locomotion.MoveAnchor
 import com.neethu.orchestrator.audio.AudioTrackPlaybackQueue
 import com.neethu.orchestrator.audio.PlaybackItem
 import com.neethu.orchestrator.audio.PlaybackQueue
+import com.neethu.orchestrator.card.CardPromptExtras
 import com.neethu.orchestrator.card.CharacterCard
+import com.neethu.orchestrator.card.Lorebook
+import com.neethu.orchestrator.card.LorebookInjector
 import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.chunker.SentenceChunker
 import com.neethu.orchestrator.face.EmotionAliases
@@ -513,17 +516,43 @@ class AvatarSession(
 
     // ── Configuration ─────────────────────────────────────────────────────
 
+    /**
+     * 世界书（酒馆 P1-1，docs/tavern-companion-feasibility.md）：每轮组请求时
+     * 对最近 [LorebookInjector.Config.scanDepth] 条用户消息做关键词扫描，命中
+     * 条目按序/预算注入 system 末尾；constant 条目恒注入。运行时可换（app 的
+     * 世界书绑定/全局书直写本属性，请求时生效，不重建会话）。
+     */
+    @Volatile
+    var lorebook: Lorebook? = null
+
+    /** 世界书总开关（运行时切换；关 = 不扫描不注入）。 */
+    @Volatile
+    var lorebookEnabled: Boolean = true
+
+    /**
+     * 当前人物卡（P1-3 卡字段补全的取数源）：mes_example few-shot 与
+     * post_history_instructions 逐轮从卡读取，卡片热替换（app 的人工提示词
+     * 覆盖走 systemPrompt 直写，不影响本字段）。
+     */
+    private var activeCard: CharacterCard? = null
+
     /** Load persona from a character card and rebuild the system prompt. */
     fun setCharacterCard(card: CharacterCard) {
         systemPrompt = options.assembler.assemble(card)
         // 提炼 prompt 的助手行前缀用卡名（无卡回 MemoryTexts 缺省「虚拟人」）
         characterName = card.name
+        activeCard = card
+        // 卡内嵌世界书默认生效（app 绑定了独立书时随后覆盖 [lorebook]）；
+        // 换卡即重置——上一张卡的书不允许泄漏进新角色
+        lorebook = card.characterBook
     }
 
     /** Drop the card persona (system prompt reverts to empty). */
     fun clearCharacterCard() {
         systemPrompt = ""
         characterName = ""
+        activeCard = null
+        lorebook = null
     }
 
     /**
@@ -577,6 +606,31 @@ class AvatarSession(
      */
     fun injectUserMessage(text: String) {
         if (text.isNotBlank()) store.appendUser(text)
+    }
+
+    /** 当前历史全量（聊天记录导出用，P1-4）。只读快照，不含 system/协议。 */
+    fun historyMessages(): List<ChatMessage> = store.messages()
+
+    /**
+     * 整体替换历史（聊天记录导入用，P1-4）：清空当前上下文后逐条灌入
+     * （文本应已过 com.neethu.orchestrator.history.StChatTranscript.sanitize
+     * 清洗——旧行内标签不回灌请求）。与 [clearHistory] 同样重置动作择优的
+     * 跨回合状态。进行中的回合先打断。
+     */
+    fun importHistory(messages: List<ChatMessage>) {
+        if (turnJob?.isActive == true) interrupt("import-history")
+        store.clear()
+        previousAction = null
+        turnPreviousAction = null
+        candidateInput = ""
+        selectedActions = null
+        for (m in messages) {
+            when (m.role) {
+                ChatRole.USER -> if (m.content.isNotBlank()) store.appendUser(m.content)
+                ChatRole.ASSISTANT -> if (m.content.isNotBlank()) store.appendAssistant(m.content)
+                else -> Unit // system/tool 不入对话历史
+            }
+        }
     }
 
     // ── Long-term memory (docs/memory-feasibility.md §4.6) ───────────────
@@ -1335,26 +1389,43 @@ class AvatarSession(
         val history = store.messages()
         val persona = systemPrompt.trim()
         val protocol = pinnedProtocolText()
-        val systemText = listOf(missionText, persona, protocol.orEmpty())
+        // 世界书（酒馆 P1-1）：扫描最近 N 条用户消息（历史里末条 user 即当前
+        // 输入），命中条目注入 system **末尾**——mission/人设/协议是逐字节稳定
+        // 的缓存前缀（protocol pin），逐轮变化的世界书段放其后不破坏。
+        val loreBlock = if (lorebookEnabled) LorebookInjector.inject(
+            lorebook,
+            history.filter { it.role == ChatRole.USER }.map { it.content },
+            LorebookInjector.Config(header = texts.lorebookHeader),
+        ) else null
+        val systemText = listOf(missionText, persona, protocol.orEmpty(), loreBlock.orEmpty())
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
         if (systemText.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, systemText)
+        // mes_example few-shot（P1-3）：插在 system 之后、历史之前
+        //（SystemPromptAssembler 预留的位置——示例对话对位置敏感）。
+        val fewshot = if (systemText.isNotEmpty()) {
+            CardPromptExtras.parse(activeCard ?: CharacterCard(name = ""), texts.userAlias)
+        } else {
+            emptyList()
+        }
+        list += fewshot
         // 历史裁剪（任务 3）：store 里只有 user/assistant；人设/协议两段
         // 都不进 store，天然不受 recentTurnLimit 影响。
         list += (options.recentTurnLimit?.let { history.takeLast(it) } ?: history).map {
             if (it.role == ChatRole.ASSISTANT) it.copy(content = projectAssistantHistory(it.content)) else it
         }
-        // 视角行 + 记忆参考块 + 技能指令行 + 圆桌发言权行 + 本轮抓拍（视频模式）：
-        // 都挂到刚 append 的末尾 user 消息上——请求里带，store 里的历史始终只有
-        // 干净文字（见 send 的注释）。技能指令与视角行/记忆块同级：逐轮变化、
-        // 只改本轮请求副本、不碰 system/协议（前缀缓存友好，A.1 第 34 条的
-        // "system 恒一条"不受影响）。排序 viewLine→memoryLine→skillLine→
-        // roundtableLine：越靠后离生成位置越近（§7.10 近因效应），圆桌的
-        // 「轮到你发言」是本轮最硬的指令，放最末。
+        // post_history_instructions（P1-3，ST 的 UJB 位置）+ 视角行 + 记忆参考块
+        // + 技能指令行 + 圆桌发言权行 + 本轮抓拍（视频模式）：都挂到刚 append 的
+        // 末尾 user 消息上——请求里带，store 里的历史始终只有干净文字（见 send
+        // 的注释）。排序 viewLine→memoryLine→skillLine→phiLine→roundtableLine：
+        // 越靠后离生成位置越近（§7.10 近因效应），圆桌的「轮到你发言」是本轮
+        // 最硬的指令，放最末。
         val viewLine = currentViewLine()
         val skillLine = skills.activeDirective()
         val roundtableLine = this.roundtableLine
-        val directivePrefix = listOfNotNull(viewLine, memoryLine, skillLine, roundtableLine).joinToString("\n\n")
+        val phiLine = activeCard?.let { CardPromptExtras.postHistoryInstructions(it, texts.userAlias) }
+        val directivePrefix =
+            listOfNotNull(viewLine, memoryLine, skillLine, phiLine, roundtableLine).joinToString("\n\n")
         if ((directivePrefix.isNotEmpty() || turnImages.isNotEmpty()) && list.lastOrNull()?.role == ChatRole.USER) {
             val last = list.last()
             list[list.size - 1] = last.copy(
@@ -1374,7 +1445,8 @@ class AvatarSession(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
                 "view=${viewLine ?: "n/a"} mem=${memoryLine?.length ?: 0}ch skill=${skillLine?.length ?: 0}ch " +
-                "rt=${roundtableLine?.length ?: 0}ch " +
+                "rt=${roundtableLine?.length ?: 0}ch lore=${loreBlock?.length ?: 0}ch phi=${phiLine?.length ?: 0}ch " +
+                "fewshot=${fewshot.size} " +
                 "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +
                 "history=${history.size} sent=${trimmedSent(history)} images=${turnImages.size} ===",

@@ -185,12 +185,17 @@ class AIAvatarSdk(
          * 实际生效的 TTS 引擎：DeepSeek 官方无语音合成端点（/audio/speech 实测
          * 404），OpenAI 兼容引擎选到它（同商跟随或显式指定）时整体回落
          * Edge-TTS——免费无 Key，模型/音色/Key 全按 Edge 解析（免费先例见
-         * [TtsEngine.EDGE]）。引擎解析单一出口：ttsReady/resolvedTtsModel/
-         * resolvedVoice/装配全部认这个值。
+         * [TtsEngine.EDGE]）。自定义端点同商跟随且未填 TTS 模型名时同样回落
+         * Edge（第三方中转多数不代理 /audio/speech，留空即视为没打算用自端
+         * 点合成；显式填了模型名就照打同端点）。引擎解析单一出口：
+         * ttsReady/resolvedTtsModel/resolvedVoice/装配全部认这个值。
          */
         val ttsEngineResolved: TtsEngine
             get() = if (ttsEngine == TtsEngine.OPENAI_COMPATIBLE &&
-                ttsProviderResolved == ChatProvider.DEEPSEEK
+                (
+                    ttsProviderResolved == ChatProvider.DEEPSEEK ||
+                        (isCustomEndpoint && ttsProvider == null && ttsModel.isBlank())
+                    )
             ) {
                 TtsEngine.EDGE
             } else {
@@ -289,6 +294,12 @@ class AIAvatarSdk(
     private var card: CharacterCard? = null
 
     /**
+     * 门面持有的世界书覆盖（酒馆 P1-1）：非空时**覆盖**卡内嵌书（app 的独立
+     * 书绑定走这里），会话重建后自动重放（与 [card] 同惯例）。null = 跟随卡。
+     */
+    private var lorebookOverride: com.neethu.orchestrator.card.Lorebook? = null
+
+    /**
      * 确保 [config] 对应的会话存活并返回它。配置变化 → 关旧建新（人设卡经
      * [setCharacterCard] 设过的自动重放）；身份未变且会话存活 → no-op。
      *
@@ -348,6 +359,11 @@ class AIAvatarSdk(
                 // EDGE 分支；此臂编译期兜底（枚举穷尽所需），运行期不可达
                 ChatProvider.DEEPSEEK ->
                     EdgeTtsAdapter(texts = edgeTtsTexts(config.lang))
+                // 自定义端点的语音合成 = 同端点 OpenAI 兼容 /audio/speech
+                //（one-api 系中转通常代理）；不支持时引擎已被 ttsEngineResolved
+                // 改道 Edge（同商跟随且未填 TTS 模型名的情形）
+                ChatProvider.CUSTOM ->
+                    OpenAiCompatibleTtsAdapter(config.ttsBaseUrl, config.ttsKeyResolved)
             }
         }
         val session = AvatarSession(
@@ -418,6 +434,14 @@ class AIAvatarSdk(
                         voice = config.resolvedVoice,
                         responseFormat = "mp3",
                     )
+                // 自定义端点按 OpenAI 标准默认走 mp3（容器自带采样率，中转代理
+                // /audio/speech 的主流输出；模型/音色透传，Key 用大模型那把）
+                ChatProvider.CUSTOM ->
+                    TtsConfig(
+                        model = config.resolvedTtsModel,
+                        voice = config.resolvedVoice,
+                        responseFormat = "mp3",
+                    )
                 else ->
                     TtsConfig(
                         model = config.resolvedTtsModel,
@@ -430,6 +454,7 @@ class AIAvatarSdk(
             }
         }
         card?.let { session.setCharacterCard(it) }
+        lorebookOverride?.let { session.lorebook = it }
         if (modelReady) {
             session.startFaceDriving()
             faceDrivingStarted = true
@@ -468,6 +493,15 @@ class AIAvatarSdk(
     fun clearCharacterCard() {
         card = null
         _session.value?.clearCharacterCard()
+    }
+
+    /**
+     * 世界书覆盖（酒馆 P1-1）：非空覆盖卡内嵌书，跨会话重建保持；传 null =
+     * 清除覆盖、回到卡内嵌书（无卡即无书）。运行时切换请求时生效，不重建会话。
+     */
+    fun setLorebook(book: com.neethu.orchestrator.card.Lorebook?) {
+        lorebookOverride = book
+        _session.value?.let { s -> s.lorebook = book ?: card?.characterBook }
     }
 
     /**
