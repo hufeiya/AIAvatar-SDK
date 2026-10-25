@@ -208,6 +208,35 @@ class OpenAiCompatibleLlmAdapterTest {
     }
 
     @Test
+    fun `reasoning-only stream is promoted to text when content empty`() = runBlocking {
+        // SiliconFlow Qwen3-VL 流式+tools 实锤(2026-10-25):enable_thinking=false
+        // 被无视,全部输出进 reasoning_content,content 恒空——兜底转正防整回合零输出。
+        enqueue(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考一下\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"答案是42\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+        )
+        val events = adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()
+        val text = events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text }
+        assertEquals("思考一下\n答案是42".let { "思考一下答案是42" }, text)
+        assertTrue(events.last() is LlmStreamEvent.Finish)
+    }
+
+    @Test
+    fun `reasoning content never leaks when content present`() = runBlocking {
+        enqueue(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"content\":\"正文\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+        )
+        val events = adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()
+        val text = events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text }
+        assertEquals("正文", text)
+    }
+
+    @Test
     fun `empty tools config omits tools and tool_choice keys entirely`() = runBlocking {
         enqueue(sseBody())
         adapter.streamChat(listOf(ChatMessage(ChatRole.USER, "hi")), config).toList()

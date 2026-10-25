@@ -21,6 +21,9 @@ import androidx.room.Upsert
  * 维度——记忆分人记，迁移把存量行归入全局分片（avatarId=''）；待提炼窗口
  * 表从「单行表 id=1」改为按 avatarId 一行（互踩问题），窗口是攒批缓存、
  * 最坏损失=一批重新提炼，迁移直接重建。
+ *
+ * v3（酒馆 P3-1，docs/tavern-companion-feasibility.md §5）：新增
+ * relationship_state 表（卡级好感度/纪念日/专属称呼），纯增量迁移。
  */
 @Entity(tableName = "agent_memories")
 data class AgentMemoryEntity(
@@ -97,15 +100,43 @@ interface PendingWindowDao {
     fun clearFor(avatarId: String)
 }
 
+/**
+ * 关系状态（酒馆 P3-1，docs/tavern-companion-feasibility.md §5）：卡级一行
+ * KV（好感度/相识纪念日/专属称呼），与记忆同库同生命周期；派生视图
+ * （阶段/天数/纪念日）由 [RelationshipTracker] 现算不落盘。
+ */
+@Entity(tableName = "relationship_state")
+data class RelationshipStateEntity(
+    @PrimaryKey val avatarId: String,
+    val favorability: Int,
+    val anniversaryEpochDay: Long,
+    val nickname: String?,
+    val updatedAt: Long,
+)
+
+@Dao
+interface RelationshipStateDao {
+    /** suspend 形态:Room 自带查询执行器调度,主线程调用不炸(真机 2026-10-25 实锤过)。 */
+    @Query("SELECT * FROM relationship_state WHERE avatarId = :avatarId")
+    suspend fun getFor(avatarId: String): RelationshipStateEntity?
+
+    @Upsert
+    suspend fun upsert(entity: RelationshipStateEntity)
+
+    @Query("DELETE FROM relationship_state WHERE avatarId = :avatarId")
+    suspend fun clearFor(avatarId: String): Int
+}
+
 @Database(
-    entities = [AgentMemoryEntity::class, PendingWindowEntity::class],
-    version = 2,
+    entities = [AgentMemoryEntity::class, PendingWindowEntity::class, RelationshipStateEntity::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class MemoryDatabase : RoomDatabase() {
 
     abstract fun memoryDao(): AgentMemoryDao
     abstract fun pendingWindowDao(): PendingWindowDao
+    abstract fun relationshipDao(): RelationshipStateDao
 
     companion object {
         @Volatile
@@ -124,13 +155,25 @@ abstract class MemoryDatabase : RoomDatabase() {
             }
         }
 
+        /** v2→v3（酒馆 P3-1）：新增关系状态表（纯增量，存量数据不动）。 */
+        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `relationship_state` (" +
+                        "`avatarId` TEXT NOT NULL, `favorability` INTEGER NOT NULL, " +
+                        "`anniversaryEpochDay` INTEGER NOT NULL, `nickname` TEXT, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`avatarId`))"
+                )
+            }
+        }
+
         fun getInstance(context: Context): MemoryDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     MemoryDatabase::class.java,
                     "agent_memory.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

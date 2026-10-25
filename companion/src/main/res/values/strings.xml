@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 产品名（§6.3 独立产品身份）：占位名,正式品牌定名只改这一处 -->
+    <string name="app_name">灵伴</string>
+    <string name="greeting_channel_name">主动问候</string>
+    <string name="greeting_channel_desc">虚拟人会不定期想起你并发来问候</string>
+    <string name="greeting_notification_title">%s 想你了</string>
+</resources>

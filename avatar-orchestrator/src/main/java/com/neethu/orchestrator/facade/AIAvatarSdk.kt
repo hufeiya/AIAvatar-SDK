@@ -88,6 +88,13 @@ class AIAvatarSdk(
      */
     val memoryStore: MemoryStore? = null,
     /**
+     * 关系状态存储（酒馆 P3-1，docs/tavern-companion-feasibility.md §5）：
+     * null = 不做关系追踪；companion 注入 RoomRelationshipStore（与记忆同库）。
+     * 透传给每个 [AvatarSession]；卡级分片由集成方在激活卡时写
+     * `session.relationshipSubjectId`（会话重建自动带上新分片键）。
+     */
+    val relationshipStore: com.neethu.orchestrator.memory.RelationshipStore? = null,
+    /**
      * 文本嵌入适配器（记忆检索主路，bge-m3 等 OpenAI 兼容 /embeddings）；
      * null = 关键词降级检索。Key 等配置经 [embeddingConfigProvider] 每次现取。
      */
@@ -392,6 +399,7 @@ class AIAvatarSdk(
             // 长期记忆（docs/memory-feasibility.md）：store 跨会话共享；向量化
             // 配置经 provider 缝每次现取（换 Key 不重建会话）。
             memoryStore = memoryStore,
+            relationshipStore = relationshipStore,
             embeddingAdapter = embeddingAdapter,
             embeddingConfig = { embeddingConfigProvider?.invoke() },
         )

@@ -137,9 +137,9 @@
 | G7 | 音色/VRM 模型绑定到卡(换卡=换人) | "角色"完整性 | 2 人日 | ~~P2~~ ✅已落地(2026-10-25) |
 | G8 | 长对话摘要压缩(超窗历史→摘要行) | 长聊不断片(人机恋高频) | 3 人日 | ~~P2~~ ✅已落地(2026-10-25) |
 | G9 | 表情分类器兜底(无标签时本地分类) | 卡不带标签也生动 | 2~3 人日 | P2(可延) |
-| G10 | 问候后台推送(WorkManager+通知;前台不定时问候已并入 G0) | 人机恋"被想起"感(锁屏触达) | 2 人日 | P3 |
-| G11 | 关系状态:好感度/纪念日/专属称呼(存记忆库) | 关系有进展 | 4 人日 | P3 |
-| G12 | 多卡群聊(圆桌成员接 CardLibrary) | 酒馆群聊玩法 | 4~5 人日 | P3 |
+| G10 | 问候后台推送(WorkManager+通知;前台不定时问候已并入 G0) | 人机恋"被想起"感(锁屏触达) | 2 人日 | ~~P3~~ ✅已落地(2026-10-25,:companion) |
+| G11 | 关系状态:好感度/纪念日/专属称呼(存记忆库) | 关系有进展 | 4 人日 | ~~P3~~ ✅已落地(2026-10-25,SDK+companion) |
+| G12 | 多卡群聊(圆桌成员接 CardLibrary) | 酒馆群聊玩法 | 4~5 人日 | ~~P3~~ ✅已落地(2026-10-25,:companion) |
 | G13 | 正则脚本/预设导入 | 高阶玩家锦上添花 | 3~4 人日 | P3(观望) |
 
 ---
@@ -193,12 +193,16 @@
   **✅落地**:`AvatarSession.Options.historySummaryEnabled`(默认开)+`historySummaryEveryMessages`(20 条新溢出消息触发)/`historySummaryMaxChars`(700);触发点=整轮落库后(`maybeSummarizeHistory`),后台任务独立于 turnJob(打断不打断摘要),「旧摘要+新溢出段」合并式滚动;注入=system 末尾(世界书段之前,`【前情摘要】`头,单条 system 保持端点兼容);`clearHistory/importHistory` 重置;失败保旧摘要下轮重试;REQUEST 日志加 `sum=` 字段。ChatConfig 透传+设置页「长对话剧情摘要」开关(记忆区)。**真机**:30 轮触发(overflow=20 covers=0→154ch),61 条历史只发最近 40 条,问第 1 轮暗号答「蓝风铃」全链实锤。**测试坑**:摘要任务可能被 unconfined 事件循环排队/在 Default 线程异步执行,断言前必须 join(新增 `awaitHistorySummaryForTest()` 观测缝),否则与断言赛跑偶发翻车。
 - (可选)P2-5 表情兜底分类器:关键词/小模型分类兜底,优先级最低——行内标签协议已是主路径。**未做**(维持可选)。
 
-### P3:人机恋深化(≈10 人日,目标:从"玩具"变"关系")
+### P3:人机恋深化(≈10 人日,目标:从"玩具"变"关系")——**2026-10-25 全部落地+真机冒烟过,随 `:companion` 首版**
 
-- **主动性-前台(已并入 P0)**:不定时问候随自主生命体落地(前台调度/冷却/安静时段/speak 播报/回执,设计:docs/autonomy-feasibility.md §5)。本节仅剩**后台延伸**:WorkManager+通知渠道,点通知进 app 由虚拟人开口说出,≈2 人日,P0 真机验收后再做。
-- **P3-1 关系状态(4 人日)**:卡级 KV:好感度(0-100)、相识纪念日、专属称呼;好感度由对话事件经 LLM 判定增量(或复用 MemoryTools 通道);UI 呈现为低调状态行(而非数值游戏化);纪念日触发主动问候。数据进 MemoryDatabase,和记忆同生命周期。
-- **P3-2 多卡群聊(4~5 人日)**:圆桌成员从代码预置改为绑 CardLibrary 的卡(每人:卡+音色+VRM);InputRouter 已有人机路由,补"用户指定 @角色发言";导演制调轮次的现状保留。
-- **P3-3 氛围仪式感(顺手做)**:卡绑场景(dream_bedroom 已有)+烛光 VFX 预设,"约会模式"一键切场景+灯光+音乐(多舞曲链路现成)。
+- **主动性-前台(已并入 P0)**:不定时问候随自主生命体落地。本节仅剩**后台延伸**。
+  **✅G10 落地**:`companion/notify/`(GreetingPlanner 纯逻辑+GreetingWorker):WorkManager 30min 周期唤醒 → 门控(安静时段 22-9 硬门/每日 1 条上限/4h 最小间隔/前台 10min 宽限)→ ThoughtComposer 本地模板+记忆事实/纪念日合成问候 → 通知;点通知深链进 app,会话就绪后由虚拟人开口+写回执。worker 内零 LLM 零渲染。**真机**:jobscheduler 挂载实锤+权限门。
+- **P3-1 关系状态(4 人日)**:卡级 KV:好感度(0-100)、相识纪念日、专属称呼。
+  **✅落地**:SDK 层 `memory/RelationshipState.kt`(RelationshipStore SPI+RelationshipTracker 判定器+RelationshipTexts 双语提示行)+MemoryDatabase v3(`relationship_state` 表,纯增量迁移)+RoomRelationshipStore(DAO 全 suspend——真机 main-thread 崩溃的修正);AvatarSession 新增 `relationship`/`relationshipSubjectId`/`refreshRelationship`/`setRelationshipEnabled`,判定行进 system(摘要之后、世界书之前,REQUEST 日志 `rel=` 字段);单轮判定 ±3 钳制、JSON 容错(围栏/JsonNull)、失败保旧;ThoughtComposer 扩展纪念日/称呼问候池。companion 层:低调状态行(相识 N 天·关系·阶段)+RelationshipSheet 详情+重置(数据主权)+卡切换换分片。**真机**:rel=38ch 注入实锤、判定 20→23(讲笑话 +3)、状态行可见。
+- **P3-2 多卡群聊(4~5 人日)**:圆桌成员从代码预置改为绑 CardLibrary 的卡。
+  **✅落地**:`companion/ui/GroupChatScreen.kt`:卡库选 2~4 人 → 每卡一个 AvatarStage 手柄(并排站位)+独立 AvatarSession(人设=卡/音色=卡绑定或 Edge 轮换/独立内存上下文/TTS 并发按 `perSlotTtsBudget` 均分)+RoundtableSession 规则导演制+StageGazeRelay 注视接力;@点名路由+话题开题+分道字幕。**坑**:群聊屏切换不能 early-return 移除 AvatarView——corelib 引擎销毁后 Choreographer 下一帧撞已释放 TransformManager(SIGSEGV 真机实锤),改为覆盖层。
+- **P3-3 氛围仪式感(顺手做)**:卡绑场景+烛光 VFX 预设。
+  **✅落地**:CardBinding 加 `sceneFile` 字段(companion 分叉,向后兼容 demo 旧 JSON)+DateMode(DREAMY 灯光+fire VFX+音乐+开场白),约会模式一键切/退回原场景。
 
 #### 观望池
 
@@ -206,7 +210,7 @@
 
 ---
 
-## 6. 工程承载:本仓库新增 `:companion` 产品模块(2026-10-24 定案)
+## 6. 工程承载:本仓库新增 `:companion` 产品模块(2026-10-24 定案,2026-10-25 落地)
 
 **决策:不基于 MainActivity 开发,也暂不另起项目;在本仓库(monorepo)新增独立 application 模块 `:companion` 作为产品本体,`:app` 继续扮演 SDK demo。** 拆独立仓库推迟到"自主生命体与酒馆资产(P0+P1)上线 + 有第一批真实用户"之后(§6.4)。
 
@@ -235,7 +239,9 @@
 
 ### 6.4 版本与拆库时机
 
-- **版本解耦**:产品 versionName 独立(建议从 0.1.0 起)、独立递增,与 SDK_VERSION 脱钩。publish-release 技能在 P0 落地时一并改造:companion APK 独立 tag/独立 release notes,SDK 发版照旧,demo APK 可继续随 SDK 附带。
+- **版本解耦**:产品 versionName 独立(已从 **0.1.0** 起)、独立递增,与 SDK_VERSION 脱钩。
+- **落地形态(2026-10-25)**:`settings.gradle.kts` 加 `:companion`;`companion/build.gradle.kts` 独立 applicationId `com.neethu.companion`/产品名「灵伴」/版本 0.1.0;**assets 经 sourceSets.srcDir 共享 `:app/src/main/assets`**(monorepo 期零复制零冗余,拆库时整体迁走);产品库(卡库/绑定/世界书/Provider/语音/自主生命体)按 §6.3「复制后允许分叉」搬入 `com.neethu.companion` 包,搬运时即分叉(CardBinding 加 sceneFile、AiChatPrefs 加 withApiKey 等);护栏维持——companion 只走 corelib/orchestrator 公开 API。**真机坑**:①prefs 文件独立(`companion_settings`);②Room DAO 主线程调用崩(suspend 形态修正);③群聊屏切换 SIGSEGV(见 G12);④SiliconFlow Qwen3-VL 流式+tools 全输出进 reasoning_content(adapter 已加兜底,见 G11 外的 SDK 修复)。
+- **ai_cmd 调试通道**:`companion/debug/CompanionDebug.kt`,命令族:state/snapshot/send/speak/interrupt/activate_card/clear_card/cards/greet/think/autonomy/relationship/tools_list/tools_call/memory_*。
 - **拆库触发条件**:P0+P1 上线 + 类脑/B站带来第一批真实用户 + 产品需要独立品牌/issue 区。做法:`:companion` 迁出为新仓库,project() 依赖换 Maven 坐标;本地 SDK/产品协同开发用 `includeBuild` 复合构建。在此之前,一切产品迭代都在 monorepo 内完成。
 
 ## 7. 差异化定位与打法

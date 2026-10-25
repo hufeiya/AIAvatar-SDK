@@ -14,6 +14,8 @@ kotlinxCoroutines = "1.9.0"
 okhttp = "4.12.0"
 kotlinxSerializationJson = "1.7.3"
 room = "2.6.1"
+# G10 问候后台推送（:companion，酒馆 P3）：WorkManager 周期任务
+work = "2.9.1"
 # KSP 版本必须匹配 kotlin 2.0.21（<kotlin>-<ksp> 联动版本，Maven Central）
 ksp = "2.0.21-1.0.28"
 # 视频模式：CameraX 相机预览/分析 + ML Kit 人脸检测（bundled 版自带 BlazeFace
@@ -26,6 +28,7 @@ mediapipeTasksVision = "0.10.14"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }

@@ -38,6 +38,8 @@ import com.neethu.orchestrator.memory.MemoryCoordinator
 import com.neethu.orchestrator.memory.MemoryRetriever
 import com.neethu.orchestrator.memory.MemoryStore
 import com.neethu.orchestrator.memory.MemoryTools
+import com.neethu.orchestrator.memory.RelationshipStore
+import com.neethu.orchestrator.memory.RelationshipTracker
 import com.neethu.orchestrator.memory.memoryTextsOf
 import com.neethu.orchestrator.locomotion.LocomotionDriver
 import com.neethu.orchestrator.locomotion.MoveAnchor
@@ -131,6 +133,13 @@ class AvatarSession(
      * [com.neethu.orchestrator.memory.RoomMemoryStore]。记忆跨上下文全局共享。
      */
     private val memoryStore: MemoryStore? = null,
+    /**
+     * 关系状态存储（酒馆 P3-1，docs/tavern-companion-feasibility.md §5）：
+     * null = 不做关系追踪；集成方注入
+     * [com.neethu.orchestrator.memory.RoomRelationshipStore]（与记忆同库）。
+     * 卡级分片经 [relationshipSubjectId]（激活卡时赋值，免重建会话）。
+     */
+    private val relationshipStore: RelationshipStore? = null,
     /**
      * 文本嵌入适配器（记忆检索主路）：null 或 [embeddingConfig] 返回 null 时
      * 检索走关键词降级路。配置（Key/模型）经 [embeddingConfig] 每次现取，
@@ -241,6 +250,11 @@ class AvatarSession(
         val memoryTopK: Int = 3,
         /** 常驻槽上限：身份/关系类且重要度 ≥8 的事实恒注入 ≤N 条。 */
         val memoryPinnedMax: Int = 3,
+        /**
+         * 关系追踪（酒馆 P3-1）默认开关（仅注入 relationshipStore 时生效）；
+         * 运行时切换走 [setRelationshipEnabled]。
+         */
+        val relationshipTrackingEnabled: Boolean = true,
     )
 
     /** LLM request parameters; must be set before [send]. */
@@ -383,6 +397,46 @@ class AvatarSession(
             { embeddingConfig?.invoke() },
             MemoryRetriever.Config(topK = options.memoryTopK, pinnedMax = options.memoryPinnedMax),
         )
+    }
+
+    /** 关系分片键（当前卡标识）；激活卡时赋值，配合 [refreshRelationship] 生效。
+     *  声明必须先于 [relationship]——其初始化器经 subjectIdProvider 读本字段，
+     *  unconfined scope 下 launch 急执行，晚声明会读到未初始化的 null。 */
+    @Volatile
+    var relationshipSubjectId: String = ""
+
+    /**
+     * 关系状态协调器（P3-1）：null = 未注入 store。快照流供 UI 低调状态行，
+     * promptLine 逐轮进 system（[buildRequestMessages] 末段动态区）；卡切换
+     * 后调 [refreshRelationship] 即换分片，无需重建会话。
+     */
+    val relationship: RelationshipTracker? = relationshipStore?.let {
+        RelationshipTracker(
+            store = it,
+            scope = scope,
+            llmProvider = { llm },
+            llmConfigProvider = { llmConfig },
+            subjectIdProvider = { relationshipSubjectId },
+            lang = options.lang,
+        ).also { tracker ->
+            tracker.enabled = options.relationshipTrackingEnabled
+            // 预热加载（快照流 + 提示行就绪）：失败不致命（判定与 UI 重拉兜底）
+            scope.launch { runCatching { tracker.refresh() } }
+        }
+    }
+
+    /** 手动关系提示行（无 store 的接入方直接喂；有 tracker 时以其 promptLine 优先）。 */
+    @Volatile
+    var relationshipLine: String? = null
+
+    /** 卡切换后重拉关系分片（快照流 + 提示行）；无 tracker 时 no-op。 */
+    suspend fun refreshRelationship() {
+        relationship?.refresh()
+    }
+
+    /** 关系追踪运行时开关（§8.3 可关闭）：关 = 停判定，已有提示行冻结。 */
+    fun setRelationshipEnabled(enabled: Boolean) {
+        relationship?.enabled = enabled
     }
 
     /** 当前人物卡名（提炼 prompt 里助手行前缀；无卡用 MemoryTexts 缺省）。 */
@@ -950,6 +1004,9 @@ class AvatarSession(
                 // 路径天然跳过（半截对话提炼出来的事实不可信）；内部达阈值才
                 // 后台提炼，fire-and-forget 永不在此处抛。
                 memoryCoordinator?.onTurnCompleted(text, cleanBuffer.toString())
+                // 关系状态判定（P3-1）：同上 fire-and-forget；够长才调 LLM，
+                // 增量落库后快照流与提示行自动更新
+                relationship?.onTurnCompleted(text, cleanBuffer.toString())
                 // 历史摘要滚动触发（P2-4）：整轮落库后检查，后台执行不阻塞下一回合
                 maybeSummarizeHistory()
                 _phase.value = ConversationPhase.IDLE
@@ -1503,7 +1560,17 @@ class AvatarSession(
         // system 末尾（世界书段之前）——与 lore 同属逐轮可能变化的动态段，
         // 不进稳定前缀（protocol pin）；单条 system 消息保持多家端点兼容。
         val summaryBlock = historySummaryBlock(history.size)
-        val systemText = listOf(missionText, persona, protocol.orEmpty(), summaryBlock.orEmpty(), loreBlock.orEmpty())
+        // 关系状态行（P3-1）：tracker 的判定结果优先，手动喂的
+        // [relationshipLine] 兜底（无 store 接入方）。
+        val relationshipBlock = relationship?.promptLine ?: relationshipLine
+        val systemText = listOf(
+            missionText,
+            persona,
+            protocol.orEmpty(),
+            summaryBlock.orEmpty(),
+            relationshipBlock.orEmpty(),
+            loreBlock.orEmpty(),
+        )
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
         if (systemText.isNotEmpty()) list += ChatMessage(ChatRole.SYSTEM, systemText)
@@ -1551,7 +1618,7 @@ class AvatarSession(
             PROMPT_TAG,
             "${STREAM_PREFIX}=== REQUEST model=${llmConfig?.model} thinking=${if (thinkingOff) "off" else "default"} " +
                 "view=${viewLine ?: "n/a"} mem=${memoryLine?.length ?: 0}ch skill=${skillLine?.length ?: 0}ch " +
-                "rt=${roundtableLine?.length ?: 0}ch lore=${loreBlock?.length ?: 0}ch sum=${summaryBlock?.length ?: 0}ch phi=${phiLine?.length ?: 0}ch " +
+                "rt=${roundtableLine?.length ?: 0}ch lore=${loreBlock?.length ?: 0}ch sum=${summaryBlock?.length ?: 0}ch rel=${relationshipBlock?.length ?: 0}ch phi=${phiLine?.length ?: 0}ch " +
                 "fewshot=${fewshot.size} " +
                 "tools=${requestToolCount()} " +
                 "sys=$sysLog persona=$personaLog protocol=$protocolLog " +

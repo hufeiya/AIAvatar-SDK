@@ -130,6 +130,8 @@ class OpenAiCompatibleLlmAdapter(
                             var finished = false
                             var finishReason: String? = null
                             var usage: LlmUsage? = null
+                            var contentEmitted = false
+                            val reasoningSpare = StringBuilder()
                             val toolAccumulator = ToolCallAccumulator()
                             while (true) {
                                 val line = source.readUtf8Line() ?: break
@@ -147,10 +149,18 @@ class OpenAiCompatibleLlmAdapter(
                                 val delta = parseDelta(root) ?: continue
                                 delta.first?.let { text ->
                                     if (text.isNotEmpty()) {
+                                        contentEmitted = true
                                         emittedAny = true
                                         send(LlmStreamEvent.TextDelta(text))
                                     }
                                 }
+                                // 思考通道缓存（reasoning_content）：SiliconFlow 的
+                                // Qwen3-VL 系在「流式 + tools」组合下实测无视
+                                // enable_thinking=false,全部输出进 reasoning_content、
+                                // content 恒空（2026-10-25 真机/curl 双实锤）。这里只
+                                // 缓存不转发——流末 content 全空时才兜底转正,有
+                                // content 的正常路径零行为变化。
+                                delta.reasoning?.takeIf { it.isNotEmpty() }?.let { reasoningSpare.append(it) }
                                 // Streaming tool calls: accumulate per index slot and
                                 // surface Started/Arguments events in fragment order.
                                 delta.third?.let { deltaTools ->
@@ -164,12 +174,20 @@ class OpenAiCompatibleLlmAdapter(
                                     finishReason = delta.second
                                 }
                             }
+                            // 兜底转正：content 全空 + 无工具调用 + 思考通道有货
+                            // → 思考文本当正文（模型把它当回答输出,只是放错了通道;
+                            // 口吻可能带思考味,好过整回合零输出）。
+                            val tools = toolAccumulator.complete()
+                            if (!contentEmitted && tools.isEmpty() && reasoningSpare.isNotBlank()) {
+                                emittedAny = true
+                                send(LlmStreamEvent.TextDelta(reasoningSpare.toString().trim()))
+                            }
                             emittedAny = true
                             send(
                                 LlmStreamEvent.Finish(
                                     finishReason,
                                     usage,
-                                    toolAccumulator.complete(),
+                                    tools,
                                 ),
                             )
                         }
@@ -263,23 +281,34 @@ class OpenAiCompatibleLlmAdapter(
         }
     }
 
-    /** Returns `(deltaText, finishReason, deltaToolCalls)` — any may be null. */
-    private fun parseDelta(root: JsonObject): Triple<String?, String?, kotlinx.serialization.json.JsonArray?> = try {
+    /** Returns `(deltaText, finishReason, deltaToolCalls, reasoningText)` — any may be null. */
+    private fun parseDelta(root: JsonObject): Quadruple = try {
         val choice = (root["choices"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull()
-            ?: return Triple(null, null, null)
+            ?: return Quadruple(null, null, null, null)
         val choiceObj = choice.jsonObject
         val deltaObj = choiceObj["delta"]?.jsonObject
         val content = (deltaObj?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf {
             it !is kotlinx.serialization.json.JsonNull
         }?.jsonPrimitive
+        val reasoning = (deltaObj?.get("reasoning_content") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf {
+            it !is kotlinx.serialization.json.JsonNull
+        }?.jsonPrimitive?.content
         val finish = choiceObj["finish_reason"]?.let {
             (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p !is kotlinx.serialization.json.JsonNull }?.jsonPrimitive?.content
         }
         val deltaTools = deltaObj?.get("tool_calls") as? kotlinx.serialization.json.JsonArray
-        Triple(content?.contentOrNullSafe(), finish, deltaTools)
+        Quadruple(content?.contentOrNullSafe(), finish, deltaTools, reasoning)
     } catch (_: Exception) {
-        Triple(null, null, null)
+        Quadruple(null, null, null, null)
     }
+
+    /** [parseDelta] 的四元组（OpenAI content/finish/tool_calls + 思考通道）。 */
+    private data class Quadruple(
+        val first: String?,
+        val second: String?,
+        val third: kotlinx.serialization.json.JsonArray?,
+        val reasoning: String?,
+    )
 
     /** OpenAI usage chunk → [LlmUsage]; `cached_tokens` stays null when unreported. */
     private fun parseUsage(u: JsonObject): LlmUsage? = try {

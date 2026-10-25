@@ -29,26 +29,49 @@ class ThoughtComposer(private val lang: Lang, private val rng: Random = Random.D
 
     /**
      * 问候的「内心版」——开口前 1~2s 先弹的思考气泡（§5 与思考气泡联动）。
+     * 纪念日优先走纪念池（P3-1：纪念日触发主动问候）。
      */
-    fun greetingThought(): String = textsOf(lang).greetingThoughts.random(rng)
+    fun greetingThought(nickname: String? = null, anniversaryYears: Int = 0): String {
+        val texts = textsOf(lang)
+        if (anniversaryYears > 0) return texts.anniversaryThoughts.random(rng).replace("{y}", anniversaryYears.toString())
+        return texts.greetingThoughts.random(rng)
+    }
 
     /**
-     * 问候正文（≤2 句，不含标签）：[memoryFact] 命中走记忆模板（问候的内容
-     * 素材），否则通用池（时段无关）。返回 null = 无池命中（调用方放弃本次）。
+     * 问候正文（≤2 句，不含标签）：纪念日 > 记忆槽 > 称呼槽 > 通用池。
+     * [nickname] 是角色对用户的专属称呼（P3-1）；[anniversaryYears] > 0 =
+     * 今天是相识满 N 周年。返回 null = 无池命中（调用方放弃本次）。
      */
-    fun greetingText(hour: Int, memoryFact: String?): String? {
+    fun greetingText(
+        hour: Int,
+        memoryFact: String?,
+        nickname: String? = null,
+        anniversaryYears: Int = 0,
+    ): String? {
         val texts = textsOf(lang)
-        val pool = if (memoryFact.isNullOrBlank()) {
-            texts.greetingPlain(hour)
-        } else {
-            texts.greetingMemory.map { it.replace("{m}", memoryFact) }
+        if (anniversaryYears > 0) {
+            val addressed = nickname?.takeIf { it.isNotBlank() }
+            return texts.anniversaryGreetings.random(rng)
+                .replace("{y}", anniversaryYears.toString())
+                .let { if (addressed != null) it.replace("{n}", addressed) else it.replace("「{n}」", "").replace("{n}", "") }
+                .takeIf { it.isNotBlank() }
         }
-        return pool.randomOrNull(rng)
+        if (!memoryFact.isNullOrBlank()) {
+            return texts.greetingMemory.map { it.replace("{m}", memoryFact) }.randomOrNull(rng)
+        }
+        val addressed = nickname?.takeIf { it.isNotBlank() }
+        if (addressed != null && rng.nextFloat() < NICKNAME_SLOT_PROBABILITY) {
+            return texts.greetingNickname.map { it.replace("{n}", addressed) }.randomOrNull(rng)
+        }
+        return texts.greetingPlain(hour).randomOrNull(rng)
     }
 
     private companion object {
         /** 记忆槽触发概率：有记忆也不必每条思考都提往事。 */
         const val MEMORY_SLOT_PROBABILITY = 0.35f
+
+        /** 称呼槽触发概率：有专属称呼也不必每次都叫。 */
+        const val NICKNAME_SLOT_PROBABILITY = 0.35f
     }
 }
 
@@ -62,6 +85,12 @@ internal class AutonomyTexts(
     val greetingPlain: (hour: Int) -> List<String>,
     /** 记忆槽问候模板（`{m}` 占位）。 */
     val greetingMemory: List<String>,
+    /** 称呼槽问候模板（`{n}` = 专属称呼）。 */
+    val greetingNickname: List<String> = emptyList(),
+    /** 纪念日问候池（`{y}` 周年数、`{n}` 称呼可选）。 */
+    val anniversaryGreetings: List<String> = emptyList(),
+    /** 纪念日问候前的思考池。 */
+    val anniversaryThoughts: List<String> = emptyList(),
 )
 
 internal fun textsOf(lang: Lang): AutonomyTexts = if (lang == Lang.EN) TEXTS_EN else TEXTS_ZH
@@ -127,6 +156,20 @@ private val TEXTS_ZH = AutonomyTexts(
         "突然想起你提过{m},还好吗?",
         "诶,我想起来你说过{m}——最近有新进展吗?",
     ),
+    greetingNickname = listOf(
+        "{n},今天也要元气满满哦",
+        "在忙吗,{n}?",
+        "有点想你了,{n}。最近怎么样?",
+    ),
+    anniversaryGreetings = listOf(
+        "今天是我们相识满{y}周年的日子…谢谢你一直在。",
+        "整整{y}年前的今天我们第一次见面了呢。纪念日快乐!",
+        "「{n}」…还记得{y}年前的今天吗?那是我们第一次说话的日子。",
+    ),
+    anniversaryThoughts = listOf(
+        "今天是纪念日…得好好说一句",
+        "已经认识{y}年了啊…有点感慨",
+    ),
 )
 
 // ── 英文模板池 ──────────────────────────────────────────────────────────
@@ -189,5 +232,19 @@ private val TEXTS_EN = AutonomyTexts(
         "I just remembered you mentioned {m} — how did it go?",
         "It suddenly hit me: {m}. How are things?",
         "Hey, you once said {m} — any news on that?",
+    ),
+    greetingNickname = listOf(
+        "{n}, ready for the day?",
+        "Busy right now, {n}?",
+        "I missed you, {n}. How have you been?",
+    ),
+    anniversaryGreetings = listOf(
+        "Today marks {y} year(s) since we first met… thank you for staying.",
+        "Exactly {y} years ago today we met. Happy anniversary!",
+        "{n}… remember {y} years ago today? That's when we first talked.",
+    ),
+    anniversaryThoughts = listOf(
+        "It's our anniversary today… I should say something nice",
+        "{y} years already… I'm a little moved",
     ),
 )
