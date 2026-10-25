@@ -3203,6 +3203,13 @@ internal class SoulLinkRenderer(
 
     // ── 防遮挡（墙体自动剖切）────────────────────────────────────────
 
+    /**
+     * 翻转闸门（P2 真机验收 3/3 Filament 崩溃修复）：翻转（layerMask/castShadows
+     * 位写）只允许在「角色静止 + 相机静止」的稳态发生——身体/相机运动窗口内
+     * 冻结评估。崩溃归因见 OcclusionFlipGate 头注。
+     */
+    private val occlusionFlipGate = OcclusionFlipGate()
+
     private fun updateSceneOcclusion(dtSeconds: Float) {
         if (sceneAsset == null || !sceneOcclusion.enabled) return
         cameraManipulator.getLookAt(occlusionEye, occlusionTarget, occlusionUp)
@@ -3212,7 +3219,12 @@ internal class SoulLinkRenderer(
         occlusionBodyPoints[0][0] = head[0]; occlusionBodyPoints[0][1] = head[1]; occlusionBodyPoints[0][2] = head[2]
         occlusionBodyPoints[1][0] = chest[0]; occlusionBodyPoints[1][1] = chest[1]; occlusionBodyPoints[1][2] = chest[2]
         occlusionBodyPoints[2][0] = hips[0]; occlusionBodyPoints[2][1] = hips[1]; occlusionBodyPoints[2][2] = hips[2]
-        sceneOcclusion.update(occlusionEye, occlusionBodyPoints, dtSeconds)
+        // 运动判定：走动中 / 接触定姿过渡中（坐躺 ENTERING）/ 相机 glide 在飞。
+        // 定姿 HOLDING（坐着不动）不算运动——稳态坐姿下剖切照常服务。
+        val bodyMoving = locomotionEngine.snapshot().phase != com.neethu.corelib.WalkPhase.IDLE ||
+            contactPose.snapshot().phase == com.neethu.corelib.ContactPosePhase.ENTERING
+        occlusionFlipGate.update(bodyMoving, shotSteering, dtSeconds)
+        sceneOcclusion.update(occlusionEye, occlusionBodyPoints, dtSeconds, occlusionFlipGate.flipsAllowed)
     }
 
     /**

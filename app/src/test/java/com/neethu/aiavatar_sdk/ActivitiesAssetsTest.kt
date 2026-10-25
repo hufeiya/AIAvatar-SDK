@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -56,12 +57,24 @@ class ActivitiesAssetsTest {
         "cast_spell", "meditate", "game_time",
     )
 
+    /** P2 节日活动包（§5-H 五个）+ 古风包（§5-G P2 行四个;饮酒葫芦 P1 已有）。 */
+    private val p2Ids = setOf(
+        "christmas_gift", "halloween_pumpkin", "newyear_lantern", "birthday_cake", "mooncake_midautumn",
+        "sword_play", "guzheng_play", "fan_play", "oil_umbrella_walk",
+    )
+
+    /** 节日包标签取值域（HolidayCalendar 常量的镜像;解析侧只认小写）。 */
+    private val knownHolidays = setOf(
+        "christmas", "halloween", "spring_festival", "mid_autumn", "birthday",
+    )
+
     @Test
-    fun `catalog carries p0 16 plus p1 23 activities - p1 ids all present`() {
+    fun `catalog carries p0 16 plus p1 23 plus p2 9 activities`() {
         val entries = catalog().entries
-        assertEquals("16 P0 + 23 P1 场景层", 39, entries.size)
+        assertEquals("16 P0 + 23 P1 场景层 + 9 P2 节日/古风", 48, entries.size)
         val ids = entries.map { it.id }.toSet()
         assertTrue("缺 P1 活动: ${p1Ids - ids}", ids.containsAll(p1Ids))
+        assertTrue("缺 P2 活动: ${p2Ids - ids}", ids.containsAll(p2Ids))
         // P0 旗舰升级:reading 换单本书 + 坐姿阅读剪辑;tablet_read 换真平板
         val reading = catalog().find("reading")!!
         assertEquals("06_坐姿/Elbows On Legs Leaning Forward.vrma", reading.animation)
@@ -125,6 +138,61 @@ class ActivitiesAssetsTest {
             assertTrue("P1 活动 '${e.id}' 缺 says", e.says.isNotEmpty())
             if (e.loop) {
                 assertTrue("P1 loop 活动 '${e.id}' 缺 minDwellMs", (e.minDwellMs ?: 0) > 0)
+            }
+        }
+        catalog().entries.filter { it.id in p2Ids }.forEach { e ->
+            assertNotNull("P2 活动 '${e.id}' 缺 hourRange", e.hourRange)
+            assertTrue("P2 活动 '${e.id}' 缺 says", e.says.isNotEmpty())
+            if (e.loop) {
+                assertTrue("P2 loop 活动 '${e.id}' 缺 minDwellMs", (e.minDwellMs ?: 0) > 0)
+            }
+        }
+    }
+
+    // ── P2 节日活动包 + 古风包（docs/prop-system-feasibility.md §5-G/H）────────
+
+    @Test
+    fun `festival pack entries carry known holiday tags and preset vfx`() {
+        val expected = mapOf(
+            "christmas_gift" to "christmas",
+            "halloween_pumpkin" to "halloween",
+            "newyear_lantern" to "spring_festival",
+            "birthday_cake" to "birthday",
+            "mooncake_midautumn" to "mid_autumn",
+        )
+        expected.forEach { (id, holiday) ->
+            val e = catalog().find(id)!!
+            assertEquals("活动 '$id' holiday 标签不符", holiday, e.holiday)
+            assertTrue("活动 '$id' 缺 VFX 组合（§5-H 台词池×VFX 预设）", !e.vfx.isNullOrBlank())
+            assertTrue("活动 '$id' 缺台词池", e.says.isNotEmpty())
+        }
+        // 古风四条不带 holiday（全年可选,不参与日历加权）
+        p2Ids.filter { it !in expected }.forEach { id ->
+            assertNull("古风活动 '$id' 不应带 holiday 标签", catalog().find(id)!!.holiday)
+        }
+        catalog().entries.mapNotNull { it.holiday }.toSet().forEach { tag ->
+            assertTrue("未知节日标签 '$tag'（HolidayCalendar 取值域外）", tag in knownHolidays)
+        }
+    }
+
+    @Test
+    fun `p2 two-prop activities use wear mounts - festival anchors stay in walkable scenes`() {
+        // 双道具/第二道具活动走 {"mount":"wear"}（绑定表 animation→accessory 1:1 装不下）
+        assertEquals(
+            listOf(PropRef("giftBox"), PropRef("santaHat", "wear", null)),
+            catalog().find("christmas_gift")!!.props,
+        )
+        val sword = catalog().find("sword_play")!!.props
+        assertTrue(sword.all { it.isWear })
+        assertEquals(setOf("sword", "scabbard"), sword.map { it.id }.toSet())
+        assertTrue(catalog().find("guzheng_play")!!.props.single().isWear)
+        // 节日五条的锚点落在交互点表（FSM join 的前提）;古风双锚点适配仙居
+        val anchors = sceneAnchorIds()
+        p2Ids.forEach { id ->
+            val e = catalog().find(id)!!
+            if (id != "fan_play" && id != "oil_umbrella_walk") {
+                assertNotNull("P2 活动 '$id' 缺锚点（FSM 节日加权的前提）", e.anchor)
+                assertTrue("P2 活动 '$id' 锚点不在任何场景表", e.anchor in anchors)
             }
         }
     }

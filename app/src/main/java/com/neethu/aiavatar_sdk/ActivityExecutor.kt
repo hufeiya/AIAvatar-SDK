@@ -11,8 +11,11 @@ import com.neethu.corelib.accessory.AccessorySpec
 import com.neethu.corelib.accessory.AccessoryWorldMount
 import com.neethu.orchestrator.activity.ActivityCatalog
 import com.neethu.orchestrator.activity.ActivityEntry
+import com.neethu.orchestrator.activity.HolidayCalendar
+import com.neethu.orchestrator.activity.HolidayCalendar.HolidayDate
 import com.neethu.orchestrator.agent.ActivityFailure
 import com.neethu.orchestrator.agent.AgentToolCatalog
+import com.neethu.orchestrator.memory.MemoryStore
 import com.neethu.orchestrator.session.AvatarSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +52,8 @@ internal class ActivityExecutor(
     private val sessionProvider: () -> AvatarSession?,
     private val coordinator: InteractionCoordinator,
     private val scope: CoroutineScope,
+    /** 长期记忆缝（P2 节日包：生日事实提取 → 生日当天蛋糕加权）；null = 无记忆功能。 */
+    private val memoryStoreProvider: () -> MemoryStore? = { null },
 ) {
 
     /** 活动目录（MainActivity 从 assets 读出注入；缺/脏 = EMPTY 功能静默缺席）。 */
@@ -73,6 +78,13 @@ internal class ActivityExecutor(
      * 无动画可绑不走绑定表——活动开始出现、结束/打断由本执行器收起）。
      */
     private val worldProps = mutableListOf<String>()
+
+    /**
+     * 当前活动穿上的穿戴件 id（P2 节日/古风包 §5-G/H：`{"mount":"wear"}` 道具
+     * ——圣诞帽@head、背挂鞘@chest 这类第二道具,绑定表 animation→accessory
+     * 1:1 装不下,由本执行器按 sidecar 模板链随活动 attach/detach）。
+     */
+    private val wornProps = mutableListOf<String>()
 
     /**
      * 当前活动播的特效（§2.2 可选联动层）：句柄 id（playVfx 返回）+ preset
@@ -106,6 +118,7 @@ internal class ActivityExecutor(
         watchJob?.cancel()
         watchJob = null
         detachWorldProps()
+        detachWearProps()
         stopPlayedVfx()
         record(entry, if (fromAutonomy) "autonomy" else "external")
         currentId = entry.id
@@ -158,6 +171,63 @@ internal class ActivityExecutor(
      */
     fun holdsExternalState(): Boolean = currentId != null && startedExternally
 
+    // ── 节日日历（P2 §5-H：日期加权 + 记忆生日）──────────────────────────
+
+    /**
+     * 调试覆盖日期（ai_cmd `activity forceDate 2026-12-25`）：真机验收不改系统
+     * 时间;null = 跟随系统日历。只影响节日标签判定（加权/观测/LLM 标注），
+     * 不改任何决策逻辑本身（hourRange/作息表仍走真实时钟）。
+     */
+    @Volatile
+    var dateOverride: HolidayDate? = null
+
+    /** 记忆里解析出的用户生日 (月, 日)；null = 记忆无生日事实/还没扫到。 */
+    @Volatile
+    private var birthdayMonthDay: Pair<Int, Int>? = null
+
+    @Volatile
+    private var birthdayScannedAtMs = 0L
+
+    /**
+     * 今日节日标签集（[HolidayCalendar.tagsFor] + 长期记忆生日命中）：FSM 选点
+     * 加权（AutonomyDirector holidayTags）与 LLM 投影标注（AgentActivityTools）
+     * 共用的单一正本。生日记忆节流扫描（5min 一次,Room 查询挂主线程 scope）。
+     */
+    fun activeHolidayTags(): Set<String> {
+        maybeScanBirthday()
+        val today = dateOverride ?: HolidayCalendar.today()
+        val tags = HolidayCalendar.tagsFor(today)
+        val birthday = birthdayMonthDay
+        return if (birthday != null && HolidayCalendar.isBirthday(today, birthday.first, birthday.second)) {
+            tags + HolidayCalendar.BIRTHDAY
+        } else {
+            tags
+        }
+    }
+
+    /** `activity holiday` 观测行：生效日期/覆盖/标签集/生日事实。 */
+    fun holidayStateLine(): String {
+        val today = dateOverride ?: HolidayCalendar.today()
+        return "holiday date=%04d-%02d-%02d".format(Locale.US, today.year, today.month, today.day) +
+            (dateOverride?.let { " (forced, ai_cmd activity forceDate off 还原)" } ?: " (system)") +
+            " tags=${activeHolidayTags().ifEmpty { setOf("none") }}" +
+            " birthday=${birthdayMonthDay?.let { "${it.first}-${it.second}" } ?: "unknown"}"
+    }
+
+    /** 生日记忆节流扫描：新会话/覆盖日期变化后首个观测触发,5min 内不重复。 */
+    private fun maybeScanBirthday() {
+        val now = System.currentTimeMillis()
+        if (now - birthdayScannedAtMs < BIRTHDAY_SCAN_INTERVAL_MS) return
+        birthdayScannedAtMs = now
+        scope.launch {
+            runCatching {
+                val facts = memoryStoreProvider()?.all().orEmpty()
+                    .sortedByDescending { it.updatedAt }.map { it.content }
+                birthdayMonthDay = HolidayCalendar.parseBirthdayMonthDay(facts)
+            }.onFailure { Log.w(TAG, "birthday memory scan failed", it) }
+        }
+    }
+
     // ── 执行链（§2.2）───────────────────────────────────────────────────
 
     private suspend fun runActivity(entry: ActivityEntry, skipAnchor: Boolean) {
@@ -165,6 +235,9 @@ internal class ActivityExecutor(
         //    已在场。锚点在当前场景交互点表里查（无此锚点 = 该场景不摆,记日志
         //    降级——活动本体照跑）。
         attachWorldProps(entry)
+        // 0.5 穿戴件先穿（P2 节日/古风包）：圣诞帽戴头上、剑鞘背背上,走位/就位
+        //    期间道具已在身——「拿着蛋糕走过来」本身就是行为叙事的一部分。
+        attachWearProps(entry)
         // 1. 就位（可选）：FSM GoTo 已就过位（skipAnchor）或已在该锚上则跳过。
         //    借道就位链绕开反向互斥探测（本执行器已自行判过锁,防自锁）。
         val anchor = entry.anchor
@@ -306,6 +379,7 @@ internal class ActivityExecutor(
         currentEntry = null
         startedExternally = false
         detachWorldProps()
+        detachWearProps()
         stopPlayedVfx()
     }
 
@@ -356,6 +430,39 @@ internal class ActivityExecutor(
         worldProps.clear()
     }
 
+    /**
+     * 活动配方里的 `{"mount":"wear"}` 道具（P2 §5-G/H）按 sidecar 目录链挂上
+     * 骨骼：三层合并出规格（模板/校准同 wear_accessory 同链——圣诞帽走
+     * wearHead、背挂鞘走 wearBack 出厂值,真机微调同款生效）。同一活动重复
+     * 启动先清残留（顶替语义与世界摆件一致）。
+     */
+    private fun attachWearProps(entry: ActivityEntry) {
+        val modelId = controller.currentModelId ?: return
+        for (prop in entry.props.filter { it.isWear }) {
+            val catalogEntry = AccessoryCatalog.find(context, prop.id)
+            if (catalogEntry == null) {
+                Log.w(TAG, "activity '${entry.id}' wear prop '${prop.id}' not in accessory catalog (skipped)")
+                continue
+            }
+            controller.detachAccessory(prop.id)
+            val spec = AccessoryCatalog.specFor(context, modelId, catalogEntry)
+            controller.attachAccessory(spec).onSuccess {
+                wornProps += prop.id
+                Log.i(TAG, "activity '${entry.id}' wear prop '${prop.id}' @${spec.bone}")
+            }.onFailure {
+                Log.w(TAG, "activity '${entry.id}' wear prop '${prop.id}' attach failed: ${it.message}")
+            }
+        }
+    }
+
+    /** 活动收场（stop/打断/播完/顶替/失败）摘下穿戴件。 */
+    private fun detachWearProps() {
+        if (wornProps.isEmpty()) return
+        for (id in wornProps) controller.detachAccessory(id)
+        Log.i(TAG, "wear props detached: $wornProps")
+        wornProps.clear()
+    }
+
     private fun record(entry: ActivityEntry, source: String) {
         history.addLast(stamp("start ${entry.id} ($source)"))
         trimHistory()
@@ -393,6 +500,9 @@ internal class ActivityExecutor(
 
         /** 等接触定姿对齐的上限（转身 0.35s+过渡剪辑 ~2s+吸附 0.35s 的数倍余量）。 */
         private const val POSE_ALIGN_TIMEOUT_MS = 15_000L
+
+        /** 生日记忆扫描节流（Room 查询不进决策热路径）。 */
+        private const val BIRTHDAY_SCAN_INTERVAL_MS = 5 * 60_000L
     }
 }
 
@@ -427,26 +537,54 @@ internal fun loadActivityCatalog(context: Context): ActivityCatalog = runCatchin
     context.assets.open(ACTIVITIES_ASSET).use { it.readBytes().toString(Charsets.UTF_8) }
 }.map { ActivityCatalog.parse(it) }.getOrDefault(ActivityCatalog.EMPTY)
 
-/** `ai_cmd activity <list|state|last>`（只读观测,不改决策逻辑）。 */
+/** `ai_cmd activity <list|state|last|holiday|forceDate>`（观测 + forceDate 调试覆盖,不改决策逻辑）。 */
 internal fun activityDebugCommand(executor: ActivityExecutor, arg: String?): String {
-    return when (arg?.trim()?.lowercase()) {
+    val sub = arg?.trim()?.split(Regex("\\s+"), limit = 2) ?: emptyList()
+    return when (sub.firstOrNull()?.lowercase()) {
         null, "", "list" -> {
             val entries = executor.catalog.entries
             if (entries.isEmpty()) {
                 "activities catalog empty (assets/activities/activities.json missing or unparsable)"
             } else {
+                val tags = executor.activeHolidayTags()
                 entries.joinToString("\n") { e ->
                     "- ${e.id} [${e.category}] ${e.name}: ${e.desc}" +
                         (e.anchor?.let { " @$it" } ?: "") +
                         " loop=${e.loop}" +
                         (e.vfx?.let { " vfx=$it" } ?: "") +
+                        (e.holiday?.let { " holiday=$it${if (it in tags) " 【今日】" else ""}" } ?: "") +
                         (e.hourRange?.let { " hours=${it.first}..${it.last}" } ?: "") +
-                        (e.props.filter { it.isWorld }.joinToString("") { " world=${it.id}@${it.anchor}" })
+                        (e.props.filter { it.isWorld }.joinToString("") { " world=${it.id}@${it.anchor}" }) +
+                        (e.props.filter { it.isWear }.joinToString("") { " wear=${it.id}" })
                 }
             }
         }
         "state" -> executor.stateLine()
         "last", "log" -> executor.historyDump()
-        else -> "usage: activity <list|state|last>"
+        "holiday" -> executor.holidayStateLine()
+        "forcedate" -> {
+            val value = sub.getOrNull(1)?.trim()
+            when {
+                value.isNullOrEmpty() -> executor.holidayStateLine() +
+                    "\nusage: activity forceDate <yyyy-MM-dd|off>"
+                value.equals("off", ignoreCase = true) || value.equals("none", ignoreCase = true) -> {
+                    executor.dateOverride = null
+                    "date override cleared — ${executor.holidayStateLine()}"
+                }
+                else -> parseHolidayDate(value)?.let { date ->
+                    executor.dateOverride = date
+                    "date forced — ${executor.holidayStateLine()}"
+                } ?: "cannot parse '$value' as yyyy-MM-dd\nusage: activity forceDate <yyyy-MM-dd|off>"
+            }
+        }
+        else -> "usage: activity <list|state|last|holiday|forceDate <yyyy-MM-dd|off>>"
     }
+}
+
+/** `yyyy-MM-dd` → [HolidayDate]（forceDate 参数解析;非法 = null）。 */
+internal fun parseHolidayDate(text: String): HolidayDate? {
+    val m = Regex("(\\d{4})-(\\d{1,2})-(\\d{1,2})").matchEntire(text.trim()) ?: return null
+    val (y, mo, d) = Triple(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt())
+    if (mo !in 1..12 || d !in 1..31) return null
+    return HolidayDate(y, mo, d)
 }

@@ -94,8 +94,8 @@ internal class AutonomyRig(
      * 投影：sit→SITTING、lie→LYING、带 look 的 stand→LOOKING、其余→WANDER；
      * `kind=prop` 是 P1 §6.2 世界摆件的纯摆放锚点（茶具组的桌面坐标）——
      * 不进 FSM 词汇表（走上去会撞桌子）。P0 道具系统 §3.1：再从活动目录
-     * join 出 [AutonomySpot.activityId]（首个 anchor 命中的活动胜出），
-     * FSM 选点即可能带出 DoActivity。
+     * join 出 [AutonomySpot.activityIds]（P2 节日包起同锚点可叠多条活动,
+     * 决策层按节日命中优先出线），FSM 选点即可能带出 DoActivity。
      */
     fun setVocabulary(
         anchors: List<InteractionAnchor>,
@@ -115,15 +115,17 @@ internal class AutonomyRig(
                 x = anchor.x,
                 z = anchor.z,
                 look = anchor.look,
-                activityId = activities.entries.firstOrNull { it.anchor == anchor.id }?.id,
+                activityIds = activities.entries.filter { it.anchor == anchor.id }.map { it.id },
             )
         }
         val old = director
-        director = AutonomyDirector(spots, schedule, activities = activities).also {
+        director = AutonomyDirector(spots, schedule, activities = activities, holidayTags = {
+            activityExecutor?.activeHolidayTags() ?: emptySet()
+        }).also {
             it.enabled = old?.enabled ?: false
         }
         composer = ThoughtComposer(lang)
-        val joined = spots.count { it.activityId != null }
+        val joined = spots.count { it.activityIds.isNotEmpty() }
         Log.i(TAG, "vocabulary injected: ${spots.size} spots (${spots.groupingBy { it.kind }.eachCount()}) with $joined activity spots")
     }
 

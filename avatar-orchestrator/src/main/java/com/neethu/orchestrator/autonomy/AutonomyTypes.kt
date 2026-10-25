@@ -36,12 +36,17 @@ data class AutonomySpot(
     /** 就位后的持续视线目标（世界坐标 xyz 米）；null = 不干预视线。 */
     val look: List<Float>? = null,
     /**
-     * 该点可附带的活动 id（P0 道具系统 §3.1）：app 侧组装 spots 时从活动目录
-     * join 注入（reading_seat→"reading"）。FSM 零新增状态——选中带活动的点时
-     * 决策多带一条 [AutonomyDirective.DoActivity]，配方执行全在 app 侧。
+     * 该点可附带的活动 id 集（P0 道具系统 §3.1；P2 节日包扩为多候选）：app 侧
+     * 组装 spots 时从活动目录 join 注入（同一锚点可叠多条活动——如 bed_sit 的
+     * 抱熊/喝饮料/生日蛋糕）。决策层按「hourRange 过滤 → 节日命中优先 → 首条
+     * 兜底」挑一条发 [AutonomyDirective.DoActivity]；[activityId] 是首条（既
+     * 有单活动点的语义与 minDwell/退避等沿用主条目）。
      */
-    val activityId: String? = null,
+    val activityIds: List<String> = emptyList(),
 ) {
+    /** 主活动（首条；无活动点 = null）。 */
+    val activityId: String? get() = activityIds.firstOrNull()
+
     /** 与当前位置的平面距离（米）。 */
     fun distanceTo(px: Float, pz: Float): Float = kotlin.math.hypot((x - px).toDouble(), (z - pz).toDouble()).toFloat()
 }

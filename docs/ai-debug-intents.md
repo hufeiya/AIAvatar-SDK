@@ -107,6 +107,7 @@
 | `tools_call` | `ai_arg`=`<工具名> [JSON参数]` | **手工执行一个工具**（绕开 LLM）：先验工具本身再 A/B 模型的工具选择，`ai_arg` 形态 `observe_camera {"description":"杯子"}`（空格分隔，JSON 缺省 `{}`）；未知名返回可用清单 |
 | `observe` | `ai_arg`=可选 JSON | 等价 `tools_call observe_camera`：**任何模式按需拍一张**（视频模式用常驻抓拍环；其他模式自动开相机拍完即关，可带 `lens`:front=拍自己(默认)/back=拍环境）→ 视觉模型描述 → 回灌文本（需摄像头观察开关 + 视觉模型 + 相机权限；未授权返回喂给模型的错误文案） |
 | `agent_state` | — | 智能体工具状态单行快照：总开关/轮数上限/单工具超时/注册表清单/最近一轮工具调用/因「不支持工具」400 被禁用的模型（禁用后本会话不再带 tools 请求） |
+| `activity` | `ai_arg`= list \| state \| last \| holiday \| `forceDate <yyyy-MM-dd\|off>` | 活动族（P0 道具系统 docs/prop-system-feasibility.md）：`list` 活动目录（`holiday=` 节日包标签、命中当日加【今日】标、`wear=`/`world=` 挂载标注）/ `state` 当前活动 / `last` 最近启停记录 / `holiday` 今日节日标签集+记忆生日+覆盖状态 / `forceDate 2026-12-25` 调试覆盖日期（真机验收不改系统时间;`off` 还原,只影响节日加权与观测,不改决策逻辑本体）。真驱动走 `tools_call start_activity {"id":...}` |
 | `memory_list` | `ai_arg`=可选过滤词 | 长期记忆条目清单（docs/memory-feasibility.md，P2）：`id [分类] 内容 (imp=重要度 src=来源)` 按 updatedAt 倒序；带过滤词按内容包含匹配；末尾附总数 |
 | `memory_stats` | — | 记忆库统计：总数/嵌入覆盖率/分类分布 + 待提炼窗口状态行（window=轮数/字符、触发阈值、autoExtract/enabled/extracting——排查「说了怎么没记住」先看这行） |
 | `memory_forget` | `ai_arg`=id 前缀 | 按 id 前缀删一条记忆（前缀必须唯一命中，歧义时列出全部候选）——管理面板单条删除的同路径验证 |

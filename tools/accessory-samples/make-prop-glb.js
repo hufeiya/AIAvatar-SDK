@@ -657,3 +657,219 @@ for (const p of P1_PROPS) {
   fs.writeFileSync(`${p.name}.glb`, glb);
   console.log(`${p.name}.glb: ${(glb.length / 1024).toFixed(1)}KB, ~${p.parts.reduce((s, q) => s + q.geo.idx.length / 3, 0)} triangles`);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// P2 节日活动包+古风包(docs/prop-system-feasibility.md §5 G/H 表 P2 行):
+// 节日 5 件(圣诞帽/南瓜灯/灯笼/蛋糕/月饼)+ 古风 5 件(剑/背挂鞘/折扇/
+// 油纸伞/古筝)。同活模板:米制/Y-up/自然使用朝向 +Z/静态网格/PBR/无骨骼
+// 无动画。全部 CC0 自制,过 validate-glb.js 零告警后拷入 app assets。
+// 显隐通道说明:P2 活动 props 走 {"mount":"wear"} 挂载(执行器随活动
+// attach/detach,不经绑定表)——双道具活动(帽+礼物盒/剑+鞘)绕开绑定表
+// animation→accessory 1:1 的硬约束。
+// ═══════════════════════════════════════════════════════════════════════
+
+const P2_PROPS = [];
+
+// 24. santaHat 圣诞帽:红锥帽身 + 白绒帽檐 + 顶球,头戴件,原点=头心
+//     (几何自带头顶偏移,brim 在局部 +0.10——与 headphones 同款原点口径,
+//     直接复用 wearHead 模板不加新模板)
+P2_PROPS.push({
+  name: 'santaHat',
+  materials: [
+    mat('hat_red', [0.78, 0.10, 0.12, 1], { roughness: 0.6 }),
+    mat('hat_fur', [0.96, 0.95, 0.93, 1], { roughness: 0.85 }),
+  ],
+  parts: [
+    { geo: translate(frustum(0.098, 0.008, 0.17), 0, 0.185, 0), mat: 0 },
+    { geo: translate(rotateX(cylinder(0.112, 0.038), 90), 0, 0.10, 0), mat: 1 },
+    { geo: translate(sphere(0.028, 6, 8), 0, 0.278, 0), mat: 1 },
+  ],
+});
+
+// 25. pumpkinLantern 南瓜灯:橙南瓜身 + 瓜棱(低模平面着色近似) + 瓜蒂 +
+//     镂空脸(眼/嘴暗片贴前脸),原点=瓜心,手持类(holdObject)
+P2_PROPS.push({
+  name: 'pumpkinLantern',
+  materials: [
+    mat('pumpkin_skin', [0.88, 0.42, 0.08, 1], { roughness: 0.45, emissive: [0.32, 0.10, 0.0] }),
+    mat('pumpkin_stem', [0.30, 0.38, 0.14, 1], { roughness: 0.6 }),
+    mat('pumpkin_carve', [0.10, 0.04, 0.01, 1], { roughness: 0.3, emissive: [0.9, 0.45, 0.05] }),
+  ],
+  parts: [
+    { geo: remap(sphere(0.082, 8, 12), p => [p[0], p[1] * 0.85, p[2]]), mat: 0 },
+    { geo: translate(frustum(0.012, 0.006, 0.032), 0, 0.078, 0), mat: 1 },
+    { geo: translate(box(0.024, 0.02, 0.008), -0.028, 0.022, 0.072), mat: 2 },
+    { geo: translate(box(0.024, 0.02, 0.008), 0.028, 0.022, 0.072), mat: 2 },
+    { geo: translate(box(0.052, 0.014, 0.008), 0, -0.032, 0.075), mat: 2 },
+  ],
+});
+
+// 26. lantern 新年灯笼:红纱灯身(椭球) + 上下金盖 + 提梁 + 穗子,
+//     原点=提梁顶(握点,holdWand),灯身垂在手下 ~16cm
+P2_PROPS.push({
+  name: 'lantern',
+  materials: [
+    mat('lantern_skin', [0.82, 0.14, 0.14, 1], { roughness: 0.4, emissive: [0.45, 0.05, 0.03] }),
+    mat('lantern_cap', [0.85, 0.66, 0.20, 1], { metallic: 0.7, roughness: 0.3 }),
+    mat('lantern_tassel', [0.88, 0.70, 0.22, 1], { roughness: 0.6 }),
+  ],
+  parts: [
+    { geo: translate(rotateZ(cylinder(0.0035, 0.05), 90), 0, 0.008, 0), mat: 1 },
+    { geo: translate(remap(sphere(0.062, 8, 12), p => [p[0], p[1] * 0.82, p[2]]), 0, -0.075, 0), mat: 0 },
+    { geo: translate(cylinder(0.036, 0.012), 0, -0.022, 0), mat: 1 },
+    { geo: translate(cylinder(0.036, 0.012), 0, -0.128, 0), mat: 1 },
+    { geo: translate(cylinder(0.004, 0.05), 0, -0.158, 0), mat: 2 },
+    { geo: translate(sphere(0.009, 5, 6), 0, -0.185, 0), mat: 2 },
+  ],
+});
+
+// 27. cake 生日蛋糕:双层奶油胚 + 草莓酱层 + 三根蜡烛 + 焰心,原点=底盘中心
+//     (holdObject,几何自底盘向上)
+P2_PROPS.push({
+  name: 'cake',
+  materials: [
+    mat('cake_plate', [0.92, 0.92, 0.95, 1], { roughness: 0.25, metallic: 0.2 }),
+    mat('cake_cream', [0.97, 0.90, 0.82, 1], { roughness: 0.55 }),
+    mat('cake_berry', [0.85, 0.28, 0.36, 1], { roughness: 0.45 }),
+    mat('cake_candle', [0.40, 0.72, 0.90, 1], { roughness: 0.35 }),
+    mat('cake_flame', [1.0, 0.85, 0.40, 1], { roughness: 0.2, emissive: [1.0, 0.72, 0.25] }),
+  ],
+  parts: [
+    { geo: translate(cylinder(0.088, 0.010), 0, 0.005, 0), mat: 0 },
+    { geo: translate(cylinder(0.075, 0.045), 0, 0.032, 0), mat: 1 },
+    { geo: translate(cylinder(0.0755, 0.010), 0, 0.055, 0), mat: 2 },
+    { geo: translate(cylinder(0.052, 0.040), 0, 0.080, 0), mat: 1 },
+    { geo: translate(cylinder(0.0525, 0.009), 0, 0.100, 0), mat: 2 },
+    { geo: translate(cylinder(0.0035, 0.055), 0, 0.135, 0), mat: 3 },
+    { geo: translate(cylinder(0.0035, 0.055), 0.030, 0.128, 0.012), mat: 3 },
+    { geo: translate(cylinder(0.0035, 0.055), -0.026, 0.128, -0.016), mat: 3 },
+    { geo: translate(sphere(0.006, 5, 6), 0, 0.168, 0), mat: 4 },
+    { geo: translate(sphere(0.006, 5, 6), 0.030, 0.161, 0.012), mat: 4 },
+    { geo: translate(sphere(0.006, 5, 6), -0.026, 0.161, -0.016), mat: 4 },
+  ],
+});
+
+// 28. mooncake 月饼:饼身(扁鼓) + 花边围齿 + 顶面饼纹(回字纹近似),
+//     原点=饼心,手持类(holdObject)
+P2_PROPS.push({
+  name: 'mooncake',
+  materials: [
+    mat('moon_skin', [0.72, 0.50, 0.22, 1], { roughness: 0.55 }),
+    mat('moon_pattern', [0.60, 0.40, 0.16, 1], { roughness: 0.6 }),
+  ],
+  parts: [
+    { geo: translate(remap(sphere(0.042, 8, 14), p => [p[0], p[1] * 0.55, p[2]]), 0, 0, 0), mat: 0 },
+    ...Array.from({ length: 10 }, (_, i) => {
+      const a = (i / 10) * Math.PI * 2;
+      return { geo: translate(rotateZ(cylinder(0.0075, 0.012), 90), Math.cos(a) * 0.037, 0.004, Math.sin(a) * 0.037), mat: 1 };
+    }),
+    { geo: translate(remap(cylinder(0.016, 0.006), p => [p[0], p[1], p[2]]), 0, 0.024, 0), mat: 1 },
+    { geo: translate(remap(cylinder(0.008, 0.004), p => [p[0], p[1], p[2]]), 0, 0.024, 0), mat: 0 },
+  ],
+});
+
+// 29. sword 长剑:剑身(收尖) + 金护手 + 缠绳握柄 + 剑首球,原点=握点,
+//     剑尖朝上总长 ~0.92(holdWand 细长棒类)
+P2_PROPS.push({
+  name: 'sword',
+  materials: [
+    mat('sword_blade', [0.82, 0.84, 0.88, 1], { metallic: 0.9, roughness: 0.2 }),
+    mat('sword_guard', [0.80, 0.64, 0.22, 1], { metallic: 0.85, roughness: 0.3 }),
+    mat('sword_grip', [0.35, 0.12, 0.10, 1], { roughness: 0.6 }),
+  ],
+  parts: [
+    { geo: translate(frustum(0.016, 0.002, 0.72, 4), 0, 0.425, 0), mat: 0 },
+    { geo: translate(box(0.14, 0.016, 0.028), 0, 0.058, 0), mat: 1 },
+    { geo: translate(cylinder(0.011, 0.10), 0, 0, 0), mat: 2 },
+    { geo: translate(sphere(0.015, 6, 8), 0, -0.055, 0), mat: 1 },
+  ],
+});
+
+// 30. scabbard 背挂鞘:鞘体(收口长锥) + 鞘口金环 + 背带双环,原点=鞘心,
+//     几何自带斜背角度(rotateZ -32°,剑柄朝右肩),背挂件(wearBack 模板)
+P2_PROPS.push({
+  name: 'scabbard',
+  materials: [
+    mat('scabbard_body', [0.28, 0.16, 0.30, 1], { roughness: 0.4 }),
+    mat('scabbard_trim', [0.80, 0.66, 0.25, 1], { metallic: 0.85, roughness: 0.28 }),
+    mat('scabbard_strap', [0.22, 0.14, 0.10, 1], { roughness: 0.6 }),
+  ],
+  parts: (() => {
+    const body = rotateZ(frustum(0.023, 0.012, 0.80, 8), -32);
+    const mouth = rotateZ(cylinder(0.027, 0.02, 8), -32);
+    const tip = rotateZ(sphere(0.016, 6, 8), -32);
+    const ringA = rotateZ(rotateX(cylinder(0.010, 0.006, 8), 90), -32);
+    const ringB = rotateZ(rotateX(cylinder(0.010, 0.006, 8), 90), -32);
+    return [
+      { geo: body, mat: 0 },
+      { geo: translate(mouth, 0.185, 0.296, 0), mat: 1 },
+      { geo: translate(tip, -0.185, -0.296, 0), mat: 1 },
+      { geo: translate(ringA, 0.028, 0.044, -0.018), mat: 2 },
+      { geo: translate(ringB, -0.048, -0.077, -0.018), mat: 2 },
+    ];
+  })(),
+});
+
+// 31. foldingFan 折扇:扇骨大骨两根夹扇面(收拢楔形) + 扇钉,原点=扇钉
+//     (握点,holdWand),展开方向 +Z
+P2_PROPS.push({
+  name: 'foldingFan',
+  materials: [
+    mat('fan_paper', [0.94, 0.88, 0.72, 1], { roughness: 0.55 }),
+    mat('fan_rib', [0.42, 0.26, 0.14, 1], { roughness: 0.5 }),
+    mat('fan_pin', [0.82, 0.68, 0.25, 1], { metallic: 0.8, roughness: 0.3 }),
+  ],
+  parts: [
+    { geo: translate(frustum(0.010, 0.052, 0.16, 4), 0, 0.082, 0), mat: 0 },
+    { geo: translate(rotateZ(box(0.006, 0.17, 0.004), 16), 0, 0.084, 0), mat: 1 },
+    { geo: translate(rotateZ(box(0.006, 0.17, 0.004), -16), 0, 0.084, 0), mat: 1 },
+    { geo: translate(sphere(0.007, 5, 6), 0, 0.002, 0), mat: 2 },
+  ],
+});
+
+// 32. oilPaperUmbrella 油纸伞:浅撑伞面(纸黄) + 伞顶竹结 + 竹杆 + 弯柄,
+//     原点=握点(holdWand,与雨伞同款口径)
+P2_PROPS.push({
+  name: 'oilPaperUmbrella',
+  materials: [
+    mat('oil_canopy', [0.88, 0.74, 0.44, 1], { roughness: 0.5 }),
+    mat('oil_wood', [0.52, 0.36, 0.18, 1], { roughness: 0.55 }),
+  ],
+  parts: [
+    { geo: translate(frustum(0.38, 0.02, 0.10, 10), 0, 0.44, 0), mat: 0 },
+    { geo: translate(sphere(0.014, 6, 8), 0, 0.492, 0), mat: 1 },
+    { geo: translate(cylinder(0.007, 0.60), 0, 0.13, 0), mat: 1 },
+    { geo: translate(rotateZ(cylinder(0.0095, 0.08), 90), 0.030, -0.175, 0), mat: 1 },
+  ],
+});
+
+// 33. guzheng 古筝:琴箱(长拱面) + 面板浅色 + 琴尾岳山 + 筝码一排 + 弦面,
+//     场景/腿上大件(holdBig,单骨挂右手+动画握姿),原点=琴箱中心
+P2_PROPS.push({
+  name: 'guzheng',
+  materials: [
+    mat('guzheng_body', [0.48, 0.30, 0.14, 1], { roughness: 0.45 }),
+    mat('guzheng_face', [0.80, 0.64, 0.38, 1], { roughness: 0.4 }),
+    mat('guzheng_bridge', [0.30, 0.20, 0.10, 1], { roughness: 0.5 }),
+    mat('guzheng_string', [0.85, 0.82, 0.72, 1], { metallic: 0.6, roughness: 0.3 }),
+  ],
+  parts: [
+    { geo: box(1.14, 0.075, 0.26), mat: 0 },
+    { geo: translate(box(1.10, 0.008, 0.24), 0, 0.041, 0), mat: 1 },
+    { geo: translate(box(0.028, 0.030, 0.22), 0.52, 0.055, 0), mat: 2 },
+    { geo: translate(box(0.028, 0.024, 0.22), -0.52, 0.052, 0), mat: 2 },
+    ...Array.from({ length: 9 }, (_, i) => ({
+      geo: translate(box(0.014, 0.022, 0.030), -0.36 + i * 0.09, 0.058, 0.02 - i * 0.006),
+      mat: 2,
+    })),
+    { geo: translate(box(1.06, 0.002, 0.004), 0, 0.070, 0.075), mat: 3 },
+    { geo: translate(box(1.06, 0.002, 0.004), 0, 0.070, 0.055), mat: 3 },
+    { geo: translate(box(1.06, 0.002, 0.004), 0, 0.070, 0.035), mat: 3 },
+  ],
+});
+
+for (const p of P2_PROPS) {
+  const glb = buildGlb(p.name, p.parts, p.materials);
+  fs.writeFileSync(`${p.name}.glb`, glb);
+  console.log(`${p.name}.glb: ${(glb.length / 1024).toFixed(1)}KB, ~${p.parts.reduce((s, q) => s + q.geo.idx.length / 3, 0)} triangles`);
+}

@@ -50,21 +50,24 @@ class ActivityAutonomyTest {
     """.trimIndent()
 
     private fun spots(catalog: ActivityCatalog) = listOf(
-        AutonomySpot("reading_seat", AutonomyStateKind.SITTING, x = 2.8f, z = -3.8f, activityId = "reading"),
-        AutonomySpot("desk_seat", AutonomyStateKind.SITTING, x = 1f, z = -5.5f, activityId = "desk_typing"),
+        AutonomySpot("reading_seat", AutonomyStateKind.SITTING, x = 2.8f, z = -3.8f, activityIds = listOf("reading")),
+        AutonomySpot("desk_seat", AutonomyStateKind.SITTING, x = 1f, z = -5.5f, activityIds = listOf("desk_typing")),
     )
 
     private fun director(
         schedule: AutonomySchedule = noIdle,
         activities: ActivityCatalog = catalog(reading, typing),
         seed: Long = 42,
+        holidayTags: Set<String> = emptySet(),
+        spotsOverride: List<AutonomySpot>? = null,
     ) = AutonomyDirector(
-        spots = spots(activities),
+        spots = spotsOverride ?: spots(activities),
         schedule = schedule,
         activities = activities,
         rng = Random(seed),
         nowMs = clock::get,
         hourProvider = { hour },
+        holidayTags = { holidayTags },
     )
 
     private fun idleWorld() = AutonomyWorld()
@@ -197,5 +200,136 @@ class ActivityAutonomyTest {
         d.tick(idleWorld())
         val next = d.nextDecisionAtMs - clock.get()
         assertTrue("nextIn=${next}ms", next in 180_000..600_000)
+    }
+
+    // ── P2 节日活动包：多候选锚点 + 节日加权（docs/prop-system-feasibility.md §5-H）──
+
+    /** 窗边日常(6-11 热饮) + 叠挂中秋赏月(18-24 holiday=mid_autumn) + 对照锚点。 */
+    private fun holidayCatalog() = catalog(
+        """
+        { "id": "hot_drink", "name": "热饮", "desc": "热饮", "category": "food",
+          "anchor": "window_view", "animation": "A.vrma", "hourRange": [6, 11] }
+        """.trimIndent(),
+        """
+        { "id": "mooncake", "name": "赏月", "desc": "赏月", "category": "festival",
+          "anchor": "window_view", "animation": "B.vrma",
+          "hourRange": [18, 24], "holiday": "mid_autumn" }
+        """.trimIndent(),
+        """
+        { "id": "plain_act", "name": "日常", "desc": "日常", "category": "daily",
+          "anchor": "rug", "animation": "C.vrma" }
+        """.trimIndent(),
+    )
+
+    private fun holidaySpots() = listOf(
+        AutonomySpot("window_view", AutonomyStateKind.LOOKING, x = 0f, z = 0f, look = listOf(0f, 1f, -5f), activityIds = listOf("hot_drink", "mooncake")),
+        AutonomySpot("rug", AutonomyStateKind.WANDER, x = 1f, z = 0f, activityIds = listOf("plain_act")),
+    )
+
+    @Test
+    fun `无节日标签——窗外锚点不开门且窗内照常可选（回归）`() {
+        val d = director(
+            activities = holidayCatalog(),
+            spotsOverride = holidaySpots(),
+            schedule = AutonomySchedule(
+                baseWeights = mapOf(
+                    AutonomyStateKind.IDLE_STAND to 0f,
+                    AutonomyStateKind.WANDER to 0f,
+                    AutonomyStateKind.LOOKING to 1f,
+                ),
+                hourRules = emptyList(),
+            ),
+        )
+        d.mount()
+        // 20 点:主活动 hot_drink(6-11)窗外、无节日 → window_view 不开门
+        assertTrue(generateSequence { d.chooseNext(20) }.take(100).none { it.second?.id == "window_view" })
+        // 8 点:主活动窗内 → 照常可选(P1 行为逐位不变;每轮重置锚点防自排除)
+        repeat(100) {
+            d.forceStateForTest(AutonomyStateKind.IDLE_STAND, null)
+            assertEquals("window_view", d.chooseNext(8).second?.id)
+        }
+    }
+
+    @Test
+    fun `节日命中——窗外锚点重新开门且节日活动出线`() {
+        val d = director(
+            activities = holidayCatalog(),
+            spotsOverride = holidaySpots(),
+            schedule = AutonomySchedule(
+                baseWeights = mapOf(AutonomyStateKind.IDLE_STAND to 0f, AutonomyStateKind.WANDER to 0f, AutonomyStateKind.LOOKING to 1f),
+                hourRules = emptyList(),
+            ),
+            holidayTags = setOf("mid_autumn"),
+        )
+        d.mount()
+        // 20 点:hot_drink(6-11)窗外,但 mooncake(18-24)节日命中 → 锚点开门
+        repeat(100) {
+            d.forceStateForTest(AutonomyStateKind.IDLE_STAND, null)
+            assertEquals("window_view", d.chooseNext(20).second?.id)
+        }
+    }
+
+    @Test
+    fun `节日命中——DoActivity 带出节日活动而非主活动`() {
+        val d = director(
+            activities = holidayCatalog(),
+            spotsOverride = holidaySpots(),
+            schedule = AutonomySchedule(
+                baseWeights = mapOf(AutonomyStateKind.IDLE_STAND to 0f, AutonomyStateKind.WANDER to 0f, AutonomyStateKind.LOOKING to 1f),
+                hourRules = emptyList(),
+            ),
+            holidayTags = setOf("mid_autumn"),
+        )
+        d.mount()
+        hour = 20 // hot_drink 窗外、mooncake 窗内
+        clock.addAndGet(120_000)
+        val out = d.tick(idleWorld())
+        assertEquals("mooncake", out.filterIsInstance<AutonomyDirective.DoActivity>().single().activityId)
+    }
+
+    @Test
+    fun `节日强倍率——同 kind 候选里节日锚点压倒距离劣势`() {
+        // 节日锚点放远（衰减 1/(1+8/4)=0.33）,对照锚点放脚边（≈1.0）
+        val d = director(
+            activities = holidayCatalog(),
+            spotsOverride = listOf(
+                AutonomySpot("window_view", AutonomyStateKind.WANDER, x = 8f, z = 0f, activityIds = listOf("hot_drink", "mooncake")),
+                AutonomySpot("rug", AutonomyStateKind.WANDER, x = 0.2f, z = 0f, activityIds = listOf("plain_act")),
+            ),
+            schedule = AutonomySchedule(
+                baseWeights = mapOf(AutonomyStateKind.WANDER to 1f),
+                hourRules = emptyList(),
+            ),
+            holidayTags = setOf("mid_autumn"),
+        )
+        d.mount()
+        // 20 点:rug 的 plain_act 可选,window_view 靠节日开门+×8 → 压倒 4 倍距离劣势
+        // (每轮重置锚点,消禁忌过滤的自排除偏置)
+        var window = 0
+        var rug = 0
+        repeat(200) {
+            d.forceStateForTest(AutonomyStateKind.IDLE_STAND, null)
+            when (d.chooseNext(20).second?.id) {
+                "window_view" -> window++
+                "rug" -> rug++
+            }
+        }
+        assertTrue("window_view=$window 应占多数(>$rug)", window > rug)
+    }
+
+    @Test
+    fun `节日活动 hourRange 窗外——不开门不出线（白天不是中秋夜）`() {
+        val d = director(
+            activities = holidayCatalog(),
+            spotsOverride = holidaySpots(),
+            schedule = AutonomySchedule(
+                baseWeights = mapOf(AutonomyStateKind.IDLE_STAND to 0f, AutonomyStateKind.WANDER to 0f, AutonomyStateKind.LOOKING to 1f),
+                hourRules = emptyList(),
+            ),
+            holidayTags = setOf("mid_autumn"),
+        )
+        d.mount()
+        // 15 点:hot_drink 窗外、mooncake(18-24)也窗外 → 锚点不开门
+        assertTrue(generateSequence { d.chooseNext(15) }.take(100).none { it.second?.id == "window_view" })
     }
 }

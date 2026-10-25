@@ -38,6 +38,16 @@
 | `eyeMask.glb` | 自制（同上，P1 场景层补件） | CC0 |
 | `dumbbell.glb` | 自制（同上） | CC0 |
 | `gourd.glb` | 自制（同上） | CC0 |
+| `santaHat.glb` | 自制（同上，P2 节日活动包） | CC0 |
+| `pumpkinLantern.glb` | 自制（同上，P2 节日活动包） | CC0 |
+| `lantern.glb` | 自制（同上，P2 节日活动包） | CC0 |
+| `cake.glb` | 自制（同上，P2 节日活动包） | CC0 |
+| `mooncake.glb` | 自制（同上，P2 节日活动包） | CC0 |
+| `sword.glb` | 自制（同上，P2 古风包） | CC0 |
+| `scabbard.glb` | 自制（同上，P2 古风包） | CC0 |
+| `foldingFan.glb` | 自制（同上，P2 古风包） | CC0 |
+| `oilPaperUmbrella.glb` | 自制（同上，P2 古风包） | CC0 |
+| `guzheng.glb` | 自制（同上，P2 古风包） | CC0 |
 
 Kenney 许可证全文：<https://kenney.nl/support>（CC0 1.0 Universal，资产页内标注
 "license: Creative Commons Zero (CC0)"）。样例库存档与逐资产校验数据见

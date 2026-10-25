@@ -33,6 +33,8 @@ import org.json.JSONObject
 internal class SceneOcclusionController(private val engine: Engine) {
 
     companion object {
+        private const val TAG = "SceneOcclusion"
+
         /** Fallback (no sidecar): scene node name prefixes treated as occluders.
          *  ⚠刻意不含 FOREST_/大背景板——弯曲网格的世界 AABB 罩住房间，见 attach。 */
         private val OCCLUDER_PREFIXES = listOf(
@@ -160,8 +162,16 @@ internal class SceneOcclusionController(private val engine: Engine) {
      * @param eye camera world position (3 floats)
      * @param bodyPoints avatar world anchor points (head/chest/hips), each 3 floats
      * @param dtSeconds frame delta for the unhide hysteresis
+     * @param flipsAllowed 翻转放行闸（[OcclusionFlipGate]）：false = 冻结 hide/show
+     *   （身体/相机运动窗口内不评估——P2 真机验收 3/3 崩溃的翻转风暴窗口）。
+     *   冻结期间连 unhide 消抖计时也一并冻结，放行后从静止状态重新评估。
      */
-    fun update(eye: FloatArray, bodyPoints: List<FloatArray>, dtSeconds: Float) {
+    fun update(
+        eye: FloatArray,
+        bodyPoints: List<FloatArray>,
+        dtSeconds: Float,
+        flipsAllowed: Boolean = true,
+    ) {
         if (!enabled || groups.isEmpty()) return
         val tm = engine.transformManager
         val rm = engine.renderableManager
@@ -171,6 +181,7 @@ internal class SceneOcclusionController(private val engine: Engine) {
             }
             worldAabbsDirty = false
         }
+        if (!flipsAllowed) return
         for (g in groups) {
             if (g.entities.any { rm.getInstance(it) == 0 }) continue
             if (!g.aabbValid) continue
@@ -237,6 +248,9 @@ internal class SceneOcclusionController(private val engine: Engine) {
             rm.setLayerMask(i, ALL_LAYERS_SELECT, 0x00)
             rm.setCastShadows(i, false)
         }
+        // 翻转诊断（P2 真机验收 3/3 Filament 崩溃的关联观测面）：每次 hide/show
+        // 一行日志——翻转时间线与崩溃时间戳的对拍是下一步归因的关键证据。
+        android.util.Log.i(TAG, "occlusion hide: ${g.name} (hidden=${hiddenCount}/${groups.size})")
     }
 
     private fun show(g: OccluderGroup, rm: com.google.android.filament.RenderableManager) {
@@ -248,5 +262,6 @@ internal class SceneOcclusionController(private val engine: Engine) {
             rm.setLayerMask(i, ALL_LAYERS_SELECT, SHOW_LAYER_MASK)
             rm.setCastShadows(i, true)
         }
+        android.util.Log.i(TAG, "occlusion show: ${g.name} (hidden=${hiddenCount}/${groups.size})")
     }
 }

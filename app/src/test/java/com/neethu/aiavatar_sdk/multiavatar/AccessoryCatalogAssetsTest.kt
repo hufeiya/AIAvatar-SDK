@@ -33,11 +33,14 @@ class AccessoryCatalogAssetsTest {
         )
 
     @Test
-    fun `catalog has 34 entries - 11 legacy + 23 P1 props`() {
+    fun `catalog has 44 entries - 11 legacy + 33 P1+P2 props`() {
         val entries = sidecarEntries()
-        assertEquals(34, entries.size)
+        assertEquals(44, entries.size)
         val withProfile = entries.filter { it.offsetProfile != null }
-        assertEquals("P1 道具入库 20 件 + 场景层补件 3 件(眼罩/哑铃/葫芦)", 23, withProfile.size)
+        assertEquals(
+            "P1 道具入库 20 件 + 场景层补件 3 件(眼罩/哑铃/葫芦) + P2 节日/古风 10 件",
+            33, withProfile.size,
+        )
     }
 
     @Test
@@ -79,10 +82,10 @@ class AccessoryCatalogAssetsTest {
     }
 
     @Test
-    fun `all 9 templates are referenced by at least one prop`() {
+    fun `all 10 templates are referenced by at least one prop`() {
         val used = sidecarEntries().mapNotNull { it.offsetProfile }.toSet()
         assertEquals(
-            "9 模板应全部被引用（P1 场景层加 wearFace 面戴件后 9 个；模板×2 模型=18 次校准的基数）",
+            "10 模板应全部被引用（P2 古风包加 wearBack 背挂件后 10 个；模板×2 模型=20 次校准的基数）",
             AccessoryOffsetProfiles.byName.keys,
             used,
         )

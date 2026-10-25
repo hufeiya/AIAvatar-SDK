@@ -170,4 +170,39 @@ class ActivityCatalogTest {
         val props = ActivityCatalog.parse(json).find("x")!!.props
         assertEquals(listOf(PropRef("ok")), props)
     }
+
+    // ── P2 §5-H/§5-G：holiday 节日标签 + wear 随活动穿戴件 ─────────────────
+
+    @Test
+    fun `holiday 标签解析——缺省 null 与大小写归一`() {
+        val json = """
+            { "activities": [
+                { "id": "fest", "name": "f", "animation": "A.vrma", "holiday": "Christmas" },
+                { "id": "plain", "name": "p", "animation": "B.vrma" }
+            ] }
+        """.trimIndent()
+        val catalog = ActivityCatalog.parse(json)
+        assertEquals("christmas", catalog.find("fest")!!.holiday)
+        assertNull(catalog.find("plain")!!.holiday)
+    }
+
+    @Test
+    fun `wear 挂载解析——mount wear 归一且非 world 非骨骼`() {
+        val json = """
+            { "activities": [ {
+                "id": "x", "name": "x", "animation": "A.vrma",
+                "props": [
+                    "giftBox",
+                    { "id": "santaHat", "mount": "wear" },
+                    { "id": "scabbard", "mount": "Wear" }
+                ]
+            } ] }
+        """.trimIndent()
+        val props = ActivityCatalog.parse(json).find("x")!!.props
+        assertEquals(3, props.size)
+        assertFalse(props[0].isWear)
+        assertTrue(props[1].isWear)
+        assertFalse(props[1].isWorld)
+        assertTrue(props[2].isWear)
+    }
 }

@@ -293,6 +293,86 @@
       "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
       "defaultBone": "rightHand",
       "offsetProfile": "holdBottle"
+    },
+    {
+      "id": "santaHat",
+      "name": "圣诞帽",
+      "file": "santaHat.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "head",
+      "offsetProfile": "wearHead"
+    },
+    {
+      "id": "pumpkinLantern",
+      "name": "南瓜灯",
+      "file": "pumpkinLantern.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "lantern",
+      "name": "新年灯笼",
+      "file": "lantern.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "cake",
+      "name": "生日蛋糕",
+      "file": "cake.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "mooncake",
+      "name": "月饼",
+      "file": "mooncake.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdObject"
+    },
+    {
+      "id": "sword",
+      "name": "长剑",
+      "file": "sword.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "scabbard",
+      "name": "背挂剑鞘",
+      "file": "scabbard.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "chest",
+      "offsetProfile": "wearBack"
+    },
+    {
+      "id": "foldingFan",
+      "name": "折扇",
+      "file": "foldingFan.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "oilPaperUmbrella",
+      "name": "油纸伞",
+      "file": "oilPaperUmbrella.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "guzheng",
+      "name": "古筝",
+      "file": "guzheng.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBig"
     }
   ]
 }

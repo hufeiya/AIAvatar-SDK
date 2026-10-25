@@ -1656,7 +1656,7 @@ private fun DemoScreen(
     }
     val activityCatalog = remember { loadActivityCatalog(context) }
     val activityExecutor = remember {
-        ActivityExecutor(context, controller, { session }, interactionCoordinator, scope)
+        ActivityExecutor(context, controller, { session }, interactionCoordinator, scope) { aiChat.memoryStore }
     }
     activityExecutor.catalog = activityCatalog
     interactionCoordinator.busyProbe = { activityExecutor.isBusy }

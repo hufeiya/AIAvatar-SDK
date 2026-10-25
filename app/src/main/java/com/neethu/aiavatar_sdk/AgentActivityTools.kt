@@ -37,10 +37,13 @@ internal object AgentActivityTools {
             session.tools.unregister(STOP)
             return
         }
+        // 今日节日标注（P2 §5-H）：注册时快照一次（会话重建/切语言刷新;
+        // forceDate 的实时态走 FSM 加权与 `activity holiday` 观测,不重钉 prompt）
+        val todayTags = runCatching { executor.activeHolidayTags() }.getOrDefault(emptySet())
         if (session.tools.find(START) == null) {
             AgentToolCatalog.startActivity(
                 texts,
-                activities = { executor.catalog.entries.map { it.toChoice(lang) } },
+                activities = { executor.catalog.entries.map { it.toChoice(lang, todayTags) } },
                 start = { id -> executor.start(id) },
             ).let { (spec, exec) -> session.tools.register(spec, exec) }
         }
@@ -53,11 +56,13 @@ internal object AgentActivityTools {
         }
     }
 
-    private fun ActivityEntry.toChoice(lang: Lang) =
+    private fun ActivityEntry.toChoice(lang: Lang, todayTags: Set<String>) =
         AgentToolCatalog.ActivityChoice(
             id = id,
             label = if (lang == Lang.EN) nameEn else name,
-            description = desc,
+            // 节日活动命中今日标签 → 描述前缀「今日」——LLM 决策的日历感知
+            // （「今天你生日」类场景无需用户点名,模型自己看到标注就倾向选它）
+            description = (if (holiday != null && holiday in todayTags) "【今日节日】" else "") + desc,
             category = category,
         )
 }

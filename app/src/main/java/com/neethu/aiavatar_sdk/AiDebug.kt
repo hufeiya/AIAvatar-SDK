@@ -284,10 +284,14 @@ fun aiDebugHelp(): String = """
     |                           verifies the tool itself before A/B-ing the
     |                           model's tool choices). ai_arg = "<name> [json]"
     |                           with a space between, e.g. `get_time {}`
-    |  activity <sub>           Activity family (P0 prop system, read-only):
-    |                           list | state | last — catalog / current activity
-    |                           / recent start-stop records. Drive the real chain
-    |                           via `tools_call start_activity {"id":...}`
+|  activity <sub>           Activity family (P0 prop system): list | state |
+|                           last | holiday | forceDate <yyyy-MM-dd|off> —
+|                           catalog (holiday= marks festival packs, 【今日】 =
+|                           active today) / current activity / recent records /
+|                           today's holiday tags + memory birthday / debug
+|                           date override for acceptance without changing the
+|                           system clock (off = restore). Drive the real chain
+|                           via `tools_call start_activity {"id":...}`
 |  observe <arg>            = tools_call observe_camera (snapshot + vision
 |                           describe end-to-end; optional ai_arg = the JSON
 |                           args, default {}). Needs the camera-observe

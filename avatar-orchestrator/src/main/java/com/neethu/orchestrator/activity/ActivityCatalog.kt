@@ -47,6 +47,12 @@ data class ActivityEntry(
     val hourTo: Int? = null,
     /** 台词池：活动开始时 speak() 随机说一句（可带 `<emo:>/<act:>` 标签）。 */
     val says: List<String> = emptyList(),
+    /**
+     * 节日包标签（P2 §5-H）：命中 [HolidayCalendar.tagsFor] 当日标签集时 FSM
+     * 选点对该活动所在锚点强加权（AutonomyDirector 节日倍率）、LLM 投影标注
+     * 「今日」。null = 非节日活动（全年可选）。取值域 = HolidayCalendar 常量。
+     */
+    val holiday: String? = null,
 ) {
     /** 就绪的作息窗口（hourTo 舍）；任一端缺失 = 不限。 */
     val hourRange: IntRange? get() = if (hourFrom != null && hourTo != null) hourFrom until hourTo else null
@@ -56,20 +62,25 @@ data class ActivityEntry(
 }
 
 /**
- * 活动配方里的道具引用（§2.1 `props` 项）。两种写法：
+ * 活动配方里的道具引用（§2.1 `props` 项）。三种写法：
  * - 字符串 `"book"` = 骨骼道具（语义归属；显隐走 bindings.json 绑定表）；
  * - 对象 `{"id":"yoga_mat","mount":"world","anchor":"yoga_spot"}` = 世界摆件
  *   （§6.2 地面/场景道具）：不挂骨骼、不经绑定表，由编排层按 [anchor] 交互点
- *   坐标挂到世界（活动开始出现、结束收起）。
+ *   坐标挂到世界（活动开始出现、结束收起）；
+ * - 对象 `{"id":"santaHat","mount":"wear"}` = 随活动穿戴件（P2 节日/古风包）：
+ *   由编排层按 sidecar 模板链直接 attach（活动开始穿上、结束摘下），**不经
+ *   绑定表**——双道具活动（圣诞帽+礼物盒/剑+背挂鞘）绕开绑定表
+ *   animation→accessory 1:1 的硬约束（P1 真机验收实证的同族冲突）。
  */
 data class PropRef(
     val id: String,
-    /** 挂载类别；`"world"` = 世界摆件（大小写不敏感），其余/null = 骨骼道具。 */
+    /** 挂载类别；`"world"`=世界摆件、`"wear"`=随活动穿戴件（均大小写不敏感），其余/null = 骨骼道具。 */
     val mount: String? = null,
-    /** 世界摆件的交互点 id（§6.2；骨骼道具忽略）。 */
+    /** 世界摆件的交互点 id（§6.2；骨骼道具与穿戴件忽略）。 */
     val anchor: String? = null,
 ) {
     val isWorld: Boolean get() = mount.equals("world", ignoreCase = true)
+    val isWear: Boolean get() = mount.equals("wear", ignoreCase = true)
 }
 
 /**
@@ -146,6 +157,7 @@ class ActivityCatalog(val entries: List<ActivityEntry>) {
                     },
                     says = (o["says"] as? JsonArray)
                         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNullSafe() } ?: emptyList(),
+                    holiday = str("holiday")?.lowercase(),
                 )
             }
             ActivityCatalog(out)

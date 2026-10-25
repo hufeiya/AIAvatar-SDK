@@ -27,6 +27,13 @@ class AutonomyDirector(
     private val rng: Random = Random.Default,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
     private val hourProvider: () -> Int = { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) },
+    /**
+     * 今日节日标签集（P2 节日活动包 §5-H）：命中 [ActivityEntry.holiday] 的
+     * 活动在选点层强加权（[HOLIDAY_BOOST]）、并在其锚点多候选里优先出线。
+     * 集成方每拍注入（app 侧 = 日历标签 + 长期记忆生日命中）；缺省空集 = 无
+     * 节日（加权静默,分布与 P1 逐位一致）。
+     */
+    private val holidayTags: () -> Set<String> = { emptySet() },
 ) {
 
     /** 当前状态（含外部就位的被动续跑）。 */
@@ -209,9 +216,55 @@ class AutonomyDirector(
         if (previous == AutonomyStateKind.LOOKING) out += AutonomyDirective.GazeCamera
         out += AutonomyDirective.GoTo(target, kind)
         // 带活动的点：就位后启动活动配方（P0 道具系统 §3.1；FSM 零新增状态；
-        // 目录查无此活动 = 静默缺席，只走 GoTo 不发 DoActivity）
-        target.activityId?.takeIf { activities[it] != null }?.let { out += AutonomyDirective.DoActivity(it) }
+        // 多候选点按「hourRange 过滤 → 节日命中优先 → 首条兜底」挑一条,
+        // 目录查无此活动 = 静默缺席,只走 GoTo 不发 DoActivity）
+        pickSpotActivity(target)?.let { out += AutonomyDirective.DoActivity(it) }
         return out
+    }
+
+    /**
+     * 多候选活动点的出线挑选（P2 节日包）：hourRange 过滤 → 节日命中的候选
+     * 优先（生日/圣诞当天,锚点上叠的节日活动顶掉日常活动）→ 首条兜底（无
+     * 节日命中 = 与 P1 单候选语义逐位一致）。
+     */
+    private fun pickSpotActivity(spot: AutonomySpot): String? {
+        val known = spot.activityIds.filter { activities[it] != null }
+        if (known.isEmpty()) return null
+        val tags = holidayTags()
+        return known.firstOrNull { isHolidayActive(it, tags) } ?: known.firstOrNull()
+    }
+
+    /** 活动作息窗口过滤：无活动/目录查无/未配窗口 = 不限。 */
+    private fun hourAllowsActivity(activityId: String?, hour: Int): Boolean {
+        if (activityId == null) return true
+        return activities[activityId]?.hourRange?.contains(hour) ?: true
+    }
+
+    /** 活动是否处于节日命中日（[ActivityEntry.holiday] ∈ 今日标签集）。 */
+    private fun isHolidayActive(activityId: String, tags: Set<String> = holidayTags()): Boolean {
+        val holiday = activities[activityId]?.holiday ?: return false
+        return holiday in tags
+    }
+
+    /**
+     * 锚点可选性（P2 节日包的开口语义）：主活动作息窗内照常可选（P1 行为逐位
+     * 不变）；窗外仅当存在「作息窗内且节日命中」的候选时开门——中秋夜赏月
+     * （window_view 主活动 6-11 点,月饼 18-24 点节日命中）这类叠挂才有戏。
+     */
+    private fun spotOpen(spot: AutonomySpot, hour: Int): Boolean {
+        if (hourAllowsActivity(spot.activityId, hour)) return true
+        return spot.activityIds.any { id -> hourAllowsActivity(id, hour) && isHolidayActive(id) }
+    }
+
+    /**
+     * 锚点选点权重：主活动类别倍率（作息表 activityWeights,缺省 1）× 节日
+     * 强倍率（任一候选命中今日节日标签时 [HOLIDAY_BOOST]——权重与出线挑选
+     * 同向,锚点先赢、到点后节日活动顶掉主活动）。
+     */
+    private fun spotWeight(spot: AutonomySpot, categoryBoost: Map<String, Float>): Float {
+        var w = activityWeightBoost(spot.activityId, categoryBoost)
+        if (spot.activityIds.any { isHolidayActive(it) }) w *= HOLIDAY_BOOST
+        return w
     }
 
     /**
@@ -219,7 +272,8 @@ class AutonomyDirector(
      * 状态可用锚点过滤（禁忌：不连去同一点/退避期内刚失败点）→ 距离衰减选点。
      * P0 道具系统 §3.1 增量：活动点在选点层先过 `hourRange` 过滤（作息窗外
      * FSM 不自主选它，LLM/用户指令不受限），再按作息表 `activityWeights`
-     * （category→倍率）参与距离衰减加权。
+     * （category→倍率）参与距离衰减加权。P2 节日包：过滤换 [spotOpen]、权重
+     * 换 [spotWeight]（主活动窗外可被节日候选重新开门 + 命中日强倍率）。
      */
     internal fun chooseNext(hour: Int): Pair<AutonomyStateKind, AutonomySpot?> {
         val weights = schedule.weightsFor(hour).toMutableMap()
@@ -234,18 +288,12 @@ class AutonomyDirector(
             ?: return AutonomyStateKind.IDLE_STAND to null
         if (kind == AutonomyStateKind.IDLE_STAND) return kind to null
         val categoryBoost = schedule.activityWeightsFor(hour)
-        val candidates = spotsFor(kind).filter { hourAllowsActivity(it.activityId, hour) }
+        val candidates = spotsFor(kind).filter { spotOpen(it, hour) }
         val spot = rng.pickWeighted(candidates) { spot ->
             distanceDecay(spot.distanceTo(positionX(), positionZ())) *
-                activityWeightBoost(spot.activityId, categoryBoost)
+                spotWeight(spot, categoryBoost)
         }
         return kind to spot
-    }
-
-    /** 活动作息窗口过滤：无活动/目录查无/未配窗口 = 不限。 */
-    private fun hourAllowsActivity(activityId: String?, hour: Int): Boolean {
-        if (activityId == null) return true
-        return activities[activityId]?.hourRange?.contains(hour) ?: true
     }
 
     /** 活动类别倍率（作息表 activityWeights；缺省 1 = 不影响分布）。 */
@@ -382,6 +430,14 @@ class AutonomyDirector(
 
         /** LOOKING 续盯节拍（就位链 8s 回退之后）。 */
         private const val GAZE_SUSTAIN_PERIOD_MS = 7_000L
+
+        /**
+         * 节日命中日的锚点强倍率（P2 §5-H「按系统日历自动加权」）：压过距离
+         * 衰减（3m≈0.57）与类别倍率（≤2.0）的总和量级——节日当天该锚点在同类
+         * 候选里压倒性胜出,但状态种类（坐/走/看）仍由作息表决定,节日活动
+         * 不会垄断整天的行为分布。
+         */
+        private const val HOLIDAY_BOOST = 8f
     }
 }
 

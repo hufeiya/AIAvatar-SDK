@@ -2,6 +2,7 @@ package com.neethu.aiavatar_sdk
 
 import com.neethu.corelib.vfx.VfxBlending
 import com.neethu.corelib.vfx.VfxInfo
+import com.neethu.orchestrator.activity.HolidayCalendar.HolidayDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -62,5 +63,19 @@ class ActivityExecutorLogicTest {
     fun `nothing played or nothing in scene yields empty targets`() {
         assertTrue(activityVfxStopTargets(null, null, listOf(info("fx1", "rain"))).isEmpty())
         assertTrue(activityVfxStopTargets("magic_circle", null, emptyList()).isEmpty())
+    }
+
+    // ── parseHolidayDate（P2 activity forceDate 参数解析）──────────────────
+
+    @Test
+    fun `forceDate parses yyyy-MM-dd and rejects malformed input`() {
+        assertEquals(HolidayDate(2026, 12, 25), parseHolidayDate("2026-12-25"))
+        assertEquals(HolidayDate(2027, 2, 6), parseHolidayDate("2027-2-6"))
+        // 非法:格式错/月日出界/null 语义(空串)
+        assertEquals(null, parseHolidayDate("2026/12/25"))
+        assertEquals(null, parseHolidayDate("2026-13-01"))
+        assertEquals(null, parseHolidayDate("2026-12-32"))
+        assertEquals(null, parseHolidayDate("yesterday"))
+        assertEquals(null, parseHolidayDate(""))
     }
 }

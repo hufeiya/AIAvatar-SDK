@@ -57,6 +57,14 @@ internal object AccessoryOffsetProfiles {
      */
     val wearFace = Profile("head", floatArrayOf(0f, 0.035f, 0.10f), floatArrayOf(0f, 0f, 0f), 1f)
 
+    /**
+     * 背挂件（P2 §5-G62 剑+背挂鞘）：背部斜挂部件（剑鞘/箭袋）——挂胸骨
+     * （upperChest→chest→spine 语义链,AvatarRuntime 同款回退），出厂值 =
+     * 胸骨后侧偏上（负 Z 为背后;VRM rest 朝向 +Z）。与头戴/面戴分模板防
+     * 模板级校准互相继承。P2 的第 10 个模板。
+     */
+    val wearBack = Profile("chest", floatArrayOf(0f, 0.06f, -0.055f), floatArrayOf(0f, 0f, 0f), 1f)
+
     /** 双手大件（挂单骨 + 动画握姿约束）：吉他。 */
     val holdBig = Profile("rightHand", floatArrayOf(0f, 0.05f, 0.08f), floatArrayOf(0f, 0f, 0f), 1f)
 
@@ -75,6 +83,7 @@ internal object AccessoryOffsetProfiles {
         "holdObject" to holdObject,
         "wearHead" to wearHead,
         "wearFace" to wearFace,
+        "wearBack" to wearBack,
         "holdBig" to holdBig,
         "worldProp" to worldProp,
     )
