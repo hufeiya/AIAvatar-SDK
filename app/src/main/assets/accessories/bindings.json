@@ -8,5 +8,12 @@
   { "animation": "07_日常互动/Female Answers A Phone While Walking.vrma", "accessory": "phone" },
   { "animation": "07_日常互动/Female Using Touchscreen Tablet.vrma", "accessory": "phone", "note": "平板动画先复用手机(同手持语义)" },
   { "animation": "08_舞蹈与表演/MC Rapping On The Microphone.vrma", "accessory": "microphone", "note": "手持麦说唱" },
-  { "animation": "08_舞蹈与表演/Singing While Walking On Stage.vrma", "accessory": "microphone", "note": "边走边唱" }
+  { "animation": "08_舞蹈与表演/Singing While Walking On Stage.vrma", "accessory": "microphone", "note": "边走边唱" },
+  { "animation": "07_日常互动/Sitting At A Computer And Typing.vrma", "accessory": "laptop", "note": "坐姿打字,笔记本在右手(活动 desk_typing,P0 道具系统)" },
+  { "animation": "06_坐姿/Seated Idle With Hands On A Table.vrma", "accessory": "books", "note": "双手搭桌手型=捧书(活动 reading;注意 desk_seat 的坐姿循环同款剪辑,干坐书桌也会捧书)" },
+  { "animation": "01_待机与站姿/Holding An Object Idle.vrma", "accessory": "pillow", "note": "站姿抱枕(活动 rug_pillow_tv)" },
+  { "animation": "06_坐姿/Tapping Fingers From A Sitting Position.vrma", "accessory": "bear", "note": "坐姿抱熊(活动 bed_bear)" },
+  { "animation": "07_日常互动/Petting An Animal.vrma", "accessory": "bear", "note": "撸熊(活动 pet_bear,P0 熊在左手近似场景摆放)" },
+  { "animation": "08_舞蹈与表演/Basic Rock Beat.vrma", "accessory": "radio", "note": "打碟放歌(活动 dj_radio,radio 在右手静持)" },
+  { "animation": "03_打招呼与礼仪/Waving.vrma", "accessory": "lightstick", "note": "挥灯牌应援(活动 lightstick_cheer,配 lightstick_spark VFX)" }
 ]

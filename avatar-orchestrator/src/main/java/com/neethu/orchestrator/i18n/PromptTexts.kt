@@ -252,6 +252,33 @@ interface PromptTexts {
     /** 挂载/卸载执行缝失败（渲染层缺失等）的错误文案。 */
     val toolAccessoryFailed: String
 
+    // ── 智能体工具（P0 道具系统活动，docs/prop-system-feasibility.md §2.3）──
+    val toolStartActivityDescription: String
+    val toolStartActivityHint: String
+    val toolStopActivityDescription: String
+    val toolStopActivityHint: String
+
+    /** 活动已启动的确认文案（[label] 本地化名）。 */
+    fun toolActivityStarted(label: String): String
+
+    /** 活动已停止的确认文案。 */
+    fun toolActivityStopped(label: String): String
+
+    /** 不在活动中时 stop 的非错误文案（幂等语义）。 */
+    val toolActivityNotActive: String
+
+    /** 活动目录查无此 id（schema 与执行时目录漂移兜底）。 */
+    val toolActivityUnknown: String
+
+    /** 上一动作/活动还在进行（防抖忽略）。 */
+    val toolActivityBusy: String
+
+    /** 没加载 3D 模型时的错误文案。 */
+    val toolActivityNoModel: String
+
+    /** 活动执行缝失败的错误文案。 */
+    val toolActivityFailed: String
+
     // ── 智能体工具（P2 特效，docs/vfx-feasibility.md §六 P2）────────────
     val toolPlayEffectDescription: String
     val toolPlayEffectHint: String
@@ -709,6 +736,45 @@ object PromptTextsZh : PromptTexts {
 
     override val toolAccessoryFailed: String =
         "配饰穿戴/摘除失败了。请口头向用户说明这次没成功。"
+
+    // ── 活动（P0 道具系统，docs/prop-system-feasibility.md §2.3）─────────
+
+    override val toolStartActivityDescription: String =
+        "开始做一件事(走到对应位置、道具自动出现在手里、进入状态,如去书桌打字/看书/唱歌/举灯牌应援;id 见参数列表)。"
+
+    override val toolStartActivityHint: String =
+        "用户让你去做某件事(「去看会儿书」「去忙你的吧」「唱一个」「别站着,坐下玩会儿手机」)" +
+            "或你自己想做时调用;id 必须来自参数列表,不要发明;不调用就宣称「已经在做」是错的,不要演;" +
+            "发起活动的同一句话里不要再发 <act:> 手势或 <move:> 标签——身体会自己走到位置、道具自动出现," +
+            "重复发会互相顶掉;loop 活动会持续到你停为止,期间照常说话;不做了用 stop_activity。"
+
+    override val toolStopActivityDescription: String =
+        "停止当前正在做的活动(放下手里的事,道具收起,需要时起身)。"
+
+    override val toolStopActivityHint: String =
+        "用户让你停下手里的事(「别看了」「过来一下」)、或要换一件事之前先停掉旧的;" +
+            "没在做任何活动时调用也无妨,不会出错。"
+
+    override fun toolActivityStarted(label: String): String =
+        "「$label」已经开始了(位置、道具、动作会自动跟上)。请自然地继续对话,不要重复调用本工具。"
+
+    override fun toolActivityStopped(label: String): String =
+        "「$label」已停下,道具已收起。请自然地继续对话。"
+
+    override val toolActivityNotActive: String =
+        "本来就没在做任何活动。请自然地继续对话。"
+
+    override val toolActivityUnknown: String =
+        "活动目录里查无此 id。请改用参数列表里的 id,不要发明活动。"
+
+    override val toolActivityBusy: String =
+        "上一个动作或活动还在进行,这次调用被忽略了。可以稍后再试或先 stop_activity。"
+
+    override val toolActivityNoModel: String =
+        "当前没有加载虚拟形象,活动做不了。请口头向用户说明。"
+
+    override val toolActivityFailed: String =
+        "活动启动失败了。请口头向用户说明这次没成功。"
 
     // ── 特效（P2，docs/vfx-feasibility.md §六 P2）────────────────────────
 
@@ -1230,6 +1296,51 @@ object PromptTextsEn : PromptTexts {
 
     override val toolAccessoryFailed: String =
         "Wearing/removing the accessory failed. Tell the user it didn't work this time."
+
+    // ── Activities (P0 prop system, docs/prop-system-feasibility.md §2.3) ──
+
+    override val toolStartActivityDescription: String =
+        "Start doing something (walk to the spot, the prop appears in hand automatically and you get " +
+            "into it — e.g. type at the desk / read a book / sing / wave a lightstick; ids are in the schema)."
+
+    override val toolStartActivityHint: String =
+        "Call when the user asks you to do something (\"go read for a while\", \"go do your work\", " +
+            "\"sing one\", \"sit down and play on the phone for a bit\") or when you feel like it; " +
+            "the id MUST come from the schema list — never invent one; claiming you're doing it without " +
+            "calling is wrong, never act it out; do NOT also emit <act:> or <move:> tags in the same " +
+            "reply — the body walks over and the prop appears by itself, extra tags fight it; " +
+            "loop activities continue until stopped — keep talking normally while doing them; " +
+            "use stop_activity when done."
+
+    override val toolStopActivityDescription: String =
+        "Stop the current activity (put it down, the prop goes away; stand up if needed)."
+
+    override val toolStopActivityHint: String =
+        "Call when the user asks you to stop what you're doing (\"stop reading\", \"come here a sec\") " +
+            "or before starting something else; calling it while doing nothing is harmless."
+
+    override fun toolActivityStarted(label: String): String =
+        "\"$label\" has started (position, prop and motion follow automatically). " +
+            "Continue naturally — don't call this tool again."
+
+    override fun toolActivityStopped(label: String): String =
+        "\"$label\" has stopped and the prop is put away. Continue naturally."
+
+    override val toolActivityNotActive: String =
+        "You weren't doing any activity anyway. Continue naturally."
+
+    override val toolActivityUnknown: String =
+        "That activity id isn't in the catalog. Use an id from the schema list; never invent activities."
+
+    override val toolActivityBusy: String =
+        "The previous motion or activity is still in progress, so this call was ignored. " +
+            "Try again shortly or stop_activity first."
+
+    override val toolActivityNoModel: String =
+        "No 3D model is loaded, so activities can't run. Tell the user."
+
+    override val toolActivityFailed: String =
+        "Starting the activity failed. Tell the user it didn't work this time."
 
     // ── Effects (P2, docs/vfx-feasibility.md §六 P2) ────────────────────
 

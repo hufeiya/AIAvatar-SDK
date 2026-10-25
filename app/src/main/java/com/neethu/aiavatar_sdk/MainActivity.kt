@@ -1646,9 +1646,24 @@ private fun DemoScreen(
         }
     }
 
+    // ── 场景交互就位链 + P0 道具系统（docs/prop-system-feasibility.md）────
+    //    就位链先建（下面的活动执行器/工具注册/自主 Rig 都要引用）；活动目录
+    //    从 assets/activities/activities.json 读出（缺/脏 = EMPTY 功能静默缺席）；
+    //    执行器与就位链同侧互斥（busyProbe 双向），LLM 工具与 FSM 作息
+    //    （DoActivity）共用同一执行链。
+    val interactionCoordinator = remember {
+        InteractionCoordinator(controller, { session }, scope)
+    }
+    val activityCatalog = remember { loadActivityCatalog(context) }
+    val activityExecutor = remember {
+        ActivityExecutor(context, controller, { session }, interactionCoordinator, scope)
+    }
+    activityExecutor.catalog = activityCatalog
+    interactionCoordinator.busyProbe = { activityExecutor.isBusy }
+
     // P0.5 设备工具（docs/agent-tools-expansion.md）：get_device_status /
     // set_flashlight / send_haptic / read_clipboard / set_ambience / take_photo
-    // 六件统一收进 AgentDeviceTools 注册——MainActivity 只留这一个 effect，
+    // 六件统一收进 AgentDeviceTools 注册——MainActivity 只留这一个 effect,
     // 不再逐个加接线。五个无隐私面工具跟随 agentTools 总开关（关=连 P0 内置
     // 两件也摘，请求不带 tools 键=纯对话）；read_clipboard 独立开关默认关。
     // 会话构造后注册 → registry revision 递增 → 协议块自动重钉（既有指纹机制）。
@@ -1656,9 +1671,13 @@ private fun DemoScreen(
     // controller 推送；氛围只动灯光三字段，不会触发材质回退重载）。
     LaunchedEffect(
         session, uiState.aiPrefs.agentTools, uiState.aiPrefs.readClipboard,
-        uiState.aiPrefs.accessoryTools, uiState.aiPrefs.fxTools, uiState.lang,
+        uiState.aiPrefs.accessoryTools, uiState.aiPrefs.fxTools, uiState.aiPrefs.activityTools,
+        uiState.lang,
     ) {
         val s = session ?: return@LaunchedEffect
+        // P0 道具验收①「手势让位就位链」:身体链(就位/活动执行器)在跑时
+        // <act:> one-shot 手势 BUSY 让位——手势会顶掉步态剪辑/拖住定姿起播
+        s.bodyBusyProbe = { interactionCoordinator.isBusy || activityExecutor.isBusy }
         AgentDeviceTools.registerAll(
             session = s,
             controller = controller,
@@ -1687,6 +1706,15 @@ private fun DemoScreen(
             texts = promptTextsOf(uiState.lang),
             prefs = uiState.aiPrefs,
         )
+        // P0 活动工具（start/stop_activity，跟随 agentTools 总开关 +
+        // activityTools 独立开关默认开；目录空 = 静默缺席不注册）
+        AgentActivityTools.register(
+            session = s,
+            texts = promptTextsOf(uiState.lang),
+            prefs = uiState.aiPrefs,
+            executor = activityExecutor,
+            lang = uiState.lang,
+        )
         // 天空盒工具（set_skybox，只跟 agentTools 总开关——换背景低频良性，
         // 无 fxTools 式独立开关；docs/skybox.md）
         AgentSkyboxTools.register(
@@ -1707,20 +1735,20 @@ private fun DemoScreen(
     // 场景沿用旧房间词表），walkAnchors 进 effect 键 = 换场景自动重注入。
     val walkAnchors = remember(uiState.selectedScene) { loadWalkAnchors(context, uiState.selectedScene) }
     val interactionAnchors = remember(uiState.selectedScene) { loadInteractionAnchors(context, uiState.selectedScene) }
-    val interactionCoordinator = remember {
-        InteractionCoordinator(controller, { session }, scope)
-    }
     interactionCoordinator.anchors = interactionAnchors
 
     // ── 自主生命体（docs/autonomy-feasibility.md）：大脑（orchestrator autonomy/）×
     //    身体（就位链/视线/speak）。词汇表按场景注入（换场景=换注入，FSM 零改动），
     //    作息表读 assets/autonomy/autonomy.schedule.json（脏配置回落默认）。
+    //    P0 道具系统：spots 组装时从活动目录 join activityId（§3.1）。
     val autonomyRig = remember {
-        AutonomyRig(scope, controller, { session }, interactionCoordinator) { aiChat.memoryStore }
+        AutonomyRig(scope, controller, { session }, interactionCoordinator, activityExecutor) { aiChat.memoryStore }
     }
     autonomyUserSpokeHook = { autonomyRig.onUserSpoke() }
     LaunchedEffect(interactionAnchors, uiState.lang) {
-        autonomyRig.setVocabulary(interactionAnchors, loadAutonomySchedule(context), uiState.lang)
+        autonomyRig.setVocabulary(
+            interactionAnchors, loadAutonomySchedule(context), uiState.lang, activityCatalog,
+        )
     }
     // 挂载：会话就绪 + 设置开关（默认开）；子开关变化只同步 flags 不重挂
     LaunchedEffect(
@@ -2965,7 +2993,9 @@ private fun DemoScreen(
                 if (s.tools.find(name) == null) {
                     "unknown tool: $name (available: ${s.tools.list().map { it.name }})"
                 } else {
-                    val result = s.tools.invoke(name, json ?: "{}")
+                    // debugInvokeTool:与 LLM 工具路径同款事件打点——FSM 的
+                    // recentExternalAction 观测/道具联动与产品路径行为一致
+                    val result = s.debugInvokeTool(name, json ?: "{}")
                     "${if (result.isError) "ERROR" else "OK"} $name → ${result.content.take(400)}"
                 }
             },
@@ -3038,6 +3068,7 @@ private fun DemoScreen(
             autonomyToggle = { arg -> autonomyRig.toggle(arg) },
             autonomyGreet = { autonomyRig.forceGreet() },
             autonomyThink = { autonomyRig.forceThink() },
+            activityDebug = { arg -> activityDebugCommand(activityExecutor, arg) },
         )
     }
 

@@ -6,6 +6,7 @@ import com.neethu.corelib.AvatarController
 import com.neethu.corelib.ContactKind
 import com.neethu.corelib.Lang
 import com.neethu.corelib.WalkPhase
+import com.neethu.orchestrator.activity.ActivityCatalog
 import com.neethu.orchestrator.autonomy.AutonomyDirector
 import com.neethu.orchestrator.autonomy.AutonomyDirective
 import com.neethu.orchestrator.autonomy.AutonomySchedule
@@ -51,6 +52,8 @@ internal class AutonomyRig(
     private val controller: AvatarController,
     private val sessionProvider: () -> AvatarSession?,
     private val coordinator: InteractionCoordinator,
+    /** 活动执行器（P0 道具系统）：DoActivity 指令的执行体 + 外部活动态回喂。 */
+    private val activityExecutor: ActivityExecutor? = null,
     /** 记忆库直取缝（问候素材/思考记忆槽；null = 无记忆功能）。 */
     private val memoryStoreProvider: () -> MemoryStore? = { null },
 ) {
@@ -88,9 +91,16 @@ internal class AutonomyRig(
 
     /**
      * 注入动作词汇表与作息表（场景切换/语言变化时重跑）。词汇表从交互点表
-     * 投影：sit→SITTING、lie→LYING、带 look 的 stand→LOOKING、其余→WANDER。
+     * 投影：sit→SITTING、lie→LYING、带 look 的 stand→LOOKING、其余→WANDER；
+     * P0 道具系统 §3.1：再从活动目录 join 出 [AutonomySpot.activityId]
+     * （首个 anchor 命中的活动胜出），FSM 选点即可能带出 DoActivity。
      */
-    fun setVocabulary(anchors: List<InteractionAnchor>, schedule: AutonomySchedule, lang: Lang) {
+    fun setVocabulary(
+        anchors: List<InteractionAnchor>,
+        schedule: AutonomySchedule,
+        lang: Lang,
+        activities: ActivityCatalog = ActivityCatalog.EMPTY,
+    ) {
         val spots = anchors.map { anchor ->
             AutonomySpot(
                 id = anchor.id,
@@ -103,14 +113,16 @@ internal class AutonomyRig(
                 x = anchor.x,
                 z = anchor.z,
                 look = anchor.look,
+                activityId = activities.entries.firstOrNull { it.anchor == anchor.id }?.id,
             )
         }
         val old = director
-        director = AutonomyDirector(spots, schedule).also {
+        director = AutonomyDirector(spots, schedule, activities = activities).also {
             it.enabled = old?.enabled ?: false
         }
         composer = ThoughtComposer(lang)
-        Log.i(TAG, "vocabulary injected: ${spots.size} spots (${spots.groupingBy { it.kind }.eachCount()})")
+        val joined = spots.count { it.activityId != null }
+        Log.i(TAG, "vocabulary injected: ${spots.size} spots (${spots.groupingBy { it.kind }.eachCount()}) with $joined activity spots")
     }
 
     /** 挂载/卸载（app 可见性 × 自主开关 × 会话就绪）。 */
@@ -191,7 +203,9 @@ internal class AutonomyRig(
         val phase = session?.phase?.value ?: ConversationPhase.IDLE
         val walk = controller.getWalkState()
         val walking = walk != null && walk.phase != WalkPhase.IDLE
-        if (autonomyBusy && !coordinator.isBusy && !walking) autonomyBusy = false
+        if (autonomyBusy && !coordinator.isBusy && !walking && activityExecutor?.isBusy != true) {
+            autonomyBusy = false
+        }
         val pose = controller.getContactPoseState()
         return AutonomyWorld(
             phaseBusy = phase != ConversationPhase.IDLE,
@@ -205,7 +219,10 @@ internal class AutonomyRig(
                 else -> null
             },
             contactAnchorId = coordinator.lastAnchorId,
-            recentExternalAction = now - lastExternalActionMs < EXTERNAL_ACTION_FRESH_MS,
+            recentExternalAction = now - lastExternalActionMs < EXTERNAL_ACTION_FRESH_MS ||
+                // P0 道具系统 §3.1:外部(LLM/用户)启动的 loop 活动未结束前,
+                // FSM 记为外部活动态——观望不决策不回弹(书还在手里)。
+                activityExecutor?.holdsExternalState() == true,
         )
     }
 
@@ -228,6 +245,23 @@ internal class AutonomyRig(
                 is AutonomyDirective.StandUp -> {
                     val result = coordinator.clearPose()
                     Log.i(TAG, "standUp: $result")
+                }
+
+                is AutonomyDirective.DoActivity -> {
+                    // FSM 作息带出的活动（P0 道具系统 §3.1）：GoTo 就位链已在跑,
+                    // 执行器等它完成后上配方（不重复就位）。拒绝（目录漂移/无模型）
+                    // 只记日志退避——FSM 的 dwell 兜底,不硬打断决策节拍。
+                    val executor = activityExecutor
+                    if (executor == null) {
+                        Log.i(TAG, "doActivity ignored (no executor wired)")
+                    } else {
+                        autonomyBusy = true
+                        val failure = executor.start(directive.activityId, fromAutonomy = true)
+                        if (failure != null) {
+                            Log.i(TAG, "doActivity '${directive.activityId}' refused: $failure")
+                            autonomyBusy = false
+                        }
+                    }
                 }
 
                 is AutonomyDirective.GazePoint -> session?.faceDriver?.let { fd ->

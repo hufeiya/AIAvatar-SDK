@@ -864,6 +864,111 @@ object AgentToolCatalog {
         return spec to executor
     }
 
+    // ── 活动（P0 道具系统，docs/prop-system-feasibility.md §2.3）─────────
+
+    /**
+     * `start_activity` 的活动目录投影（app 层从 ActivityCatalog 映射注入——
+     * 同 [InteractionChoice] 的「orchestrator 不感知场景表/资产表」惯例）。
+     * [label] 已按会话语言本地化（name/nameEn），[description] 供决策。
+     */
+    data class ActivityChoice(val id: String, val label: String, val description: String, val category: String)
+
+    /**
+     * `start_activity`（P0 道具系统）：开始做一件事——走到对应位置、动画起
+     * 来道具自动出现（绑定表）、可选 VFX 与台词，全部由 app 的执行器编排。
+     * id 是 enum 白名单（目录定型，schema 注册时生成一次、执行时再验——同
+     * wear_accessory 双保险）。活动目录摘要随 systemHint 注入（模式同
+     * interact_with 的交互点表投影）。[start] 缝返回 null = 已启动。
+     */
+    fun startActivity(
+        texts: PromptTexts,
+        activities: () -> List<ActivityChoice>,
+        start: suspend (id: String) -> ActivityFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val current = activities()
+        val spec = ToolSpec(
+            name = "start_activity",
+            description = texts.toolStartActivityDescription,
+            parametersSchema = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put(
+                            "id",
+                            buildJsonObject {
+                                put("type", "string")
+                                put("enum", buildJsonArray { current.forEach { add(JsonPrimitive(it.id)) } })
+                                put("description", "要开始的活动 id（见列表，不要发明）")
+                            },
+                        )
+                    },
+                )
+                put("required", buildJsonArray { add(JsonPrimitive("id")) })
+            },
+            systemHint = texts.toolStartActivityHint + activitySummaryBlock(current),
+        )
+        val executor = ToolExecutor { args ->
+            val raw = stringArg(args, "id")?.lowercase().orEmpty()
+            val choices = activities()
+            val known = choices.firstOrNull { it.id.equals(raw, ignoreCase = true) }
+            when {
+                raw.isEmpty() || known == null -> ToolResult(
+                    texts.toolEnumArgInvalid("start_activity", raw, choices.map { it.id }),
+                    isError = true,
+                )
+                else -> when (start(raw)) {
+                    null -> ToolResult(texts.toolActivityStarted(known.label))
+                    ActivityFailure.UNKNOWN_ACTIVITY -> ToolResult(
+                        texts.toolEnumArgInvalid("start_activity", raw, choices.map { it.id }),
+                        isError = true,
+                    )
+                    ActivityFailure.BUSY -> ToolResult(texts.toolActivityBusy)
+                    ActivityFailure.NO_MODEL -> ToolResult(texts.toolActivityNoModel, isError = true)
+                    ActivityFailure.FAILED -> ToolResult(texts.toolActivityFailed, isError = true)
+                }
+            }
+        }
+        return spec to executor
+    }
+
+    /**
+     * `stop_activity`（P0 道具系统）：停止当前活动（loop 停动画、道具自动收、
+     * 坐/躺中起身）。无参；不在活动中时返回「本来就没在做」非 error。
+     * [current] 供执行前观测（不活动就不打扰执行缝）。
+     */
+    fun stopActivity(
+        texts: PromptTexts,
+        current: () -> ActivityChoice?,
+        stop: suspend () -> ActivityFailure?,
+    ): Pair<ToolSpec, ToolExecutor> {
+        val spec = ToolSpec(
+            name = "stop_activity",
+            description = texts.toolStopActivityDescription,
+            parametersSchema = noArgSchema,
+            systemHint = texts.toolStopActivityHint,
+        )
+        val executor = ToolExecutor { _ ->
+            val active = current()
+            if (active == null) {
+                return@ToolExecutor ToolResult(texts.toolActivityNotActive)
+            }
+            when (stop()) {
+                null -> ToolResult(texts.toolActivityStopped(active.label))
+                ActivityFailure.BUSY -> ToolResult(texts.toolActivityBusy)
+                ActivityFailure.NO_MODEL -> ToolResult(texts.toolActivityNoModel, isError = true)
+                ActivityFailure.FAILED -> ToolResult(texts.toolActivityFailed, isError = true)
+                ActivityFailure.UNKNOWN_ACTIVITY -> ToolResult(texts.toolActivityUnknown, isError = true)
+            }
+        }
+        return spec to executor
+    }
+
+    /** 活动目录摘要（id 名称[类别]: 描述）——systemHint 注入的正文。 */
+    private fun activitySummaryBlock(choices: List<ActivityChoice>): String =
+        if (choices.isEmpty()) "" else "\n可用活动（id 名称[类别]: 描述）：\n" +
+            choices.joinToString("\n") { "- ${it.id} ${it.label}[${it.category}]: ${it.description}" }
+
     /** "2026-10-11 21:34 周日 (UTC+8)" 形态；非整时区带分钟（UTC+5:30）。 */
     internal fun formatDeviceTime(epochMs: Long, zone: ZoneId, lang: Lang): String {
         val at = ZonedDateTime.ofInstant(Instant.ofEpochMilli(epochMs), zone)
@@ -966,4 +1071,22 @@ enum class EffectPlayFailure {
 
     /** 渲染层未就绪（材质编译失败）或对应批容量已满。 */
     NOT_AVAILABLE,
+}
+
+/**
+ * [AgentToolCatalog.startActivity] / [stopActivity] 的缝失败归因；null = 成功
+ * （未知名在工具层被白名单拦截）。P0 道具系统 docs/prop-system-feasibility.md §2.3。
+ */
+enum class ActivityFailure {
+    /** 活动目录查无此 id（schema 与执行时目录漂移的兜底）。 */
+    UNKNOWN_ACTIVITY,
+
+    /** 上一条就位链/活动还在进行（执行互斥，防抖忽略）。 */
+    BUSY,
+
+    /** 没加载 3D 模型。 */
+    NO_MODEL,
+
+    /** 其他失败（锚点失效/动画加载失败等）。 */
+    FAILED,
 }

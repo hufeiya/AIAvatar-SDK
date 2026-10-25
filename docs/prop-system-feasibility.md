@@ -1,6 +1,6 @@
 # 道具系统(Prop/Activity):从"被动配饰"到"自主使用道具"落地设计
 
-日期:2026-10-25 · 代码基线:`c5b2ce7`(自主生命体 P0 验收通过) · 地位:**调研定稿,尚未开发**
+日期:2026-10-25 · 代码基线:`c5b2ce7`(自主生命体 P0 验收通过) · 地位:**P0 已落地:2026-10-25 真机验收 6/6 通过(落地记录见 §7);P1/P2 未开发**
 一句话:让大模型和自主状态机能"决定做一件事"——「我看会书」一句话(或 FSM 作息自发)完成:走到阅读椅、坐下、手里变出一本书、翻开看 20 分钟;道具不再只是"给用户戴上看的挂件",而是**行为叙事的一部分**。
 
 ---
@@ -12,6 +12,7 @@
 3. 两个自主来源共用同一套活动目录:**FSM 作息**(零 LLM,`AutonomyDirector` 选点时带出活动,「闲着没事看会书」)+ **LLM 决策**(新工具 `start_activity(id)`,用户说「你看会书吧别玩手机」或模型自己想)。
 4. 场景大表 70 个(§5),其中 **15 个零采购、2 个有替代跑法**(现有道具×现有动画直接组合,P0 验收编排器);道具 11→45+ 件的采购/生成清单(§6);动画缺口 ~20 个且**优先从本地 445 个 VRMA 源库补**(§6.3)。
 5. 工作量 ≈ **14 人日**:P0 编排器+零采购场景 4 天,P1 资产扩充第一波 5 天,P2 深度联动(VFX 组合技/场景道具/节日包/古风包)5 天。
+6. **P0 已落地(2026-10-25,真机验收 6/6 通过)**:活动目录 16 条(15 零采购+看书替代跑法)上线,`start_activity/stop_activity` 与 FSM `DoActivity` 真机全过——发送到道具 7.3s≤8s、25min 放置窗 2 次自主带道具活动、对话打断道具不消失、stop 干净收场、穿戴叠加共存、fps 60 零崩溃;全仓 1354 单测全绿。明细与新坑见 §7 落地记录。
 
 ---
 
@@ -342,6 +343,8 @@ LLM 自发决策(没人说话也想换活动)走 autonomy-feasibility §4.2 的"
 5. 绑定表补条目:坐姿打字→laptop、写字→(空手)、抱枕→Holding An Object Idle、抱熊→同;per-binding offset 字段(若 laptop 腿上偏移需要)。
 6. ai_cmd 观测:`activity list/state`。
 7. **真机验收**:①「去看会儿书」→ 全链(走→坐→出道具→说话);②FSM 放置 10 分钟,作息表触发 ≥2 个带道具活动;③说话打断:loop 活动中对话,道具不消失、说完继续;④stop_activity 干净收场;⑤`start_activity` 期间再调 `wear_accessory` 可叠加;⑥fps 与崩溃扫描照旧口径。
+
+> **落地记录(2026-10-25,P0 真机验收 6/6 通过,全仓 1354 单测全绿)**:做了——活动目录 16 条(15 零采购+看书替代跑法,`assets/activities/activities.json`)、`ActivityCatalog`(orchestrator,解析+enum 白名单)、app `ActivityExecutor`(就位→动画→vfx→says→FSM 同步,与就位链同一把互斥锁,反向 busyProbe 互让)、`start_activity/stop_activity` 工具(双语 PromptTexts+activityTools 独立开关默认开)、`AutonomySpot.activityId`+`DoActivity` directive+作息表 `activityWeights`、绑定表补 7 条、ai_cmd `activity list/state/last` 只读观测;companion 侧 DoActivity 记日志静默缺席(随 autonomy 搬迁是 P3,§10)。验收——①发送到道具 7.3s≤8s(LLM 4.6s+走坐链 2.7s);②25min 干净放置窗 2 次自主带道具活动(desk_typing 持续 9min+rug_pillow_tv settled 到收窗),上轮走动收敛回归修复实证:全窗零 walk 超时/断路器触发,FSM pending 全部正常清零;③loop 中对话道具不消失、回完继续;④stop 干净收场、空闲 stop 非 error、FSM 5s 内回 IDLE;⑤活动中 wear_accessory 叠加同屏;⑥fps 3 采样全 60、零 FATAL、进程无重启。新坑两处(活动系统都是"暴露器"而非根因)——其一,VRM1 中间父节点让 hips 只读局部 y 偏小 5.8×,步幅提取同倍失真(就位链 15-20s 的根因),修复=hips→root 祖先链 rest y 累积(`accumulateHeightY` 纯函数单测锁死);其二,步速校准后暴露走动收敛回归(r2 验收② 仅 1 次自主活动的真因):0.3-0.5m 短起步腿与转弯半径(约 0.4-0.5m)同量级→围目标振荡永不进 0.06m 到达半径,停滞看门狗只抓"原地不动"抓不到绕圈,FSM pending 拖 10-12min;三层修复=引擎转弯半径封顶(航向误差门控,对齐直行与摇杆全速保留)+driver 距首途经点 <0.6m 跳过 U 型首腿+渲染层 40s 非收敛断路器(arrived=false 清腿,自主循环 ≤40s 自愈),步态播放速比分母同步改提取口径校准(消除 ~25% 执行增益);新增 10 个收敛/跳腿单测,r2 实测坐标离散仿真复现机理(K=0.37 旧步速 1.7s 收敛/K≥1.0 永不收敛)。遗留:「别看了…停」这类不含工具名的措辞偶尔仍重命中 start_activity,话里明确带"停下手头活动"即中(既有 whimsy,非本期引入)。
 
 ### P1 资产扩充第一波(≈5 人日)——道具 11→32,场景 +18
 

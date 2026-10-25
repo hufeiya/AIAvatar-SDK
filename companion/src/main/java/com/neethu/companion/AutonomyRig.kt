@@ -232,6 +232,11 @@ internal class AutonomyRig(
                     Log.i(TAG, "standUp: $result")
                 }
 
+                // P0 道具系统（docs/prop-system-feasibility.md §10）：活动执行器随
+                // autonomy 一起搬迁是 P3 工作,companion 先记日志静默缺席。
+                is AutonomyDirective.DoActivity ->
+                    Log.i(TAG, "doActivity '${directive.activityId}' ignored (companion 搬迁 P3)")
+
                 is AutonomyDirective.GazePoint -> session?.faceDriver?.let { fd ->
                     fd.setGazePoint(directive.x, directive.y, directive.z)
                     fd.setGazeMode(GazeMode.POINT)

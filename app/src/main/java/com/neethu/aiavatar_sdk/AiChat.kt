@@ -111,6 +111,13 @@ data class AiChatPrefs(
      */
     val fxTools: Boolean = false,
     /**
+     * 活动工具（P0 道具系统，docs/prop-system-feasibility.md §2.3）：
+     * start_activity/stop_activity 两工具（跟随 agentTools 总开关）。默认开
+     * ——「做一件事」（去看书/去打字/唱一个）是对话的自然延伸，无隐私面。
+     * 身份签名刻意不含（与其他工具开关同列）。FSM 作息活动走 autonomy 开关。
+     */
+    val activityTools: Boolean = true,
+    /**
      * 自主生命体总开关（docs/autonomy-feasibility.md）：FSM 在没人理的时候
      * 自己走动/坐躺/看窗外（决策零 LLM，确定性作息表+加权随机）。默认开。
      * 身份签名刻意不含（不改对话能力面，不轮换上下文）。
@@ -244,6 +251,7 @@ private const val KEY_AI_MEMORY = "ai_agent_memory"
 private const val KEY_AI_MEMORY_AUTO_EXTRACT = "ai_memory_auto_extract"
 private const val KEY_AI_ACCESSORY_TOOLS = "ai_accessory_tools"
 private const val KEY_AI_FX_TOOLS = "ai_fx_tools"
+private const val KEY_AI_ACTIVITY_TOOLS = "ai_activity_tools"
 private const val KEY_AI_AUTONOMY = "ai_autonomy"
 private const val KEY_AI_GREETINGS = "ai_greetings"
 private const val KEY_AI_THOUGHT_BUBBLE = "ai_thought_bubble"
@@ -289,6 +297,7 @@ fun SharedPreferences.loadAiPrefs(): AiChatPrefs {
         memoryAutoExtract = getBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, true),
         accessoryTools = getBoolean(KEY_AI_ACCESSORY_TOOLS, true),
         fxTools = getBoolean(KEY_AI_FX_TOOLS, false),
+        activityTools = getBoolean(KEY_AI_ACTIVITY_TOOLS, true),
         autonomy = getBoolean(KEY_AI_AUTONOMY, true),
         greetings = getBoolean(KEY_AI_GREETINGS, true),
         thoughtBubble = getBoolean(KEY_AI_THOUGHT_BUBBLE, true),
@@ -322,6 +331,7 @@ fun SharedPreferences.saveAiPrefs(p: AiChatPrefs) {
         .putBoolean(KEY_AI_MEMORY_AUTO_EXTRACT, p.memoryAutoExtract)
         .putBoolean(KEY_AI_ACCESSORY_TOOLS, p.accessoryTools)
         .putBoolean(KEY_AI_FX_TOOLS, p.fxTools)
+        .putBoolean(KEY_AI_ACTIVITY_TOOLS, p.activityTools)
         .putBoolean(KEY_AI_AUTONOMY, p.autonomy)
         .putBoolean(KEY_AI_GREETINGS, p.greetings)
         .putBoolean(KEY_AI_THOUGHT_BUBBLE, p.thoughtBubble)

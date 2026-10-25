@@ -27,6 +27,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -646,6 +647,77 @@ class AvatarSessionTagsTest {
         assertEquals(happy to listOf(on, off), AvatarSession.splitEmotionRun(listOf(happy, on, off)))
         assertEquals(on to listOf(off, happy), AvatarSession.splitEmotionRun(listOf(on, off, happy)))
         assertEquals(happy to listOf(on, off), AvatarSession.splitEmotionRun(listOf(EmotionCue("sad", .5f), happy, on, off)))
+    }
+
+    // ── P0 道具系统验收修复:手势让位身体链 + 手动工具事件打点 ─────────────
+
+    @Test
+    fun `act 手势让位身体链——bodyBusyProbe 置忙时 BUSY 拒绝,关闭后照常播`() = runTest {
+        val llm = SharedFlowLlm()
+        val tts = FakeTts()
+        val gestures = FakeGestureDriver()
+        val session = newSession(llm, tts, RecordingQueue(), gestures)
+        session.actionCatalog = listOf(ActionEntry("wave", "挥手问候", assetPath = "animations/wave.vrma"))
+        session.llmConfig = LlmConfig("http://x", "key", "m")
+        session.ttsConfig = TtsConfig(model = "tts", voice = "v")
+        session.bodyBusyProbe = { true } // 就位链/活动执行器在跑
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        session.send("你好")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:wave>好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+
+        // 不播、不发 ActionStarted、以 BUSY 拒绝(可观测)
+        assertTrue(gestures.played.isEmpty())
+        assertEquals(0, events.filterIsInstance<AvatarEvent.ActionStarted>().size)
+        val rejected = events.filterIsInstance<AvatarEvent.TagRejected>()
+        assertEquals(1, rejected.size)
+        assertEquals("act", rejected[0].kind)
+        assertEquals(com.neethu.orchestrator.tag.TagCapabilityRegistry.Reason.BUSY, rejected[0].reason)
+
+        // 探针回落(默认 false 语义):同一手势下一回合照常播
+        session.bodyBusyProbe = { false }
+        session.send("再来一次")
+        llm.stream.tryEmit(LlmStreamEvent.TextDelta("<act:wave>好。"))
+        llm.stream.tryEmit(LlmStreamEvent.Finish(null))
+        testScheduler.runCurrent()
+        assertEquals(listOf("wave"), gestures.played)
+    }
+
+    @Test
+    fun `debugInvokeTool 与 LLM 工具路径同款事件打点`() = runTest {
+        val session = newSession(SharedFlowLlm(), FakeTts(), RecordingQueue(), FakeGestureDriver())
+        session.tools.register(
+            com.neethu.aiadapter.model.ToolSpec(
+                name = "ping",
+                description = "test tool",
+                parametersSchema = kotlinx.serialization.json.buildJsonObject {
+                    put("type", "object")
+                },
+            ),
+            com.neethu.orchestrator.agent.ToolExecutor { com.neethu.orchestrator.agent.ToolResult("pong") },
+        )
+        val events = mutableListOf<AvatarEvent>()
+        collectInto(session, events)
+
+        val result = session.debugInvokeTool("ping", "{}")
+        testScheduler.runCurrent()
+        assertFalse(result.isError)
+        assertEquals("pong", result.content)
+        // Started/Finished 成对打点——FSM 的 recentExternalAction 等观测与产品路径一致
+        assertEquals(listOf(AvatarEvent.ToolCallStarted("ping")), events.filterIsInstance<AvatarEvent.ToolCallStarted>())
+        assertEquals(
+            listOf(AvatarEvent.ToolCallFinished("ping", false)),
+            events.filterIsInstance<AvatarEvent.ToolCallFinished>(),
+        )
+
+        // 未知工具:错误结果,不发 Started(LLM 路径只在模型实际发起后才 Started)
+        val unknown = session.debugInvokeTool("nope", "{}")
+        testScheduler.runCurrent()
+        assertTrue(unknown.isError)
+        assertEquals(1, events.filterIsInstance<AvatarEvent.ToolCallStarted>().size)
     }
 
 }

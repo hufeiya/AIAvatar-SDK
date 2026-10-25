@@ -1,5 +1,6 @@
 package com.neethu.orchestrator.autonomy
 
+import com.neethu.orchestrator.activity.ActivityCatalog
 import java.util.Calendar
 import kotlin.random.Random
 
@@ -21,6 +22,8 @@ class AutonomyDirector(
     var spots: List<AutonomySpot>,
     val schedule: AutonomySchedule = AutonomySchedule.DEFAULT,
     private val limits: AutonomyLimits = AutonomyLimits(),
+    /** 活动目录（P0 道具系统 §3.1）：选点层 hourRange 过滤 + 类别倍率 + minDwell。 */
+    val activities: ActivityCatalog = ActivityCatalog.EMPTY,
     private val rng: Random = Random.Default,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
     private val hourProvider: () -> Int = { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) },
@@ -205,12 +208,18 @@ class AutonomyDirector(
         val out = mutableListOf<AutonomyDirective>()
         if (previous == AutonomyStateKind.LOOKING) out += AutonomyDirective.GazeCamera
         out += AutonomyDirective.GoTo(target, kind)
+        // 带活动的点：就位后启动活动配方（P0 道具系统 §3.1；FSM 零新增状态；
+        // 目录查无此活动 = 静默缺席，只走 GoTo 不发 DoActivity）
+        target.activityId?.takeIf { activities[it] != null }?.let { out += AutonomyDirective.DoActivity(it) }
         return out
     }
 
     /**
      * 加权随机选下一状态与锚点（§4.2）：作息权重 → LYING 后偏 WANDER →
      * 状态可用锚点过滤（禁忌：不连去同一点/退避期内刚失败点）→ 距离衰减选点。
+     * P0 道具系统 §3.1 增量：活动点在选点层先过 `hourRange` 过滤（作息窗外
+     * FSM 不自主选它，LLM/用户指令不受限），再按作息表 `activityWeights`
+     * （category→倍率）参与距离衰减加权。
      */
     internal fun chooseNext(hour: Int): Pair<AutonomyStateKind, AutonomySpot?> {
         val weights = schedule.weightsFor(hour).toMutableMap()
@@ -224,10 +233,26 @@ class AutonomyDirector(
         val kind = rng.pickWeighted(available) { weights[it] ?: 1f }
             ?: return AutonomyStateKind.IDLE_STAND to null
         if (kind == AutonomyStateKind.IDLE_STAND) return kind to null
-        val spot = rng.pickWeighted(spotsFor(kind)) { spot ->
-            distanceDecay(spot.distanceTo(positionX(), positionZ()))
+        val categoryBoost = schedule.activityWeightsFor(hour)
+        val candidates = spotsFor(kind).filter { hourAllowsActivity(it.activityId, hour) }
+        val spot = rng.pickWeighted(candidates) { spot ->
+            distanceDecay(spot.distanceTo(positionX(), positionZ())) *
+                activityWeightBoost(spot.activityId, categoryBoost)
         }
         return kind to spot
+    }
+
+    /** 活动作息窗口过滤：无活动/目录查无/未配窗口 = 不限。 */
+    private fun hourAllowsActivity(activityId: String?, hour: Int): Boolean {
+        if (activityId == null) return true
+        return activities[activityId]?.hourRange?.contains(hour) ?: true
+    }
+
+    /** 活动类别倍率（作息表 activityWeights；缺省 1 = 不影响分布）。 */
+    private fun activityWeightBoost(activityId: String?, weights: Map<String, Float>): Float {
+        if (activityId == null || weights.isEmpty()) return 1f
+        val category = activities[activityId]?.category ?: return 1f
+        return weights[category] ?: 1f
     }
 
     /** 状态候选锚点：禁忌过滤（不连去同一点 + 退避期内刚失败的点）。 */
@@ -255,7 +280,9 @@ class AutonomyDirector(
 
     private fun onArrived(goTo: AutonomyDirective.GoTo, now: Long) {
         abortedSpotId = null
-        nextDecisionAtMs = now + dwellFor(goTo.state)
+        // 带活动的点：dwell 不短于活动 minDwellMs（P0 道具系统 §2.1，防抽搐感）
+        val activityMinDwell = goTo.spot.activityId?.let { activities[it]?.minDwellMs } ?: 0L
+        nextDecisionAtMs = now + maxOf(dwellFor(goTo.state), activityMinDwell)
         if (goTo.state == AutonomyStateKind.LOOKING) {
             nextGazeSustainAtMs = now + GAZE_SUSTAIN_PERIOD_MS
         }

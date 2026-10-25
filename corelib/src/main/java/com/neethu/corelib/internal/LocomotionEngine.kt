@@ -50,6 +50,14 @@ internal class LocomotionEngine {
          * eases into the stop instead of hard-stopping at full pace.
          */
         private const val BRAKE_DECEL = 2.2f
+
+        /**
+         * 转弯半径系数（P0 道具验收②r2 回归）：commanded ≤ TURN_RATE·dist·κ
+         * 让螺旋半径始终小于剩余距离——短距+大航向误差的起步腿（就近 waypoint
+         * 接力,r2 实测 0.52m/97°）在提取步速提上来后转弯半径(~0.4-0.5m)与目标
+         * 距离同量级,围绕目标振荡永不收敛(12min 卡死)。κ=0.7 远距腿仅慢 ~0.5s。
+         */
+        private const val TURN_RADIUS_K = 0.7f
     }
 
     /** Per-frame root motion to apply: world translation + world-Y rotation. */
@@ -242,12 +250,15 @@ internal class LocomotionEngine {
         }
 
         val dHeading: Float
+        val headingErrRad: Float
         if (headingLocked) {
             dHeading = 0f
+            headingErrRad = 0f
         } else {
             // Forward = (sin h, 0, cos h) → desired heading = atan2(dx, dz).
             val desired = atan2(dx, dz)
             val err = wrapAngle(desired - headingRad)
+            headingErrRad = err
             dHeading = err.coerceIn(-TURN_RATE_RAD_PER_S * dtSeconds, TURN_RATE_RAD_PER_S * dtSeconds)
             headingRad += dHeading
         }
@@ -280,7 +291,12 @@ internal class LocomotionEngine {
         // approach so the last strides decelerate into the stop instead of
         // hard-stopping at full pace.
         val brakeSpeed = sqrt(2f * BRAKE_DECEL * dist)
-        val commanded = minOf(speed, brakeSpeed) * ease
+        // 转弯半径封顶（见 TURN_RADIUS_K 注释）：只在航向误差显著时介入——
+        // 对齐直行（摇杆 lookahead 恒 0.35m 前方）不封,模拟量全速不受影响。
+        val turnRadiusCap =
+            if (kotlin.math.abs(headingErrRad) > ALIGN_RAD) TURN_RATE_RAD_PER_S * dist * TURN_RADIUS_K
+            else Float.MAX_VALUE
+        val commanded = minOf(speed, brakeSpeed, turnRadiusCap) * ease
         if (externalGait) {
             // 方案 C：渲染层以 commanded 设步态变速，位移来自素材提取
             return if (commanded >= dist / dtSeconds) {

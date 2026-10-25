@@ -35,6 +35,12 @@ data class AutonomySpot(
     val z: Float,
     /** 就位后的持续视线目标（世界坐标 xyz 米）；null = 不干预视线。 */
     val look: List<Float>? = null,
+    /**
+     * 该点可附带的活动 id（P0 道具系统 §3.1）：app 侧组装 spots 时从活动目录
+     * join 注入（reading_seat→"reading"）。FSM 零新增状态——选中带活动的点时
+     * 决策多带一条 [AutonomyDirective.DoActivity]，配方执行全在 app 侧。
+     */
+    val activityId: String? = null,
 ) {
     /** 与当前位置的平面距离（米）。 */
     fun distanceTo(px: Float, pz: Float): Float = kotlin.math.hypot((x - px).toDouble(), (z - pz).toDouble()).toFloat()
@@ -48,6 +54,13 @@ data class AutonomySpot(
 sealed interface AutonomyDirective {
     /** 走到 spot 并就位（坐/躺/看）；坐/躺中先起身由就位链自理。 */
     data class GoTo(val spot: AutonomySpot, val state: AutonomyStateKind) : AutonomyDirective
+
+    /**
+     * 就位后启动一个活动配方（P0 道具系统 §3.1）：跟在 [GoTo] 之后成对发出，
+     * app 执行器等就位链完成后播动画/出道具（道具显隐走绑定表）/可选 VFX 与
+     * 台词。FSM 不新增状态——活动附着在「点」上，姿势态仍是五态。
+     */
+    data class DoActivity(val activityId: String) : AutonomyDirective
 
     /** 起身（结束坐/躺），回到站桩。 */
     data object StandUp : AutonomyDirective

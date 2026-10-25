@@ -214,32 +214,47 @@ internal class VrmaAnimationEngine(
         boneRestWorldQuat = restWorld
         boneRestTransforms = restMats
 
-        // Hips Y for translation scaling —— **局部 rest** y（getTransform 直读，
-        // 不经过世界合成）。⚠不能用世界 wm[13]：transformToUnitCube 把模型
-        // **居中**后世界 y = 「hips 相对模型中心的高度」（hips 在中心略下方，
-        // 真机 4705 实测 0.108），拿它当身高比会把所有 VRMA 平移轨道/步态
-        // 提取位移压小 ~8×（0.857→0.104）=「走路慢 4~7 倍」的根因（walk_to/
-        // <move:>/手柄全中招）。局部/素材两侧同为各自 rig 单位，比例即标准
-        // 比例重定向；世界位移由反馈侧 renderScale（链路缩放积）补齐，对
-        // unit-cube 大缩放模型同样成立。bind 时骨骼未被动画改写，局部矩阵
-        // 即 rest；commit 在上（防惰性求值的旧读数）。
+        // Hips Y for translation scaling —— **hips→root 祖先链的局部 rest y 累积**
+        // （[accumulateHeightY]，纯函数单测锁行为）。两级坑的最终形态：
+        // ① 不能用世界 wm[13]：transformToUnitCube 居中后 = hips 相对模型中心的
+        //   高度（4705 实测 0.108，压小 ~8×）；
+        // ② 也不能只读 hips 自身局部 y：VRM1 常有中间父节点（默认模型
+        //   FreeTestCharacterAsuna 的 hips 局部 y=0.20，真值链积 1.16，差 5.8×）
+        //   ——步态提取速度同倍失真，P0 道具验收实测 commanded 1.0 m/s 只走
+        //   ~0.2 m/s（就位链 15-20s 的根因）。累加到 asset root 为止：root 是
+        //   gltfio 的合成父节点（unit-cube 变换写它），链上保持模型原生单位，
+        //   与素材侧 rest 比例即标准比例重定向；世界侧由 renderScale 补齐
+        //   （unit-cube 大缩放模型同样成立）。bind 时骨骼未被动画改写，局部
+        //   矩阵即 rest；commit 在上（防惰性求值的旧读数）。
         val hipsEntity = entityMap["hips"]
         if (hipsEntity != null) {
             val inst = tm.getInstance(hipsEntity)
             if (inst != 0) {
-                val lm = FloatArray(16)
-                tm.getTransform(inst, lm)
-                targetHipsY = if (lm[13] > 0.01f) lm[13] else 1.0f
+                val rootInst = tm.getInstance(asset.root)
+                val chainY = accumulateHeightY(
+                    hipsInstance = inst,
+                    rootInstance = rootInst,
+                    localY = { i ->
+                        val lm = FloatArray(16)
+                        tm.getTransform(i, lm)
+                        lm[13]
+                    },
+                    // ⚠ getParent 返回父 entity（entity/instance 混用是已知
+                    // SIGSEGV 坑,见 VrmSpringBoneManager）——getInstance 转回实例再续链。
+                    parent = { i -> tm.getInstance(tm.getParent(i)) },
+                )
+                targetHipsY = if (chainY > 0.01f) chainY else 1.0f
             }
         }
 
         Log.i(TAG, "Bound ${entityMap.size} bones, hipsY=$targetHipsY, version=$vrmMetaVersion")
     }
 
-    /** 模型 hips **局部 rest** y（bindToModel 时测得）——位移提取的尺度换算
-     * 用；素材→模型的缩放比 = 此值 / 素材 restHipsPosition[1]（两侧同为各自
-     * rig 的局部单位）。世界口径的 hips 高受 transformToUnitCube 居中平移
-     * 污染，不可用（见 bindToModel 注释）。 */
+    /** 模型 hips 高度（bindToModel 时 hips→root 祖先链局部 y 累积测得）——
+     * 位移提取的尺度换算用；素材→模型的缩放比 = 此值 / 素材 restHipsPosition[1]
+     * （两侧同为各自 rig 的局部单位）。世界口径的 hips 高受 transformToUnitCube
+     * 居中平移污染，不可用；hips 自身局部 y 在 VRM1 中间父节点骨架上偏小数倍
+     * （均见 bindToModel 注释）。 */
     fun modelHipsHeight(): Float = targetHipsY
 
     /** hips 的 Filament entity（渲染层取世界/局部矩阵算链路渲染尺度用）。 */
@@ -976,4 +991,29 @@ internal class VrmaAnimationEngine(
         val jsonBytes = ByteArray(chunkLen); buf.get(jsonBytes)
         return Gson().fromJson(String(jsonBytes, Charsets.UTF_8), JsonObject::class.java)
     }
+}
+
+/**
+ * hips→root 祖先链的局部 Y 累积（纯函数,单测锁行为；生产由 bindToModel 喂
+ * Filament 实例读取）。VRM1 骨架常有中间父节点,hips 自身局部 y 只有 ~0.2
+ * （默认模型 Asuna 实测）,真值须沿链累加到 asset root（gltfio 合成父节点,
+ * unit-cube 变换写它,不进链）——少累加会把所有 VRMA 平移轨道/步态提取
+ * 位移压小数倍(P0 道具验收①就位链 15-20s 的根因)。[maxHops] 防御性上限,
+ * 正常骨架 ≤ 8 层。0 = 链断/全零,调用方回落 1.0。
+ */
+internal fun accumulateHeightY(
+    hipsInstance: Int,
+    rootInstance: Int,
+    localY: (Int) -> Float,
+    parent: (Int) -> Int,
+    maxHops: Int = 24,
+): Float {
+    var sum = 0f
+    var inst = hipsInstance
+    var hops = 0
+    while (inst != 0 && inst != rootInstance && hops++ < maxHops) {
+        sum += localY(inst)
+        inst = parent(inst)
+    }
+    return sum
 }

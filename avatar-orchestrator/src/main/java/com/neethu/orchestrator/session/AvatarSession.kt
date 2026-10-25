@@ -26,6 +26,7 @@ import com.neethu.corelib.Lang
 import com.neethu.orchestrator.agent.AgentToolCatalog
 import com.neethu.orchestrator.agent.ToolExecutor
 import com.neethu.orchestrator.agent.ToolRegistry
+import com.neethu.orchestrator.agent.ToolResult
 import com.neethu.orchestrator.agent.isActionCommitmentReply
 import com.neethu.orchestrator.agent.isDanglingBridgeReply
 import com.neethu.orchestrator.agent.isPseudoToolCallText
@@ -336,6 +337,15 @@ class AvatarSession(
             gestureDriver?.setCatalog(field)
             if (turnJob?.isActive != true) selectedActions = null
         }
+
+    /**
+     * 身体链占用探针（P0 道具系统验收①「手势让位就位链」）：app 层注入——
+     * 就位链/活动执行器在跑时为 true，`<act:>` one-shot 手势在此期间让位
+     * （BUSY 拒绝，不播）：手势会顶掉步态剪辑（提取链断裂→自愈重载的顿挫）
+     * 或拖住接触定姿起播，就位是身体大动作、手势是装饰。默认 false =
+     * 不干预（既有行为，单测/无注入集成方零影响）。
+     */
+    var bodyBusyProbe: () -> Boolean = { false }
 
     /**
      * The looping idle the model returns to after one-shot gestures and
@@ -1240,6 +1250,25 @@ class AvatarSession(
         } ?: run { if (memoryStore != null) append(" memoryCoordinator=no(llm null)") }
     }
 
+    /**
+     * ai_cmd `tools_call` 的手动执行通道（绕 LLM 的调试入口）：执行走同一
+     * [ToolRegistry]（超时/错误回灌语义一致），并补上与 LLM 路径同款的
+     * [AvatarEvent.ToolCallStarted]/[AvatarEvent.ToolCallFinished] 事件打点——
+     * 调试通道与产品路径的观测行为一致（P0 道具验收旁路：手动 stop_activity
+     * 后 FSM 的 recentExternalAction 不打戳、状态不认领的根因就是手动路径
+     * 不发事件）。未知工具名直接回错误结果，不发事件（与 LLM 路径只在模型
+     * 实际发起后才 Started 的口径对齐）。
+     */
+    suspend fun debugInvokeTool(name: String, argumentsJson: String): ToolResult {
+        if (tools.find(name) == null) {
+            return ToolResult("unknown tool: $name (available: ${tools.list().map { it.name }})", isError = true)
+        }
+        emit(AvatarEvent.ToolCallStarted(name))
+        val result = tools.invoke(name, argumentsJson)
+        emit(AvatarEvent.ToolCallFinished(name, result.isError))
+        return result
+    }
+
     private fun modelKey(cfg: LlmConfig): String = "${cfg.baseUrl}|${cfg.model}"
 
     private fun handleDelta(delta: String, ttsCfg: TtsConfig) {
@@ -1286,7 +1315,7 @@ class AvatarSession(
                     else pendingEmotions += EmotionCue(cue.name, cue.intensity)
                 }
                 is TagCue.Action -> {
-                    if (actionStartedThisTurn || skills.bodyOccupied) {
+                    if (actionStartedThisTurn || skills.bodyOccupied || bodyBusyProbe()) {
                         rejectTag(rawCue, TagCapabilityRegistry.Reason.BUSY)
                         continue
                     }

@@ -353,6 +353,10 @@ class Strings(val lang: Lang) {
     val fxToolsSubtitle: String get() =
         zh("让模型用 play_effect/stop_effect 放场景特效（雪花/篝火/魔法阵/舞台灯等，默认关防滥调刷屏）",
             "Let the model play/stop scene effects (snow/campfire/magic circle/stage lights) via play_effect/stop_effect; off by default to prevent spam")
+    val activityToolsTitle: String get() = zh("活动工具", "Activity tools")
+    val activityToolsSubtitle: String get() =
+        zh("让模型用 start_activity/stop_activity「做一件事」（去看书/去书桌打字/唱歌/举灯牌应援，道具自动出现）",
+            "Let the model start/stop activities via start_activity/stop_activity (go read, type at the desk, sing, wave a lightstick — props appear automatically)")
     val llmMoveTitle: String get() = zh("AI 自由走动", "AI free locomotion")
     val llmMoveSubtitle: String get() =
         zh("允许模型用 <move:锚点> 标签走向房间里的位置（去窗边/沙发等），move_to 工具同步可用；需先加载场景",

@@ -544,6 +544,9 @@ internal class SoulLinkRenderer(
         private const val WALK_STALL_TIMEOUT_MS = 5_000L
         private const val WALK_STALL_MAX_RETRIES = 2
 
+        /** 同目标持续 WALKING 的强停上限（ms）：正常腿 ≤10s,40s = 4× 余量。 */
+        private const val WALK_NON_CONVERGENCE_MS = 40_000L
+
         // Material name hints for applyMaterialEnhancements (VRM/glTF conventions)
         private val EYE_NAME_HINTS = listOf("eye", "目", "瞳")
         private val SKIN_NAME_HINTS = listOf("skin", "face", "body", "顔", "脸", "肌")
@@ -2435,10 +2438,15 @@ internal class SoulLinkRenderer(
         val extractor = LocomotionExtractor.analyze(
             hipsTrack, animation.restHipsPosition, vrmFlip, heightScale, animation.duration
         )
-        // 自动标定按世界米（提取单位 × 渲染尺度）；显式 baseSpeed（walk-calib
-        // 实测）本来就是世界口径，直接用。
-        val speed = if (baseSpeed > 0f) baseSpeed
-            else extractor?.let { it.netForwardMeters * renderScale / it.duration } ?: 0f
+        // 方案 C 标定（P0 道具验收②r2）：播放速比的分母必须用**提取口径**——
+        // 回灌位移来自素材烘焙（提取单位×渲染尺度），显式 walk-calib 数值是
+        // 程序位移时代的脚步口径,两者在跨比例重定向的模型上会差 ~25%（r2 实测
+        // treadmill 1.22 vs 提取 1.5@1×,实际步速 1.25×commanded）→ 刹车曲线
+        // 失配,末段绕目标振荡不收敛。有提取器一律用提取速率（actual=commanded,
+        // 刹车/转弯封顶的引擎模型与真实执行一致）;原地素材（无提取器,程序位移）
+        // 仍用显式标定。
+        val extractedSpeed = extractor?.let { it.netForwardMeters * renderScale / it.duration } ?: 0f
+        val speed = if (extractedSpeed > 0f) extractedSpeed else baseSpeed
         if (speed <= 0f) {
             android.util.Log.e(
                 "SoulLinkRenderer",
@@ -2449,8 +2457,8 @@ internal class SoulLinkRenderer(
         if (extractor != null) {
             android.util.Log.i(
                 "SoulLinkRenderer",
-                "Gait '$assetPath' has baked motion: net=%.2f units/loop (%.2f m/s world, renderScale=%.2f) → 方案C extraction on"
-                    .format(extractor.netForwardMeters, speed, renderScale)
+                "Gait '$assetPath' has baked motion: net=%.2f units/loop → extraction-calibrated %.2f m/s@1x (explicit %.2f, renderScale=%.2f) → 方案C extraction on"
+                    .format(extractor.netForwardMeters, extractedSpeed, baseSpeed, renderScale)
             )
         }
         return WalkGait(assetPath, animation.duration, speed, kind, extractor, renderScale)
@@ -3230,6 +3238,14 @@ internal class SoulLinkRenderer(
     private var stallSinceMs = 0L
     private var stallRetries = 0
 
+    // 非收敛断路器（P0 道具验收②r2）：同目标 WALKING 超时强停。看门狗只抓
+    // 「原地不动」——围目标振荡（一直在动但到不了）两路都不管,r2 实测 12min
+    // 卡死把 FSM pending 拖死。目标一变即重计（摇杆逐帧 re-pin 目标 = 天然
+    // 豁免,不影响模拟量持续行走）。
+    private var breakerTargetX = Float.NaN
+    private var breakerTargetZ = Float.NaN
+    private var breakerSinceMs = 0L
+
     private fun updateWalkStallWatchdog(mat: FloatArray) {
         val snap = locomotionEngine.snapshot()
         if (snap.phase != com.neethu.corelib.WalkPhase.WALKING) {
@@ -3237,6 +3253,21 @@ internal class SoulLinkRenderer(
             return
         }
         val nowMs = SystemClock.elapsedRealtime()
+        // 断路器先于停滞判定：目标没变且超时 → 强停（arrived=false 走
+        // walkFinished,driver 清腿/FSM 观望解除,自主循环自愈）
+        if (breakerSinceMs == 0L || snap.targetX != breakerTargetX || snap.targetZ != breakerTargetZ) {
+            breakerTargetX = snap.targetX; breakerTargetZ = snap.targetZ
+            breakerSinceMs = nowMs
+        } else if (nowMs - breakerSinceMs > WALK_NON_CONVERGENCE_MS) {
+            android.util.Log.w(
+                "SoulLinkRenderer",
+                "walk to (%.2f, %.2f) not converged in %dms — force stop (breaker)"
+                    .format(snap.targetX, snap.targetZ, WALK_NON_CONVERGENCE_MS),
+            )
+            stallCheckX = mat[12]; stallCheckZ = mat[14]; stallSinceMs = nowMs
+            stopWalk()
+            return
+        }
         if (stallCheckX.isNaN()) {
             stallCheckX = mat[12]; stallCheckZ = mat[14]; stallSinceMs = nowMs
             return
@@ -3285,6 +3316,9 @@ internal class SoulLinkRenderer(
         stallCheckX = Float.NaN
         stallCheckZ = Float.NaN
         stallRetries = 0
+        // 相位离场重挂断路器：下一轮 WALKING 首帧经目标比对重新起算（同目标
+        // 立即再走不会秒杀——breakerSinceMs=0 视为未武装）
+        breakerSinceMs = 0L
     }
 
     /**

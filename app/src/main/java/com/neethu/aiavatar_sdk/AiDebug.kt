@@ -275,12 +275,16 @@ fun aiDebugHelp(): String = """
 |                           expression lane (52 ARKit blendshapes → model
 |                           morphs via FaceDriver; real blinks replace auto-
 |                           blink, mouth yields to lip-sync while speaking)
-|Agent tools (P0 tool calling, docs/agent-feasibility.md; needs a session):
-|  tools_list               Dump the LLM tool registry + tool-disabled models
-|  tools_call <arg>         Manually execute a tool (bypasses the LLM —
-|                           verifies the tool itself before A/B-ing the
-|                           model's tool choices). ai_arg = "<name> [json]"
-|                           with a space between, e.g. `get_time {}`
+    |Agent tools (P0 tool calling, docs/agent-feasibility.md; needs a session):
+    |  tools_list               Dump the LLM tool registry + tool-disabled models
+    |  tools_call <arg>         Manually execute a tool (bypasses the LLM —
+    |                           verifies the tool itself before A/B-ing the
+    |                           model's tool choices). ai_arg = "<name> [json]"
+    |                           with a space between, e.g. `get_time {}`
+    |  activity <sub>           Activity family (P0 prop system, read-only):
+    |                           list | state | last — catalog / current activity
+    |                           / recent start-stop records. Drive the real chain
+    |                           via `tools_call start_activity {"id":...}`
 |  observe <arg>            = tools_call observe_camera (snapshot + vision
 |                           describe end-to-end; optional ai_arg = the JSON
 |                           args, default {}). Needs the camera-observe

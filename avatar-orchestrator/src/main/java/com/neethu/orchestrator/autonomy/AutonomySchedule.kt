@@ -19,12 +19,15 @@ import kotlinx.serialization.json.jsonPrimitive
  * ```json
  * {
  *   "weights": {"SITTING": 2.0},
- *   "hours": [{"from": 0, "to": 6, "weights": {"LYING": 5.0}}],
+ *   "activityWeights": {"work": 2.0},
+ *   "hours": [{"from": 0, "to": 6, "weights": {"LYING": 5.0}, "activityWeights": {"food": 0.2}}],
  *   "quietHours": {"from": 23, "to": 8, "enabled": true}
  * }
  * ```
  * `from` 含、`to` 舍；quietHours 支持 from>to 的跨午夜区间。解析失败整表
- * 回落默认（脏配置不炸决策）。
+ * 回落默认（脏配置不炸决策）。`activityWeights`（P0 道具系统 §3.1）是
+ * 活动 category→倍率：基线表与小时规则叠乘，只影响 FSM 选点层（LLM/用户
+ * 指令不受限），缺省空表 = 全 1（保守，不动既有分布）。
  */
 data class AutonomySchedule(
     val baseWeights: Map<AutonomyStateKind, Float>,
@@ -32,9 +35,16 @@ data class AutonomySchedule(
     val quietFrom: Int = 23,
     val quietTo: Int = 8,
     val quietEnabled: Boolean = true,
+    /** 活动 category→倍率基线（选点层加权用）。 */
+    val activityWeights: Map<String, Float> = emptyMap(),
 ) {
 
-    data class HourRule(val from: Int, val to: Int, val weights: Map<AutonomyStateKind, Float>)
+    data class HourRule(
+        val from: Int,
+        val to: Int,
+        val weights: Map<AutonomyStateKind, Float>,
+        val activityWeights: Map<String, Float> = emptyMap(),
+    )
 
     /** 某小时的状态权重：默认值 × 命中规则乘子（多重命中按表序叠乘）。 */
     fun weightsFor(hour: Int): Map<AutonomyStateKind, Float> {
@@ -42,6 +52,19 @@ data class AutonomySchedule(
         for (rule in hourRules) {
             if (hourIn(hour, rule.from, rule.to)) {
                 for ((k, v) in rule.weights) {
+                    out[k] = (out[k] ?: 1f) * v
+                }
+            }
+        }
+        return out
+    }
+
+    /** 某小时的活动类别倍率：基线 × 命中规则乘子（缺省类别 = 1）。 */
+    fun activityWeightsFor(hour: Int): Map<String, Float> {
+        val out = activityWeights.toMutableMap()
+        for (rule in hourRules) {
+            if (hourIn(hour, rule.from, rule.to)) {
+                for ((k, v) in rule.activityWeights) {
                     out[k] = (out[k] ?: 1f) * v
                 }
             }
@@ -84,7 +107,12 @@ data class AutonomySchedule(
                 val o = (el as? JsonObject) ?: return@mapNotNull null
                 val from = o["from"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                 val to = o["to"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-                HourRule(from, to, parseWeights(o["weights"]) ?: return@mapNotNull null)
+                HourRule(
+                    from,
+                    to,
+                    parseWeights(o["weights"]) ?: return@mapNotNull null,
+                    parseActivityWeights(o["activityWeights"]),
+                )
             }.orEmpty()
             val quiet = root["quietHours"] as? JsonObject
             AutonomySchedule(
@@ -93,6 +121,7 @@ data class AutonomySchedule(
                 quietFrom = quiet?.get("from")?.jsonPrimitive?.intOrNull ?: DEFAULT.quietFrom,
                 quietTo = quiet?.get("to")?.jsonPrimitive?.intOrNull ?: DEFAULT.quietTo,
                 quietEnabled = quiet?.get("enabled")?.jsonPrimitive?.booleanOrNull ?: DEFAULT.quietEnabled,
+                activityWeights = parseActivityWeights(root["activityWeights"]),
             )
         }.getOrDefault(DEFAULT)
 
@@ -105,6 +134,17 @@ data class AutonomySchedule(
                 if (w >= 0f) out[kind] = w
             }
             return out.ifEmpty { null }
+        }
+
+        /** 活动 category→倍率（键为任意小写类别串；负值跳过）。空/缺 = 空表。 */
+        private fun parseActivityWeights(el: kotlinx.serialization.json.JsonElement?): Map<String, Float> {
+            val o = (el as? JsonObject) ?: return emptyMap()
+            val out = mutableMapOf<String, Float>()
+            for ((key, v) in o) {
+                val w = v.jsonPrimitive.floatOrNull ?: continue
+                if (w >= 0f) out[key.lowercase()] = w
+            }
+            return out
         }
     }
 }

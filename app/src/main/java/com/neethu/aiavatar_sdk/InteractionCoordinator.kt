@@ -34,6 +34,12 @@ internal class InteractionCoordinator(
     /** 当前场景的交互点表（MainActivity 随场景切换重注入）。 */
     var anchors: List<InteractionAnchor> = emptyList()
 
+    /**
+     * 反向互斥缝（P0 道具系统）：活动执行器的配方链在跑（就位借道中除外）时，
+     * interact 让路——与 ActivityExecutor 的 BUSY 判定构成同一把锁的两半。
+     */
+    var busyProbe: () -> Boolean = { false }
+
     private var job: Job? = null
 
     val isBusy: Boolean get() = job?.isActive == true
@@ -44,11 +50,16 @@ internal class InteractionCoordinator(
 
     /**
      * 启动就位链（异步）。返回给调用方（工具回灌/ai_cmd 回显）的状态文案。
+     * [ignoreBusyProbe] 供 ActivityExecutor 借道（它已自行判过互斥，绕开对
+     * 自己的反向探测，防自锁）。
      */
-    fun interact(anchorId: String, speed: Float? = null): String {
+    fun interact(anchorId: String, speed: Float? = null, ignoreBusyProbe: Boolean = false): String {
         val anchor = anchors.firstOrNull { it.id == anchorId.lowercase() }
             ?: return "unknown interaction anchor '$anchorId' — run `interactions` for the table"
         if (isBusy) return "another interaction is still in progress (pose_clear/stand_up to cancel)"
+        if (!ignoreBusyProbe && busyProbe()) {
+            return "an activity is in progress (stop_activity to cancel)"
+        }
         job = scope.launch {
             try {
                 runInteraction(anchor, speed)

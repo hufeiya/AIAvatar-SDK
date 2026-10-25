@@ -92,7 +92,7 @@ open class LocomotionDriver(private val controller: AvatarActor) {
         } else {
             null
         }
-        val route = WaypointRouter.route(anchors, from, anchor)
+        val route = skipNearFirstLeg(WaypointRouter.route(anchors, from, anchor), controller.getWalkState())
         pendingLegs.clear()
         pendingLegs.addAll(route.drop(1)) // 第一段立即起步，剩余逐段续
         val first = route.first()
@@ -150,4 +150,24 @@ open class LocomotionDriver(private val controller: AvatarActor) {
     companion object {
         private const val TAG = "LocomotionDriver"
     }
+}
+
+/** 距首途经点小于此值（米）且有后续腿时跳过该腿（U 型腿温床）。 */
+internal const val NEAR_FIRST_LEG_SKIP_M = 0.6
+
+/**
+ * 起点就近跳过（P0 道具验收②r2 卡死现场,纯函数单测锁行为）：图路由的 from
+ * 是「全局最近锚点」,人常站在途经点旁边——0.5m/90° 的 U 型首腿在提取步速下
+ * 转弯半径与距离同量级,围目标振荡不收敛（12min 卡死实测）。距首途经点
+ * <[NEAR_FIRST_LEG_SKIP_M] 且有后续腿时直接从下一腿起步（引擎另有转弯半径
+ * 封顶兜底,见 LocomotionEngine.TURN_RADIUS_K）。null 快照/单段路原样返回。
+ */
+internal fun skipNearFirstLeg(
+    route: List<MoveAnchor>,
+    state: com.neethu.corelib.WalkSnapshot?,
+): List<MoveAnchor> {
+    if (route.size <= 1 || state == null) return route
+    val first = route.first()
+    val near = kotlin.math.hypot((first.x - state.x).toDouble(), (first.z - state.z).toDouble())
+    return if (near < NEAR_FIRST_LEG_SKIP_M) route.drop(1) else route
 }

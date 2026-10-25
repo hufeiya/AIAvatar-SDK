@@ -1,5 +1,5 @@
 {
-  "comment": "自主生命体作息先验表（docs/autonomy-feasibility.md §4.2）：hour→状态权重乘子。from 含 to 舍；weights 缺省 1。quietHours 同时是深夜判定（躺卧时长加长）与问候静默的参考。",
+  "comment": "自主生命体作息先验表（docs/autonomy-feasibility.md §4.2）：hour→状态权重乘子。from 含 to 舍；weights 缺省 1。quietHours 同时是深夜判定（躺卧时长加长）与问候静默的参考。activityWeights（P0 道具系统 docs/prop-system-feasibility.md §3.1）= 活动 category→倍率,只影响 FSM 选点层（LLM/用户指令不受限）,缺省 1：深夜收敛 food/daily、上午放大 work、晚间放大 play。",
   "weights": {
     "IDLE_STAND": 1.0,
     "WANDER": 1.2,
@@ -7,10 +7,11 @@
     "SITTING": 1.6,
     "LYING": 1.0
   },
+  "activityWeights": {},
   "hours": [
-    { "from": 0, "to": 6, "weights": { "LYING": 5.0, "SITTING": 0.5 } },
-    { "from": 9, "to": 17, "weights": { "SITTING": 3.0 } },
-    { "from": 18, "to": 23, "weights": { "LOOKING": 2.0 } }
+    { "from": 0, "to": 6, "weights": { "LYING": 5.0, "SITTING": 0.5 }, "activityWeights": { "food": 0.2, "daily": 0.2 } },
+    { "from": 9, "to": 17, "weights": { "SITTING": 3.0 }, "activityWeights": { "work": 2.0 } },
+    { "from": 18, "to": 23, "weights": { "LOOKING": 2.0 }, "activityWeights": { "play": 1.5 } }
   ],
   "quietHours": { "from": 23, "to": 8, "enabled": true }
 }

@@ -159,6 +159,8 @@ internal class AiChatDebugHooks(
     val autonomyGreet: () -> String = { "autonomy not wired in this screen" },
     /** ai_cmd autonomy_think：立刻弹一条思考气泡（气泡渲染验收入口；挂起=查记忆素材）。 */
     val autonomyThink: suspend () -> String = { "autonomy not wired in this screen" },
+    /** ai_cmd activity list|state|last：活动目录/当前活动/最近记录（P0 道具系统只读观测）。 */
+    val activityDebug: (String?) -> String = { _ -> "activity not wired in this screen" },
 )
 
 /**
@@ -241,6 +243,8 @@ internal suspend fun executeAiCommand(
                 ?: "autonomy not wired in this screen"
             "autonomy_think" -> chat?.autonomyThink?.invoke()
                 ?: "autonomy not wired in this screen"
+            "activity" -> chat?.activityDebug?.invoke(command.arg)
+                ?: "activity not wired in this screen"
             "anchors" -> anchorsCommand(chat)
             "interactions" -> interactionsCommand(chat)
             "interact" -> interactCommand(controller, chat, command.arg)
