@@ -161,6 +161,14 @@ internal class AiChatDebugHooks(
     val autonomyThink: suspend () -> String = { "autonomy not wired in this screen" },
     /** ai_cmd activity list|state|last：活动目录/当前活动/最近记录（P0 道具系统只读观测）。 */
     val activityDebug: (String?) -> String = { _ -> "activity not wired in this screen" },
+    /**
+     * ai_cmd autonomy_decision on|off|state|fire：LLM 自发决策缝（P2 §7-P2.3,
+     * 默认关）。on/off 切评估开关并持久化;state 统计快照;fire 立刻干跑一次
+     * 询问（绕低频门,不启动活动——效果/延迟评估入口）。挂起=fire 真调 LLM。
+     */
+    val autonomyDecision: suspend (String?) -> String = { _ ->
+        "autonomy_decision not wired in this screen"
+    },
 )
 
 /**
@@ -245,6 +253,8 @@ internal suspend fun executeAiCommand(
                 ?: "autonomy not wired in this screen"
             "activity" -> chat?.activityDebug?.invoke(command.arg)
                 ?: "activity not wired in this screen"
+            "autonomy_decision" -> chat?.autonomyDecision?.invoke(command.arg)
+                ?: "autonomy_decision not wired in this screen"
             "anchors" -> anchorsCommand(chat)
             "interactions" -> interactionsCommand(chat)
             "interact" -> interactCommand(controller, chat, command.arg)

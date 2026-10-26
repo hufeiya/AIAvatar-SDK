@@ -7,6 +7,10 @@ import com.neethu.corelib.ContactKind
 import com.neethu.corelib.Lang
 import com.neethu.corelib.WalkPhase
 import com.neethu.orchestrator.activity.ActivityCatalog
+import com.neethu.orchestrator.activity.ActivityEntry
+import com.neethu.orchestrator.autonomy.AutonomyDecisionChoice
+import com.neethu.orchestrator.autonomy.AutonomyDecisionContext
+import com.neethu.orchestrator.autonomy.AutonomyDecisionEnhancer
 import com.neethu.orchestrator.autonomy.AutonomyDirector
 import com.neethu.orchestrator.autonomy.AutonomyDirective
 import com.neethu.orchestrator.autonomy.AutonomySchedule
@@ -71,9 +75,25 @@ internal class AutonomyRig(
     private var scheduler: GreetingScheduler = GreetingScheduler()
     private var composer: ThoughtComposer = ThoughtComposer(Lang.ZH)
 
+    /**
+     * 活动目录与语言（setVocabulary 注入）：LLM 自发决策缝的清单投影原料。
+     */
+    private var activityCatalog: ActivityCatalog = ActivityCatalog.EMPTY
+    private var vocabLang: Lang = Lang.ZH
+
     private var autonomyEnabled = false
     private var greetingEnabled = true
     private var bubbleEnabled = true
+
+    /**
+     * LLM 自发决策增强缝（P2 §7-P2.3,docs/prop-system-feasibility.md §3.2;
+     * autonomy-feasibility.md §4.2）：**默认关**——null 或 [decisionLlmEnabled]
+     * = false 时 DoActivity 走纯本地出线,行为与 P2 收口逐位一致。MainActivity
+     * 按偏好（缺 Key 静默无效）装配注入;评估开关与统计走 ai_cmd
+     * `autonomy_decision`。
+     */
+    var decisionEnhancer: AutonomyDecisionEnhancer? = null
+    var decisionLlmEnabled = false
 
     private var loop: Job? = null
     private var eventsJob: Job? = null
@@ -119,6 +139,8 @@ internal class AutonomyRig(
             )
         }
         val old = director
+        activityCatalog = activities
+        vocabLang = lang
         director = AutonomyDirector(spots, schedule, activities = activities, holidayTags = {
             activityExecutor?.activeHolidayTags() ?: emptySet()
         }).also {
@@ -186,7 +208,7 @@ internal class AutonomyRig(
 
     // ── 每拍 ────────────────────────────────────────────────────────────
 
-    private fun tickOnce() {
+    private suspend fun tickOnce() {
         val d = director ?: return
         val session = sessionProvider()
         val now = SystemClock.elapsedRealtime()
@@ -230,7 +252,7 @@ internal class AutonomyRig(
         )
     }
 
-    private fun execute(directives: List<AutonomyDirective>, session: AvatarSession?) {
+    private suspend fun execute(directives: List<AutonomyDirective>, session: AvatarSession?) {
         for (directive in directives) {
             when (directive) {
                 is AutonomyDirective.GoTo -> {
@@ -260,9 +282,13 @@ internal class AutonomyRig(
                         Log.i(TAG, "doActivity ignored (no executor wired)")
                     } else {
                         autonomyBusy = true
-                        val failure = executor.start(directive.activityId, fromAutonomy = true)
+                        // LLM 自发决策缝（P2 §7-P2.3,默认关）：转移时低频问小模型
+                        // 「现在想干嘛」,白名单枚举输出;超时/失败/清单外一律回落
+                        // 本地出线（directive.activityId）,增强挂了不能拖垮 FSM。
+                        val activityId = maybeAskDecision(directive.activityId)
+                        val failure = executor.start(activityId, fromAutonomy = true)
                         if (failure != null) {
-                            Log.i(TAG, "doActivity '${directive.activityId}' refused: $failure")
+                            Log.i(TAG, "doActivity '$activityId' refused: $failure")
                             autonomyBusy = false
                         }
                     }
@@ -281,6 +307,86 @@ internal class AutonomyRig(
                     autonomyBusy = false
                 }
             }
+        }
+    }
+
+    // ── LLM 自发决策缝（P2 §7-P2.3,默认关）───────────────────────────────
+
+    /**
+     * 状态转移时的低频询问：缝关/未装配/低频门未开 = 原样返回本地出线（零
+     * 行为变化）;到点则挂起问小模型（≤15s 超时,期间 tick 循环暂停——FSM 本就
+     * 在等这次转移落地）,命中白名单 id 用模型的（含换活动,执行链同一条
+     * start_activity）,答「保持」/失败回落本地出线。
+     */
+    private suspend fun maybeAskDecision(localPick: String): String {
+        val enhancer = decisionEnhancer
+        if (!decisionLlmEnabled || enhancer == null) return localPick
+        if (!enhancer.dueToAsk()) return localPick
+        val d = director ?: return localPick
+        val decision = runCatching {
+            enhancer.ask(buildDecisionContext(d))
+        }.onFailure { if (it is CancellationException) throw it; Log.w(TAG, "decision ask failed", it) }
+            .getOrNull()
+        val chosen = decision?.activityId ?: localPick
+        Log.i(
+            TAG,
+            "decision ask: ${enhancer.stateLine()} picked=${decision?.activityId ?: "(fail/keep)"} " +
+                "local=$localPick reason=${decision?.reason}",
+        )
+        return chosen
+    }
+
+    /** 决策上下文：FSM 态 + 活动目录全量投影（白名单正本）+ 记忆一行 + 最近一句。 */
+    private suspend fun buildDecisionContext(d: AutonomyDirector): AutonomyDecisionContext {
+        val choices = activityCatalog.entries.map { e ->
+            AutonomyDecisionChoice(
+                id = e.id,
+                label = if (vocabLang == Lang.EN) e.nameEn else e.name,
+                description = e.desc,
+                category = e.category,
+            )
+        }
+        val lastLine = runCatching {
+            sessionProvider()?.historyMessages()
+                ?.lastOrNull { it.role != com.neethu.aiadapter.model.ChatRole.SYSTEM }
+                ?.content?.take(60)
+        }.getOrNull()
+        return AutonomyDecisionContext(
+            state = d.state.name,
+            anchorId = d.currentAnchorId,
+            currentActivityId = activityExecutor?.currentId,
+            hour = currentHour(),
+            activities = choices,
+            memoryLine = recentMemoryFact(),
+            recentLine = lastLine,
+        )
+    }
+
+    /** ai_cmd `autonomy_decision state`：缝开关 + 统计快照。 */
+    fun decisionStateLine(): String {
+        val on = decisionLlmEnabled
+        val enhancer = decisionEnhancer
+        if (!on || enhancer == null) return "decision=off (缝在代码里,默认关;ai_cmd autonomy_decision on 开启)"
+        return "decision=on ${enhancer.stateLine()} catalog=${activityCatalog.entries.size}"
+    }
+
+    /**
+     * ai_cmd `autonomy_decision fire`：立刻干跑一次询问（绕低频门,不启动活动
+     * ——效果/延迟的评估入口,返回裁决与耗时）。
+     */
+    suspend fun decisionFire(): String {
+        val enhancer = decisionEnhancer ?: return "decision=off (未装配:缺 SiliconFlow Key)"
+        if (!decisionLlmEnabled) return "decision=off (ai_cmd autonomy_decision on 先开)"
+        val d = director ?: return "decision: no director (no scene vocabulary)"
+        enhancer.forceDue()
+        val decision = runCatching { enhancer.ask(buildDecisionContext(d)) }
+            .onFailure { if (it is CancellationException) throw it; Log.w(TAG, "fire ask failed", it) }
+            .getOrNull()
+        return if (decision == null) {
+            "fire 失败（${enhancer.lastError ?: "未知原因"}） ${enhancer.stateLine()}"
+        } else {
+            "fire: pick=${decision.activityId ?: "(保持现状)"} reason=${decision.reason} " +
+                "latency=${decision.latencyMs}ms raw=${decision.raw} | local=${activityExecutor?.currentId ?: d.currentAnchorId}"
         }
     }
 

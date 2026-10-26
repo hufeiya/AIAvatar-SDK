@@ -30,7 +30,7 @@ data class ShowScript(
     }
 }
 
-/** 幕类型词表（§4.4 act 表；P1 增 fx 特效插幕）。 */
+/** 幕类型词表（§4.4 act 表；P1 增 fx 特效插幕；P2 道具系统增 activity 活动幕）。 */
 object ActTypes {
     const val DANCE = "dance"
     const val GROUP_DANCE = "group_dance"
@@ -41,8 +41,9 @@ object ActTypes {
     const val MUSIC = "music"
     const val WAIT = "wait"
     const val FX = "fx"
+    const val ACTIVITY = "activity"
 
-    val ALL = setOf(DANCE, GROUP_DANCE, BOW, SAY, MOVE, CAMERA, MUSIC, WAIT, FX)
+    val ALL = setOf(DANCE, GROUP_DANCE, BOW, SAY, MOVE, CAMERA, MUSIC, WAIT, FX, ACTIVITY)
 }
 
 /** 机位词表（STAGE_CMD cam 的同名子集）。 */
@@ -114,6 +115,14 @@ data class ShowAct(
      * 世界系），如 lightstick_spark 配 rightHand。
      */
     val bone: String? = null,
+    /**
+     * activity 幕的活动 id（P2 道具系统，docs/prop-system-feasibility.md
+     * §7-P2.4 团播多人活动）：目录见 assets/activities/activities.json。
+     * 幕开始 = 活动配方确定性落地（目录道具开幕挂上→VFX→动画起播,loop 幕
+     * hold [seconds] / one-shot 幕等播完,收幕逆序收净）；per-runtime 道具
+     * 隔离保证双人同款活动各持各的道具不互抢。导演语义,不走 LLM。
+     */
+    val activity: String? = null,
 )
 
 /**
@@ -185,6 +194,12 @@ object ShowScriptParser {
                     if (act.fx.isNullOrBlank()) errors += "$at: 缺 fx（预设 id，见 assets/vfx/presets.json）"
                     if (act.seconds != null && act.seconds <= 0f) errors += "$at: 非法 seconds（>0 或缺省）"
                 }
+                ActTypes.ACTIVITY -> {
+                    if (act.performer.isNullOrBlank()) errors += "$at: 缺 performer"
+                    if (act.activity.isNullOrBlank()) errors += "$at: 缺 activity（活动 id，见 assets/activities/activities.json）"
+                    // loop 活动幕的 hold 时长；one-shot 幕忽略（引擎时长自理）
+                    if (act.seconds != null && act.seconds <= 0f) errors += "$at: 非法 seconds（>0 或缺省）"
+                }
             }
             // 幕内机位与 camera 幕的 shot 共用词表
             val shot = act.shot ?: act.camera
@@ -216,9 +231,13 @@ fun estimateSeconds(script: ShowScript): Float = script.acts.sumOf { act ->
     when (act.type) {
         ActTypes.WAIT, ActTypes.GROUP_DANCE -> (act.seconds ?: 0f).toDouble()
         ActTypes.DANCE -> (act.seconds ?: DEFAULT_DANCE_SECONDS).toDouble()
+        ActTypes.ACTIVITY -> (act.seconds ?: DEFAULT_ACTIVITY_SECONDS).toDouble()
         else -> DEFAULT_ACT_SECONDS.toDouble()
     }
 }.toFloat()
 
 const val DEFAULT_DANCE_SECONDS = 8f
 const val DEFAULT_ACT_SECONDS = 3f
+
+/** activity 幕缺省时长（秒；loop 活动的 hold 时长，节目单可用 seconds 覆盖）。 */
+const val DEFAULT_ACTIVITY_SECONDS = 12f

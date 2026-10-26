@@ -292,6 +292,14 @@ fun aiDebugHelp(): String = """
 |                           date override for acceptance without changing the
 |                           system clock (off = restore). Drive the real chain
 |                           via `tools_call start_activity {"id":...}`
+|  autonomy_decision <arg>  LLM spontaneous-decision seam (P2, default OFF):
+|                           on | off (persist) | state (stats) | fire — ask the
+|                           small model "what do you want to do now" once at a
+|                           state transition (whitelist enum output → the same
+|                           start_activity chain; timeout/failure falls back to
+|                           the local pick). fire = dry-run one ask now
+|                           (bypasses the low-frequency gate, starts nothing) —
+|                           effect/latency evaluation entry
 |  observe <arg>            = tools_call observe_camera (snapshot + vision
 |                           describe end-to-end; optional ai_arg = the JSON
 |                           args, default {}). Needs the camera-observe

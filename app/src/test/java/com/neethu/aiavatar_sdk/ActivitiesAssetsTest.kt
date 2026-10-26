@@ -63,18 +63,34 @@ class ActivitiesAssetsTest {
         "sword_play", "guzheng_play", "fan_play", "oil_umbrella_walk",
     )
 
+    /** P2 团播联动活动（§7-P2.4 双人喝茶对坐;节目单 activity 幕与单机 FSM 共用配方）。 */
+    private val p2GroupIds = setOf("tea_time")
+
+    /**
+     * P2 长尾补齐（§7-P2.6）：本地源库有动画的 §5 剩余行——翻抽屉(#30 零采购)/
+     * 拉小提琴(#35)/弹贝斯(#37)。琴弓/贝斯等新道具走 wear 挂载（绑定表 1:1
+     * 装不下双道具,古筝/宝剑同款先例）。
+     */
+    private val p2LongTailIds = setOf("file_drawer", "violin_play", "bass_play")
+
     /** 节日包标签取值域（HolidayCalendar 常量的镜像;解析侧只认小写）。 */
     private val knownHolidays = setOf(
         "christmas", "halloween", "spring_festival", "mid_autumn", "birthday",
     )
 
     @Test
-    fun `catalog carries p0 16 plus p1 23 plus p2 9 activities`() {
+    fun `catalog carries p0 16 plus p1 23 plus p2 9 plus group 1 plus longtail 3 activities`() {
         val entries = catalog().entries
-        assertEquals("16 P0 + 23 P1 场景层 + 9 P2 节日/古风", 48, entries.size)
+        assertEquals(
+            "16 P0 + 23 P1 场景层 + 9 P2 节日/古风 + 1 P2 团播联动 + 3 P2 长尾",
+            52,
+            entries.size,
+        )
         val ids = entries.map { it.id }.toSet()
         assertTrue("缺 P1 活动: ${p1Ids - ids}", ids.containsAll(p1Ids))
         assertTrue("缺 P2 活动: ${p2Ids - ids}", ids.containsAll(p2Ids))
+        assertTrue("缺 P2 团播活动: ${p2GroupIds - ids}", ids.containsAll(p2GroupIds))
+        assertTrue("缺 P2 长尾活动: ${p2LongTailIds - ids}", ids.containsAll(p2LongTailIds))
         // P0 旗舰升级:reading 换单本书 + 坐姿阅读剪辑;tablet_read 换真平板
         val reading = catalog().find("reading")!!
         assertEquals("06_坐姿/Elbows On Legs Leaning Forward.vrma", reading.animation)
@@ -147,6 +163,46 @@ class ActivitiesAssetsTest {
                 assertTrue("P2 loop 活动 '${e.id}' 缺 minDwellMs", (e.minDwellMs ?: 0) > 0)
             }
         }
+        catalog().entries.filter { it.id in p2GroupIds }.forEach { e ->
+            assertNotNull("P2 团播活动 '${e.id}' 缺 hourRange", e.hourRange)
+            assertTrue("P2 团播活动 '${e.id}' 缺 says", e.says.isNotEmpty())
+            if (e.loop) {
+                assertTrue("P2 团播 loop 活动 '${e.id}' 缺 minDwellMs", (e.minDwellMs ?: 0) > 0)
+            }
+        }
+        catalog().entries.filter { it.id in p2LongTailIds }.forEach { e ->
+            assertNotNull("P2 长尾活动 '${e.id}' 缺 hourRange", e.hourRange)
+            assertTrue("P2 长尾活动 '${e.id}' 缺 says", e.says.isNotEmpty())
+            if (e.loop) {
+                assertTrue("P2 长尾 loop 活动 '${e.id}' 缺 minDwellMs", (e.minDwellMs ?: 0) > 0)
+            }
+        }
+        // 长尾乐器的挂载形态:小提琴+琴弓双道具走 wear(绑定表 1:1 装不下),贝斯同款
+        val violin = catalog().find("violin_play")!!
+        assertTrue(violin.props.all { it.isWear })
+        assertEquals(setOf("violin", "bow"), violin.props.map { it.id }.toSet())
+        assertTrue(catalog().find("bass_play")!!.props.single().let { it.isWear && it.id == "bass" })
+        assertTrue("file_drawer 应零采购(无道具)", catalog().find("file_drawer")!!.props.isEmpty())
+    }
+
+    /** 团播节目单 activity 幕（§7-P2.4）：双人喝茶对坐 = tea_time 配方 × 2 + 点播校验。 */
+    @Test
+    fun `tea for two show script parses and its activity ids resolve in the catalog`() {
+        val text = assetFile("shows/tea_for_two.json").readText(Charsets.UTF_8)
+        val script = com.neethu.aiavatar_sdk.multiavatar.show.ShowScriptParser.parse(text).getOrThrow()
+        val activityActs = script.acts.filter { it.type == "activity" }
+        assertTrue("喝茶节目单应含 activity 幕", activityActs.isNotEmpty())
+        val catalog = catalog()
+        activityActs.forEach { act ->
+            val entry = catalog[requireNotNull(act.activity)]
+            assertNotNull("节目单引用了目录外活动 '${act.activity}'", entry)
+            assertEquals("activity 幕必须带表演者", true, !act.performer.isNullOrBlank())
+        }
+        // 对坐喝茶至少两幕 tea_time（双人各一幕）
+        assertTrue(
+            "双人喝茶应有 ≥2 幕 tea_time",
+            activityActs.count { it.activity == "tea_time" } >= 2,
+        )
     }
 
     // ── P2 节日活动包 + 古风包（docs/prop-system-feasibility.md §5-G/H）────────

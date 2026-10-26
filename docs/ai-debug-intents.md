@@ -53,6 +53,7 @@
 | `autonomy_log` | — | 最近 20 条自主转移记录（时刻/从→到/锚点/原因：dwell/external/frozen-stop/abort/cap） |
 | `autonomy_greet` | — | 立刻触发一次自主问候（测试入口：绕开最小间隔与安静时段，每日上限仍守；前 1.5s 先弹思考气泡再挥手说话） |
 | `autonomy_think` | — | 立刻弹一条思考气泡（气泡渲染/跟随验收入口；文本随当前 FSM 状态与时段） |
+| `autonomy_decision` | `ai_arg`= on \| off \| state \| fire | **LLM 自发决策缝**（P2 道具系统 docs/prop-system-feasibility.md §7-P2.3，默认关）：状态转移时低频问小模型「现在想干嘛」，白名单枚举输出→同一条 start_activity 执行链；超时/失败/清单外回落本地出线。`on`/`off` 切评估开关并持久化；`state` 统计快照（问/败/换/留/最近时延）；`fire` 立刻干跑一次询问（绕低频门、不启动活动——效果/延迟评估入口）。需配硅基流动 Key（缺则装配静默无效） |
 | `anchors` | — | 列出会话注入的走动锚点表（`<move:>` 词表 = move_to 工具白名单，`assets/scene/home.anchors.json`；⇄ 标记 waypoint links）；无会话/空表给出原因行 |
 | `walk_transit` | `ai_arg`：空=查看；`off`=清除；`start <assets/*.vrma>` / `stop <assets/*.vrma>` | **P1 过渡剪辑 A/B 入口**（docs/locomotion-feasibility.md §5.2）：起步剪辑播放期程序位移冻结、播完切步态循环；停步剪辑 one-shot 播完自动回待机。默认关（库内起步候选带 0.8~1.7m root motion 会双重位移，测量见交接文档坑 23） |
 | `pad` | `ai_arg`=子命令（见下） | **手柄枢纽族**（docs/gamepad-control-feasibility.md §6）：与物理手柄写**同一份模拟量轴状态**（corelib drive/look 通道），AI 的连续控制通道。子命令：`move <左右-1..1> <前后-1..1> [秒]`（左摇杆=走动，**相机相对**，+1=前；秒=到时自动归零，省略=锁存最长 10s）/ `look <yaw> <pitch> [秒]`（右摇杆=视角环绕）/ `release`（全轴归零=松开手柄）/ `run [on\|off]`（跑步增益，省略=翻转，=手柄 A 键）/ `press a\|b`（注入按键沿）/ `state`（设备/轴值/锁存源/走动相位快照）/ `on\|off`（总开关）。数字也可用 `ai_x/ai_y/ai_z` extras 按位传（第 1/2/3 个数）。**人机仲裁**：任一通道硬件摇杆真实越死区=立即清该通道 AI 锁存（人 > AI）；Activity onPause 时轴自动清零（防后台走位）。真机已验证：锁存走动/限时走/视角环绕/跑步换挡/A 键注入 |

@@ -33,13 +33,13 @@ class AccessoryCatalogAssetsTest {
         )
 
     @Test
-    fun `catalog has 44 entries - 11 legacy + 33 P1+P2 props`() {
+    fun `catalog has 47 entries - 11 legacy + 36 P1+P2 props`() {
         val entries = sidecarEntries()
-        assertEquals(44, entries.size)
+        assertEquals(47, entries.size)
         val withProfile = entries.filter { it.offsetProfile != null }
         assertEquals(
-            "P1 道具入库 20 件 + 场景层补件 3 件(眼罩/哑铃/葫芦) + P2 节日/古风 10 件",
-            33, withProfile.size,
+            "P1 道具入库 20 件 + 场景层补件 3 件(眼罩/哑铃/葫芦) + P2 节日/古风 10 件 + P2 长尾 3 件(小提琴/琴弓/贝斯)",
+            36, withProfile.size,
         )
     }
 

@@ -129,6 +129,7 @@ import com.neethu.orchestrator.card.SystemPromptAssembler
 import com.neethu.orchestrator.card.spokenGreeting
 import com.neethu.orchestrator.face.GazeMode
 import com.neethu.orchestrator.face.MimicFaceMapper
+import com.neethu.orchestrator.autonomy.AutonomyDecisionEnhancer
 import com.neethu.orchestrator.i18n.promptTextsOf
 import com.neethu.orchestrator.gesture.ActionEntry
 import com.neethu.orchestrator.history.ConversationDatabase
@@ -263,6 +264,13 @@ internal enum class PanelType { NONE, MODELS, ANIMATIONS, EXPRESSIONS, SCENES, C
 // ── 设置持久化（SharedPreferences）─────────────────────────────────────
 
 internal const val PREFS_NAME = "demo_settings"
+
+/** LLM 自发决策缝开关（P2 §7-P2.3；默认 off——评估结论见 prop 文档 §7）。 */
+private const val KEY_AUTONOMY_DECISION_LLM = "autonomy_decision_llm"
+
+/** LLM 自发决策缝的模型（空 = 团播导播同款便宜档,硅基流动结构化输出可靠档）。 */
+private const val KEY_AUTONOMY_DECISION_MODEL = "autonomy_decision_model"
+private const val DEFAULT_AUTONOMY_DECISION_MODEL = "Qwen/Qwen3.8-27B"
 private const val KEY_USE_EXTERNAL_ANIMATIONS = "useExternalAnimations"
 /** 场景选择持久化（空串 = 无场景，纯色背景）。 */
 private const val KEY_SELECTED_SCENE = "selected_scene"
@@ -1744,6 +1752,45 @@ private fun DemoScreen(
     val autonomyRig = remember {
         AutonomyRig(scope, controller, { session }, interactionCoordinator, activityExecutor) { aiChat.memoryStore }
     }
+    // LLM 自发决策增强缝（P2 §7-P2.3,docs/prop-system-feasibility.md §3.2;
+    // autonomy-feasibility.md §4.2）：装配但**默认关**——评估开关在
+    // `autonomy_decision on`,Key/模型每次询问现取（换 Key/模型即时生效）。
+    // 模型复用团播导播的便宜档（硅基流动 Qwen3.8-27B,结构化输出可靠档）。
+    // ⚠ OpenAiCompatibleLlmAdapter 只认**构造器** apiKey 出 Authorization 头,
+    // LlmConfig.apiKey 不参与鉴权——验收 r1 以空 key 构造适配器、真 key 只放
+    // config,每次请求空 Bearer 秒 401。修复=按 key 缓存适配器（key 变才重建,
+    // 询问 ≤1 次/8min,不泄漏连接池）,构造器 key 与 config 同源现取。
+    val decisionPrefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    autonomyRig.decisionEnhancer = remember {
+        var cachedKey: String? = null
+        var cachedAdapter: OpenAiCompatibleLlmAdapter? = null
+        AutonomyDecisionEnhancer(
+            llm = {
+                val key = decisionPrefs.loadAiPrefs().apiKeySiliconflow.trim()
+                val existing = cachedAdapter
+                if (existing == null || cachedKey != key) {
+                    cachedAdapter = OpenAiCompatibleLlmAdapter(AiProvider.SILICONFLOW.baseUrl, key)
+                    cachedKey = key
+                }
+                cachedAdapter!!
+            },
+            config = {
+                val key = decisionPrefs.loadAiPrefs().apiKeySiliconflow.trim().takeIf { it.isNotEmpty() }
+                    ?: return@AutonomyDecisionEnhancer null
+                val model = decisionPrefs.getString(KEY_AUTONOMY_DECISION_MODEL, null)
+                    ?.takeIf { it.isNotBlank() } ?: DEFAULT_AUTONOMY_DECISION_MODEL
+                LlmConfig(
+                    baseUrl = AiProvider.SILICONFLOW.baseUrl,
+                    apiKey = key,
+                    model = model,
+                    // 关思考（首答延迟）：决策挂在状态转移上,多等数秒行为就僵
+                    extraBody = llmExtraBody(AiProvider.SILICONFLOW, model),
+                )
+            },
+        )
+    }
+    autonomyRig.decisionLlmEnabled =
+        decisionPrefs.getString(KEY_AUTONOMY_DECISION_LLM, "off") == "on"
     autonomyUserSpokeHook = { autonomyRig.onUserSpoke() }
     LaunchedEffect(interactionAnchors, uiState.lang) {
         autonomyRig.setVocabulary(
@@ -3069,6 +3116,24 @@ private fun DemoScreen(
             autonomyGreet = { autonomyRig.forceGreet() },
             autonomyThink = { autonomyRig.forceThink() },
             activityDebug = { arg -> activityDebugCommand(activityExecutor, arg) },
+            autonomyDecision = { arg ->
+                val decisionPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                when (arg?.trim()?.lowercase()) {
+                    "on", "true" -> {
+                        autonomyRig.decisionLlmEnabled = true
+                        decisionPrefs.edit().putString(KEY_AUTONOMY_DECISION_LLM, "on").apply()
+                        autonomyRig.decisionStateLine()
+                    }
+                    "off", "false" -> {
+                        autonomyRig.decisionLlmEnabled = false
+                        decisionPrefs.edit().putString(KEY_AUTONOMY_DECISION_LLM, "off").apply()
+                        autonomyRig.decisionStateLine()
+                    }
+                    "fire" -> autonomyRig.decisionFire()
+                    null, "", "state" -> autonomyRig.decisionStateLine()
+                    else -> "usage: autonomy_decision <on|off|state|fire>"
+                }
+            },
         )
     }
 

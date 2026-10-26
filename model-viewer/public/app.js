@@ -16,6 +16,9 @@ const state = {
   model: null,        // { vrm, rel, name, mixer, action }
   animRel: null,      // 正在播放的动作路径
   loadingCount: 0,
+  page: 'assets',     // assets | activities(P2 道具系统活动预览)
+  activities: null,   // /api/activities 的缓存(活动目录投影)
+  attachedProps: [],  // 活动预览挂上的道具 { id, obj }(挂 VRM 骨骼节点)
 };
 
 const els = {
@@ -28,6 +31,7 @@ const els = {
   search: document.getElementById('search'),
   typeFilter: document.getElementById('typeFilter'),
   refreshBtn: document.getElementById('refreshBtn'),
+  pageToggle: document.getElementById('pageToggle'),
   canvasHost: document.getElementById('canvasHost'),
   modelBadge: document.getElementById('modelBadge'),
   animBar: document.getElementById('animBar'),
@@ -235,10 +239,50 @@ function stopAnimation(updateUi = true) {
     state.model.vrm.humanoid?.resetNormalizedPose?.();
   }
   state.animRel = null;
+  clearAttachedProps(); // 活动道具随动画收场(与 app 端活动收场同语义)
   if (updateUi) {
     els.animBar.hidden = true;
     markPlaying(null);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 活动预览道具挂载（P2 道具系统：点活动 = 动画 + 骨骼道具组合效果）
+// ---------------------------------------------------------------------------
+
+/** sidecar 偏移把道具 GLB 挂到 VRM 骨骼节点（best-effort,失败只记提示）。 */
+async function attachProp(prop) {
+  const model = state.model;
+  if (!model || !model.vrm) return false;
+  if (!prop.file || !prop.bone) return false;
+  const bone = model.vrm.humanoid?.getNormalizedBoneNode?.(prop.bone)
+    || model.vrm.humanoid?.getRawBoneNode?.(prop.bone);
+  if (!bone) return false;
+  try {
+    const gltf = await loader.loadAsync(fileUrl(prop.file));
+    const obj = gltf.scene;
+    obj.name = 'preview_prop_' + prop.id;
+    if (Array.isArray(prop.position)) obj.position.fromArray(prop.position);
+    if (Array.isArray(prop.rotation)) obj.rotation.set(prop.rotation[0], prop.rotation[1], prop.rotation[2]);
+    const s = Number(prop.scale) || 1;
+    obj.scale.set(s, s, s);
+    bone.add(obj);
+    state.attachedProps.push({ id: prop.id, obj });
+    return true;
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+}
+
+/** 收净预览道具（停止动画/切模型/换活动都走这里,防跨活动残留）。 */
+function clearAttachedProps() {
+  if (!state.attachedProps.length) return;
+  for (const p of state.attachedProps) {
+    p.obj.parent?.remove(p.obj);
+    VRMUtils.deepDispose(p.obj);
+  }
+  state.attachedProps = [];
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +296,121 @@ async function apiList(dir) {
   return j;
 }
 
+async function apiActivities() {
+  const r = await fetch('/api/activities');
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+/** 顶栏 🎭 切换资产浏览 ⇄ 活动预览（P2 道具系统）。 */
+function setPage(page) {
+  if (state.page === page) return;
+  state.page = page;
+  const activitiesMode = page === 'activities';
+  // 活动模式下目录导航类控件退场（活动没有目录树语义）
+  els.search.hidden = activitiesMode;
+  els.typeFilter.hidden = activitiesMode;
+  els.pageToggle.textContent = activitiesMode ? '📦 资产' : '🎭 活动';
+  if (activitiesMode) {
+    clearSearch();
+    refreshActivities();
+  } else {
+    refreshList();
+  }
+}
+
+async function refreshActivities() {
+  try {
+    if (!state.activities) state.activities = await apiActivities();
+    renderActivityGrid();
+    renderBreadcrumb();
+  } catch (err) {
+    toast('活动目录加载失败:' + (err.message || err), true);
+  }
+}
+
+const CATEGORY_LABELS = {
+  daily: '日常', work: '工作', food: '饮食', play: '娱乐',
+  sport: '运动', social: '社交', fantasy: '仙侠', festival: '节日',
+};
+
+function renderActivityGrid() {
+  const acts = state.activities?.activities || [];
+  els.grid.textContent = '';
+  els.gridSummary.textContent =
+    '活动目录 — ' + acts.length + ' 条 · 点击预览动画+道具组合（mount:world 场景摆件不挂载,VFX 以真机为准）';
+  els.emptyState.hidden = acts.length > 0;
+  els.grid.style.display = acts.length ? '' : 'none';
+  for (const a of acts) els.grid.appendChild(makeActivityCard(a));
+  if (state.animRel) markPlaying(state.animRel);
+}
+
+function makeActivityCard(a) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.type = 'activity';
+  card.dataset.rel = a.animation;
+  card.dataset.activity = a.id;
+
+  const thumb = document.createElement('div');
+  thumb.className = 'thumb';
+  thumb.textContent = CATEGORY_LABELS[a.category] || '🎭';
+  card.appendChild(thumb);
+
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.dataset.orig = (a.holiday ? '🎪 ' : '') + (CATEGORY_LABELS[a.category] || a.category);
+  badge.textContent = badge.dataset.orig;
+  card.appendChild(badge);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = a.name;
+  name.title = a.id + ' · ' + (a.nameEn || '');
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const bits = [];
+  if (a.anchor) bits.push('@' + a.anchor);
+  bits.push(a.loop ? '循环' : '一次性');
+  if (a.vfx) bits.push('✨' + a.vfx);
+  const propNames = (a.props || [])
+    .map((p) => p.name + (p.mount === 'world' ? '🌍' : '') + (p.viaBinding ? '⇄' : ''));
+  if (propNames.length) bits.push(propNames.join(' '));
+  const info = document.createElement('span');
+  info.textContent = bits.join(' · ');
+  info.title = a.desc;
+  meta.appendChild(info);
+  body.append(name, meta);
+  card.appendChild(body);
+
+  card.addEventListener('click', () => previewActivity(a));
+  return card;
+}
+
+/** 活动组合预演：动画起播 + bone/wear 道具按 sidecar 挂骨（world 只在标题标注）。 */
+async function previewActivity(a) {
+  if (!(await ensureModel())) return;
+  clearAttachedProps();
+  await playAnimation(a.animation);
+  if (!state.model || !state.model.vrm) return;
+  const attachable = (a.props || []).filter((p) => p.mount !== 'world');
+  if (!attachable.length) return;
+  setLoading('挂载活动道具…');
+  try {
+    for (const p of attachable) {
+      const ok = await attachProp(p);
+      if (!ok) toast('道具挂载跳过:' + p.name + (p.inCatalog ? '（缺骨骼/文件）' : '（不在配饰目录）'), true);
+    }
+  } finally {
+    setLoading(null);
+  }
+}
+
 async function refreshList() {
+  if (state.page === 'activities') return; // 活动模式不走目录树
   try {
     if (state.search) {
       const params = new URLSearchParams({ q: state.search });
@@ -429,10 +587,14 @@ function markSelected(rel) {
 }
 
 function markPlaying(rel) {
-  for (const card of els.grid.querySelectorAll('.card[data-type="anim"]')) {
+  for (const card of els.grid.querySelectorAll('.card[data-type="anim"], .card[data-type="activity"]')) {
     card.classList.toggle('playing', rel != null && card.dataset.rel === rel);
     const badge = card.querySelector('.badge');
-    if (badge) badge.textContent = card.classList.contains('playing') ? '▶ 播放中' : '动作';
+    if (badge) {
+      badge.textContent = card.classList.contains('playing')
+        ? '▶ 播放中'
+        : (badge.dataset.orig || '动作');
+    }
   }
 }
 
@@ -448,6 +610,17 @@ function clearSearch() {
 function renderBreadcrumb() {
   const nav = els.breadcrumb;
   nav.textContent = '';
+
+  if (state.page === 'activities') {
+    const sep = document.createElement('span');
+    sep.className = 'crumb-sep';
+    sep.textContent = '›';
+    const crumb = document.createElement('span');
+    crumb.className = 'crumb current';
+    crumb.textContent = '🎭 活动预览';
+    nav.append(sep, crumb);
+    return;
+  }
 
   const rootCrumb = document.createElement('span');
   rootCrumb.className = 'crumb' + (state.dir === '' ? ' current' : '');
@@ -538,11 +711,18 @@ els.typeFilter.addEventListener('change', () => {
 });
 els.refreshBtn.addEventListener('click', () => refreshList());
 els.brand.addEventListener('click', () => {
+  if (state.page === 'activities') {
+    setPage('assets');
+    return;
+  }
   clearSearch();
   state.dir = '';
   refreshList();
 });
+els.pageToggle.addEventListener('click', () =>
+  setPage(state.page === 'activities' ? 'assets' : 'activities'));
 els.emptyBack.addEventListener('click', () => {
+  if (state.page === 'activities') return;
   state.dir = state.dir.split('/').slice(0, -1).join('/');
   refreshList();
 });

@@ -38,5 +38,6 @@
   { "animation": "03_打招呼与礼仪/Emotional Waving Forward.vrma", "accessory": "sparkler", "note": "挥仙女棒(场景表 #54,配 spark_burst VFX;静持 idle 已归抱枕,挥手更出效果)" },
   { "animation": "01_待机与站姿/Happy Idle Variation 1.vrma", "accessory": "balloon", "note": "手拿气球(场景表 #55,牵线在手+开心小晃;持物 idle 已归抱枕)" },
   { "animation": "01_待机与站姿/Male Fitness Idle.vrma", "accessory": "dumbbell", "note": "哑铃举铁(场景表 #46;健身 idle 循环比文档点名的过渡剪辑更适合 loop)" },
-  { "animation": "Drunk Idle Variation Hiccup.vrma", "accessory": "gourd", "note": "饮酒葫芦(场景表 #61;Male Drinking 已归水瓶,醉后打嗝 idle 更贴酒仙扮演)" }
+  { "animation": "Drunk Idle Variation Hiccup.vrma", "accessory": "gourd", "note": "饮酒葫芦(场景表 #61;Male Drinking 已归水瓶,醉后打嗝 idle 更贴酒仙扮演)" },
+  { "animation": "01_待机与站姿/Left Elbow Resting On Object.vrma", "accessory": "cup", "note": "对坐喝茶(活动 tea_time,§7-P2.4;倚桌托肘持杯闲谈,团播双人喝茶对坐同款剪辑,per-runtime 道具隔离各持各杯)" }
 ]

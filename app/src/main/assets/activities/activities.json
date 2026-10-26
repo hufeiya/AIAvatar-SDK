@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "comment": "活动目录（P0 道具系统,docs/prop-system-feasibility.md §2.1/§5）：每条活动 = 道具×动画×场景锚点×可选VFX×可选台词的行为配方。P0 16 条 + P1 场景层 23 条（§5 表全部 P1 行;reading/tablet_read 升级为真道具）+ P2 节日活动包 5 条（§5-H,`holiday` 标签按系统日历自动加权:12月圣诞/10月万圣/春节灯笼/中秋月饼,生日蛋糕走长期记忆生日事实）+ 古风包 4 条（§5-G P2 行,锚点适配 dream_bedroom_3 桃隐仙居;饮酒葫芦 gourd_sip P1 已有）。道具显隐仍走 accessories/bindings.json（动画→配饰）——props 仅声明语义归属;例外是 {\"mount\":\"world\"} 世界摆件（§6.2 瑜伽垫/茶具组）由编排层按 anchor 交互点坐标挂世界、活动结束收回,和 {\"mount\":\"wear\"} 随活动穿戴件（P2 双道具活动:圣诞帽@head/背挂鞘@chest 等,编排层按 sidecar 模板链 attach/detach,绕开绑定表 animation→accessory 1:1 约束）。hourRange 语义同 autonomy 作息表：from 含 to 舍。anchor 引用 assets/scene/*.interactions.json 的交互点 id；缺省=原地做。",
+  "comment": "活动目录（P0 道具系统,docs/prop-system-feasibility.md §2.1/§5）：每条活动 = 道具×动画×场景锚点×可选VFX×可选台词的行为配方。P0 16 条 + P1 场景层 23 条（§5 表全部 P1 行;reading/tablet_read 升级为真道具）+ P2 节日活动包 5 条（§5-H,`holiday` 标签按系统日历自动加权:12月圣诞/10月万圣/春节灯笼/中秋月饼,生日蛋糕走长期记忆生日事实）+ 古风包 4 条（§5-G P2 行,锚点适配 dream_bedroom_3 桃隐仙居;饮酒葫芦 gourd_sip P1 已有）+ P2 团播联动 1 条（tea_time 对坐喝茶,§7-P2.4 节目单 activity 幕与单机 FSM 共用配方）+ P2 长尾 3 条（§7-P2.6:file_drawer 零采购/violin_play/bass_play,本地源库有动画的 §5 剩余行）。道具显隐仍走 accessories/bindings.json（动画→配饰）——props 仅声明语义归属;例外是 {\"mount\":\"world\"} 世界摆件（§6.2 瑜伽垫/茶具组）由编排层按 anchor 交互点坐标挂世界、活动结束收回,和 {\"mount\":\"wear\"} 随活动穿戴件（P2 双道具活动:圣诞帽@head/背挂鞘@chest 等,编排层按 sidecar 模板链 attach/detach,绕开绑定表 animation→accessory 1:1 约束）。hourRange 语义同 autonomy 作息表：from 含 to 舍。anchor 引用 assets/scene/*.interactions.json 的交互点 id；缺省=原地做。",
   "activities": [
     {
       "id": "reading",
@@ -714,6 +714,66 @@
       "minDwellMs": 300000,
       "hourRange": [7, 22],
       "says": ["「撑一把油纸伞,走进雨巷里。」", "「青石板路,雨声最好听。」"]
+    },
+    {
+      "id": "file_drawer",
+      "name": "翻抽屉找文件",
+      "nameEn": "searching the drawer for documents",
+      "desc": "拉开抽屉翻找文件,翻完随手关上（P2 长尾 #30,零采购:动画内置、无道具）",
+      "category": "work",
+      "anchor": null,
+      "animation": "07_日常互动/Searching The Top Drawer Of A File Cabinet.vrma",
+      "props": [],
+      "vfx": null,
+      "loop": true,
+      "minDwellMs": 120000,
+      "hourRange": [9, 18],
+      "says": ["「记得就放在这格抽屉的……」", "「咦,昨天那份纪要去哪了？」"]
+    },
+    {
+      "id": "violin_play",
+      "name": "拉小提琴",
+      "nameEn": "playing the violin",
+      "desc": "架起小提琴拉一段短曲,琴弓随弦走（P2 长尾 #35;本地源库有现成演奏动画,琴/弓程序化生成入库）",
+      "category": "play",
+      "anchor": null,
+      "animation": "08_舞蹈与表演/Playing A Short Piece On The Violin.vrma",
+      "props": [{ "id": "violin", "mount": "wear" }, { "id": "bow", "mount": "wear" }],
+      "vfx": null,
+      "loop": true,
+      "minDwellMs": 240000,
+      "hourRange": [9, 24],
+      "says": ["「来一段帕格尼尼……好吧,简化版。」", "「弦有点松,将就听。」"]
+    },
+    {
+      "id": "bass_play",
+      "name": "弹贝斯",
+      "nameEn": "playing the bass guitar",
+      "desc": "抱起电贝斯拨一段低音线（P2 长尾 #37;贝斯程序化生成,单骨挂右手+动画握姿）",
+      "category": "play",
+      "anchor": null,
+      "animation": "08_舞蹈与表演/Playing The Bass Guitar.vrma",
+      "props": [{ "id": "bass", "mount": "wear" }],
+      "vfx": null,
+      "loop": true,
+      "minDwellMs": 240000,
+      "hourRange": [9, 24],
+      "says": ["「低音是乐队的地基。」", "「听这个根音走位。」"]
+    },
+    {
+      "id": "tea_time",
+      "name": "对坐喝茶",
+      "nameEn": "having tea and a chat",
+      "desc": "端起茶杯倚着桌沿慢慢喝,和对面的人闲聊几句（团播双人喝茶对坐同款配方,per-runtime 道具隔离各持各杯）",
+      "category": "social",
+      "anchor": null,
+      "animation": "01_待机与站姿/Left Elbow Resting On Object.vrma",
+      "props": ["cup"],
+      "vfx": null,
+      "loop": true,
+      "minDwellMs": 180000,
+      "hourRange": [9, 23],
+      "says": ["「以茶代酒,先干为敬。」", "「这泡茶回甘不错。」"]
     }
   ]
 }

@@ -373,6 +373,30 @@
       "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
       "defaultBone": "rightHand",
       "offsetProfile": "holdBig"
+    },
+    {
+      "id": "violin",
+      "name": "小提琴",
+      "file": "violin.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "leftHand",
+      "offsetProfile": "holdBook"
+    },
+    {
+      "id": "bow",
+      "name": "琴弓",
+      "file": "bow.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdWand"
+    },
+    {
+      "id": "bass",
+      "name": "电贝斯",
+      "file": "bass.glb",
+      "license": "CC0 (自制, tools/accessory-samples/make-prop-glb.js)",
+      "defaultBone": "rightHand",
+      "offsetProfile": "holdBig"
     }
   ]
 }

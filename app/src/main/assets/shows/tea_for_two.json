@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "title": "双人喝茶对坐",
+  "acts": [
+    { "type": "camera", "shot": "group" },
+    { "type": "move", "performer": "A", "target": "stage_a" },
+    { "type": "move", "performer": "B", "target": "stage_b" },
+    { "type": "say", "performer": "A", "text": "茶泡好了,坐~" },
+    { "type": "activity", "performer": "A", "activity": "tea_time", "seconds": 14, "camera": "medium" },
+    { "type": "activity", "performer": "B", "activity": "tea_time", "seconds": 14, "camera": "medium" },
+    { "type": "say", "performer": "B", "text": "这泡回甘不错,以茶代酒~" },
+    { "type": "activity", "performer": "A", "activity": "toast_cheer", "seconds": 4 },
+    { "type": "activity", "performer": "B", "activity": "toast_cheer", "seconds": 4 },
+    { "type": "camera", "shot": "group" },
+    { "type": "bow", "camera": "group" }
+  ]
+}

@@ -873,3 +873,81 @@ for (const p of P2_PROPS) {
   fs.writeFileSync(`${p.name}.glb`, glb);
   console.log(`${p.name}.glb: ${(glb.length / 1024).toFixed(1)}KB, ~${p.parts.reduce((s, q) => s + q.geo.idx.length / 3, 0)} triangles`);
 }
+
+// ── P2 长尾(§7-P2.6):violin/bow/bass ── 本轮新增,写出循环独立,旧产物不动
+const P2L_PROPS = [];
+
+// 34. violin 小提琴:三段琴身(低腰近似) + 指板 + 卷轴琴头 + 拉弦板/琴码/弦 + 腮托,
+//     总长 ~0.6m,原点=琴颈根(左手握点)
+P2L_PROPS.push({
+  name: 'violin',
+  materials: [
+    mat('violin_varnish', [0.55, 0.28, 0.12, 1], { roughness: 0.35 }),
+    mat('violin_dark', [0.12, 0.08, 0.05, 1], { roughness: 0.5 }),
+    mat('violin_string', [0.85, 0.83, 0.75, 1], { metallic: 0.7, roughness: 0.3 }),
+  ],
+  parts: [
+    { geo: box(0.20, 0.20, 0.036), mat: 0 },                                   // 下侧板
+    { geo: translate(box(0.13, 0.07, 0.036), 0, -0.125, 0), mat: 0 },          // 中腰
+    { geo: translate(box(0.16, 0.15, 0.036), 0, -0.22, 0), mat: 0 },           // 上侧板
+    { geo: translate(box(0.026, 0.16, 0.012), 0, 0.06, 0.012), mat: 1 },       // 指板
+    { geo: translate(box(0.030, 0.05, 0.024), 0, 0.165, 0), mat: 1 },          // 弦槽
+    { geo: translate(sphere(0.014, 6, 8), 0, 0.20, 0), mat: 1 },               // 卷轴
+    { geo: translate(box(0.040, 0.010, 0.026), 0.010, 0.155, 0), mat: 0 },     // 弦轴排
+    { geo: translate(box(0.055, 0.09, 0.006), 0, -0.175, 0.021), mat: 1 },     // 拉弦板
+    { geo: translate(box(0.024, 0.030, 0.008), 0, -0.10, 0.024), mat: 1 },     // 琴码
+    { geo: translate(box(0.010, 0.40, 0.002), 0, 0.02, 0.030), mat: 2 },       // 弦面
+  ],
+});
+
+// 35. bow 琴弓:细长弓杆 + 弓尖 + 弓毛(奶白) + 马尾库 + 螺钮,
+//     总长 ~0.74m,原点=弓库(右手握点,holdWand)
+P2L_PROPS.push({
+  name: 'bow',
+  materials: [
+    mat('bow_wood', [0.42, 0.26, 0.12, 1], { roughness: 0.4 }),
+    mat('bow_hair', [0.88, 0.85, 0.76, 1], { roughness: 0.7 }),
+    mat('bow_metal', [0.35, 0.33, 0.30, 1], { metallic: 0.7, roughness: 0.35 }),
+  ],
+  parts: [
+    { geo: translate(cylinder(0.0036, 0.64), 0, 0.36, 0), mat: 0 },            // 弓杆
+    { geo: translate(box(0.006, 0.028, 0.010), 0, 0.685, 0.002), mat: 0 },     // 弓尖
+    { geo: translate(box(0.0022, 0.60, 0.004), 0, 0.36, -0.008), mat: 1 },     // 弓毛
+    { geo: translate(box(0.012, 0.042, 0.018), 0, 0.012, 0), mat: 0 },         // 马尾库
+    { geo: translate(rotateX(cylinder(0.005, 0.028), 90), 0, -0.026, 0), mat: 2 }, // 螺钮
+  ],
+});
+
+// 36. bass 电贝斯:实心琴身(切角近似) + 加长琴颈 4 弦 + 卷曲琴头双弦钮 + 双拾音器,
+//     总长 ~1.15m,原点=琴身中心(guitar 同款单骨挂右手 holdBig 口径)
+P2L_PROPS.push({
+  name: 'bass',
+  materials: [
+    mat('bass_body', [0.16, 0.10, 0.24, 1], { roughness: 0.3 }),
+    mat('bass_dark', [0.09, 0.07, 0.05, 1], { roughness: 0.5 }),
+    mat('bass_neck', [0.44, 0.30, 0.16, 1], { roughness: 0.45 }),
+    mat('bass_string', [0.80, 0.80, 0.78, 1], { metallic: 0.7, roughness: 0.3 }),
+    mat('bass_pickup', [0.14, 0.14, 0.16, 1], { metallic: 0.5, roughness: 0.4 }),
+  ],
+  parts: [
+    { geo: box(0.30, 0.30, 0.055), mat: 0 },                                   // 琴身主体
+    { geo: translate(box(0.16, 0.16, 0.055), -0.09, -0.19, 0), mat: 0 },       // 下切角
+    { geo: translate(box(0.13, 0.14, 0.055), 0.09, 0.20, 0), mat: 0 },         // 上肩
+    { geo: translate(box(0.048, 0.56, 0.022), 0, 0.52, 0.004), mat: 2 },       // 琴颈
+    { geo: translate(box(0.056, 0.14, 0.024), 0.012, 0.86, 0), mat: 1 },       // 琴头
+    { geo: translate(cylinder(0.010, 0.020), -0.012, 0.90, 0.016), mat: 4 },   // 弦钮×2
+    { geo: translate(cylinder(0.010, 0.020), 0.024, 0.82, 0.016), mat: 4 },
+    { geo: translate(box(0.055, 0.016, 0.014), 0, 0.16, 0.030), mat: 4 },      // 拾音器×2
+    { geo: translate(box(0.055, 0.016, 0.014), 0, 0.02, 0.030), mat: 4 },
+    { geo: translate(box(0.070, 0.024, 0.010), 0, -0.155, 0.028), mat: 1 },    // 琴桥
+    { geo: translate(box(0.012, 1.02, 0.002), 0, 0.30, 0.034), mat: 3 },       // 四弦面
+    { geo: translate(cylinder(0.014, 0.012), 0.09, -0.06, 0.032), mat: 4 },    // 音量钮
+    { geo: translate(cylinder(0.014, 0.012), 0.09, -0.10, 0.032), mat: 4 },
+  ],
+});
+
+for (const p of P2L_PROPS) {
+  const glb = buildGlb(p.name, p.parts, p.materials);
+  fs.writeFileSync(`${p.name}.glb`, glb);
+  console.log(`${p.name}.glb: ${(glb.length / 1024).toFixed(1)}KB, ~${p.parts.reduce((s, q) => s + q.geo.idx.length / 3, 0)} triangles`);
+}

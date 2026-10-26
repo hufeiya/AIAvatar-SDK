@@ -636,4 +636,150 @@ class ShowDirectorTest {
         advanceTimeBy(600); runCurrent()
         assertEquals(ShowState.DONE, dir.state.value)
     }
+
+    // ── activity 幕（P2 道具系统，docs/prop-system-feasibility.md §7-P2.4）──
+
+    /** 双人喝茶活动目录桩：tea_time=loop 持杯 idle,toast_cheer=one-shot 举杯。 */
+    private fun activityOf(id: String): com.neethu.orchestrator.activity.ActivityEntry? = when (id) {
+        "tea_time" -> com.neethu.orchestrator.activity.ActivityEntry(
+            id = id, name = "对坐喝茶", nameEn = "tea", desc = "", category = "social",
+            animation = "01_待机与站姿/Left Elbow Resting On Object.vrma",
+            props = listOf(com.neethu.orchestrator.activity.PropRef("cup")),
+            loop = true,
+        )
+        "toast_cheer" -> com.neethu.orchestrator.activity.ActivityEntry(
+            id = id, name = "举杯庆贺", nameEn = "toast", desc = "", category = "social",
+            animation = "05_情绪表达/Pumping A Fist.vrma",
+            props = listOf(com.neethu.orchestrator.activity.PropRef("cup")),
+            vfx = "petals",
+            loop = false,
+        )
+        else -> null
+    }
+
+    @Test
+    fun `activity幕loop配方挂道具播VFX起播并按seconds收净`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "activity", performer = "A", activity = "tea_time", seconds = 6f)),
+            listOf("A", "B"),
+            out = { cmds += it.label },
+            activityOf = ::activityOf,
+        )
+        runCurrent()
+        // 开幕序列：道具挂上 → VFX 无 → loop 起播（hold 中）
+        assertEquals(
+            listOf("prop +cup @ A", "play A animations/01_待机与站姿/Left Elbow Resting On Object.vrma loop"),
+            cmds.toList(),
+        )
+        assertEquals(ShowState.RUNNING, dir.state.value)
+        advanceTimeBy(5_900); runCurrent()
+        assertEquals("hold 未到点不收", 2, cmds.size)
+        advanceTimeBy(200); runCurrent()
+        // 收幕逆序：停特效（无）→ 摘道具 → 单人停舞（不惊动其他演员）
+        assertEquals(
+            listOf(
+                "prop +cup @ A",
+                "play A animations/01_待机与站姿/Left Elbow Resting On Object.vrma loop",
+                "prop -cup @ A",
+                "stop dance A(fade=0.3)",
+            ),
+            cmds.take(4),
+        )
+        advanceUntilIdle()
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `activity幕one-shot配方等播完收场且VFX开停成对`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "activity", performer = "B", activity = "toast_cheer")),
+            listOf("A", "B"),
+            out = autoOut(dir, cmds),
+            durationOf = { _, _ -> 3f },
+            activityOf = ::activityOf,
+        )
+        runCurrent()
+        // one-shot：挂道具 → VFX 开 → 起播 → 等播完（应答器已回流）→ VFX 停 → 摘道具
+        val iPlay = cmds.indexOf("play B animations/05_情绪表达/Pumping A Fist.vrma")
+        assertTrue(iPlay > cmds.indexOf("prop +cup @ B"))
+        assertTrue(cmds.contains("fx petals @B"))
+        assertTrue(cmds.indexOf("fx stop petals") > iPlay)
+        assertTrue(cmds.indexOf("prop -cup @ B") > iPlay)
+        // one-shot 不发停舞指令（引擎播完自回 idle）
+        assertFalse(cmds.any { it.startsWith("stop dance") })
+        advanceUntilIdle()
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `activity幕双人同款各持各杯不互抢`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(
+                ShowAct(type = "activity", performer = "A", activity = "tea_time", seconds = 3f),
+                ShowAct(type = "activity", performer = "B", activity = "tea_time", seconds = 3f),
+            ),
+            listOf("A", "B"),
+            out = { cmds += it.label },
+            activityOf = ::activityOf,
+        )
+        advanceUntilIdle()
+        // A 收净后 B 才开（对坐第二位），道具指令各自成对
+        val aOn = cmds.indexOf("prop +cup @ A")
+        val aOff = cmds.indexOf("prop -cup @ A")
+        val bOn = cmds.indexOf("prop +cup @ B")
+        val bOff = cmds.indexOf("prop -cup @ B")
+        assertTrue("A 幕先收净 B 幕才开: aOn=$aOn aOff=$aOff bOn=$bOn", aOn < aOff && aOff < bOn && bOn < bOff)
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `activity幕目录漂移记行跳过不卡场`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(
+                ShowAct(type = "activity", performer = "A", activity = "ghost_activity"),
+                ShowAct(type = "bow"),
+            ),
+            listOf("A"),
+            out = { cmds += it.label },
+            activityOf = ::activityOf,
+        )
+        advanceUntilIdle()
+        assertTrue(cmds.any { it.startsWith("activity 跳过: 'ghost_activity' 不在活动目录") })
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
+
+    @Test
+    fun `activity幕世界摆件道具跳过不挂`() = runTest {
+        val cmds = mutableListOf<String>()
+        val dir = ShowDirector(this)
+        dir.start(
+            script(ShowAct(type = "activity", performer = "A", activity = "tea_time", seconds = 2f)),
+            listOf("A"),
+            out = { cmds += it.label },
+            activityOf = {
+                com.neethu.orchestrator.activity.ActivityEntry(
+                    id = "tea_time", name = "茶", nameEn = "tea", desc = "", category = "social",
+                    animation = "x.vrma",
+                    props = listOf(
+                        com.neethu.orchestrator.activity.PropRef("teaSet", "world", "desk_top"),
+                        com.neethu.orchestrator.activity.PropRef("cup"),
+                    ),
+                    loop = true,
+                )
+            },
+        )
+        advanceUntilIdle()
+        // 世界摆件（依赖场景交互点表）不进幕次道具,只挂骨骼件
+        assertTrue(cmds.none { it.contains("teaSet") })
+        assertTrue(cmds.contains("prop +cup @ A"))
+        assertEquals(ShowState.DONE, dir.state.value)
+    }
 }

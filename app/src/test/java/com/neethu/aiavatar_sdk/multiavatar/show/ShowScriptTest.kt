@@ -278,4 +278,61 @@ class ShowScriptTest {
         val script = parse("""{"version":1,"acts":[{"type":"fx","fx":"snow"}]}""").getOrThrow()
         assertEquals(null, script.acts[0].seconds)
     }
+
+    // ── activity 幕（P2 道具系统，docs/prop-system-feasibility.md §7-P2.4）──
+
+    @Test
+    fun `activity幕解析通过且字段映射正确`() {
+        val script = parse(
+            """{"version":1,"acts":[
+               {"type":"activity","performer":"A","activity":"tea_time","seconds":14,"camera":"medium"},
+               {"type":"activity","performer":"B","activity":"toast_cheer"}
+            ]}""",
+        ).getOrThrow()
+        assertEquals("tea_time", script.acts[0].activity)
+        assertEquals("A", script.acts[0].performer)
+        assertEquals(14f, script.acts[0].seconds)
+        assertEquals("medium", script.acts[0].camera)
+        assertEquals(null, script.acts[1].seconds)
+    }
+
+    @Test
+    fun `activity幕缺performer与activity都报出`() {
+        val result = parse("""{"version":1,"acts":[{"type":"activity"}]}""")
+        val msg = result.exceptionOrNull()!!.message!!
+        assertTrue(msg, msg.contains("缺 performer"))
+        assertTrue(msg, msg.contains("缺 activity"))
+    }
+
+    @Test
+    fun `activity幕非正seconds拒绝`() {
+        val result = parse(
+            """{"version":1,"acts":[{"type":"activity","performer":"A","activity":"tea_time","seconds":0}]}""",
+        )
+        assertTrue(result.isFailure)
+        assertTrue(requireNotNull(result.exceptionOrNull()).message!!.contains("seconds"))
+    }
+
+    @Test
+    fun `activity幕props拒绝（道具由活动目录带出，不重复声明）`() {
+        val result = parse(
+            """{"version":1,"acts":[
+               {"type":"activity","performer":"A","activity":"tea_time","props":["cup"]}
+            ]}""",
+        )
+        assertTrue(result.isFailure)
+        assertTrue(requireNotNull(result.exceptionOrNull()).message!!.contains("props"))
+    }
+
+    @Test
+    fun `时长粗估含activity幕`() {
+        val script = parse(
+            """{"version":1,"acts":[
+               {"type":"activity","performer":"A","activity":"tea_time","seconds":14},
+               {"type":"activity","performer":"B","activity":"toast_cheer"}
+            ]}""",
+        ).getOrThrow()
+        // 14 + 缺省 12 = 26
+        assertEquals(26f, estimateSeconds(script), 0.01f)
+    }
 }

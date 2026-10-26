@@ -137,6 +137,89 @@ async function handleThumb(req, res, rel) {
   res.end(hit.body);
 }
 
+/**
+ * 活动目录（P2 道具系统预览,docs/prop-system-feasibility.md §7-P2.5）：
+ * activities/activities.json 的条目投影 + 配饰 sidecar（道具挂骨/偏移,scale
+ * 米制）+ 绑定表反查（该动画自动出的道具）。预览页点活动 = 播动画 + 把
+ * bone/wear 道具挂上对应骨骼（组合效果预演）;mount:world 依赖场景锚点,
+ * 只在元信息里标注不做挂载。
+ */
+async function handleActivities(res) {
+  const [actText, accText, bindText] = await Promise.all([
+    fsp.readFile(path.join(ASSETS_ROOT, 'activities', 'activities.json'), 'utf8'),
+    fsp.readFile(path.join(ASSETS_ROOT, 'accessories', 'accessory.json'), 'utf8'),
+    fsp.readFile(path.join(ASSETS_ROOT, 'accessories', 'bindings.json'), 'utf8'),
+  ]);
+  const acts = JSON.parse(actText).activities || [];
+  const accById = new Map((JSON.parse(accText).accessories || []).map((a) => [a.id, a]));
+  const bindings = JSON.parse(bindText);
+  const norm = (p) => 'animations/' + String(p).replace(/^animations\//, '');
+  const boundByAnim = new Map();
+  for (const b of bindings) {
+    const key = norm(b.animation);
+    if (!boundByAnim.has(key)) boundByAnim.set(key, []);
+    boundByAnim.get(key).push(b.accessory);
+  }
+  const out = acts.map((a) => {
+    const animPath = norm(a.animation);
+    const bound = boundByAnim.get(animPath) || [];
+    const propIds = (a.props || [])
+      .map((p) => (typeof p === 'string' ? { id: p } : p))
+      .filter((p) => p && p.id);
+    const props = propIds.map((p) => {
+      const sidecar = accById.get(p.id) || null;
+      const mount = (p.mount || 'bone').toLowerCase();
+      return {
+        id: p.id,
+        mount,
+        anchor: p.anchor || null,
+        name: sidecar ? sidecar.name : p.id,
+        file: sidecar ? 'accessories/' + sidecar.file : null,
+        bone: sidecar ? sidecar.defaultBone : null,
+        position: sidecar ? sidecar.position : null,
+        rotation: sidecar ? sidecar.rotationEulerYXZ : null,
+        scale: sidecar ? sidecar.scale : 1,
+        inCatalog: !!sidecar,
+      };
+    });
+    // 绑定表自动出、但配方没声明的道具也预挂（组合效果以真机为准）
+    const declared = new Set(props.map((p) => p.id.toLowerCase()));
+    for (const id of bound) {
+      if (declared.has(id.toLowerCase())) continue;
+      const sidecar = accById.get(id) || null;
+      props.push({
+        id,
+        mount: 'bone',
+        anchor: null,
+        name: sidecar ? sidecar.name : id,
+        file: sidecar ? 'accessories/' + sidecar.file : null,
+        bone: sidecar ? sidecar.defaultBone : null,
+        position: sidecar ? sidecar.position : null,
+        rotation: sidecar ? sidecar.rotationEulerYXZ : null,
+        scale: sidecar ? sidecar.scale : 1,
+        inCatalog: !!sidecar,
+        viaBinding: true,
+      });
+    }
+    return {
+      id: a.id,
+      name: a.name,
+      nameEn: a.nameEn || a.name,
+      desc: a.desc || a.name,
+      category: a.category || 'daily',
+      anchor: a.anchor || null,
+      animation: animPath,
+      loop: a.loop !== false,
+      vfx: a.vfx || null,
+      hourRange: a.hourRange || null,
+      says: a.says || [],
+      holiday: a.holiday || null,
+      props,
+    };
+  });
+  sendJson(res, 200, { activities: out });
+}
+
 // ---------------------------------------------------------------------------
 // 目录列表 / 搜索
 // ---------------------------------------------------------------------------
@@ -290,6 +373,9 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
   try {
+    if (pathname === '/api/activities' && req.method === 'GET') {
+      return await handleActivities(res);
+    }
     if (pathname === '/api/list' && req.method === 'GET') {
       return await handleList(res, url.searchParams.get('dir') || '');
     }

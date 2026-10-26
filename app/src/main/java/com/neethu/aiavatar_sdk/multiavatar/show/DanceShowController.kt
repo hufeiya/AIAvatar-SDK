@@ -66,6 +66,14 @@ internal class DanceShowController(
     /** 锚点表（move 幕词表 = `<move:>` 同一张 home.anchors.json，P1 扩前排表演位）。 */
     private val anchors: List<MoveAnchor> = loadWalkAnchors(context)
 
+    /**
+     * 活动目录（P2 道具系统 activity 幕，docs/prop-system-feasibility.md
+     * §7-P2.4）：assets/activities/activities.json 解析（缺/脏 = EMPTY——activity
+     * 幕开演前校验拒绝、运行期记行跳过，不影响其他幕型）。
+     */
+    private val activityCatalog: com.neethu.orchestrator.activity.ActivityCatalog =
+        com.neethu.aiavatar_sdk.loadActivityCatalog(context)
+
     /** 点播路由器（P2）：档位随 prefs 装配（`dance auto` 切换重建）。 */
     private var router: DanceRequestRouter = buildRouter()
 
@@ -167,7 +175,7 @@ internal class DanceShowController(
                 .onFailure { log("warn: 配乐文件缺失 $m（music start 时报错跳过）") }
         }
         log("开演: ${resolved.title} cast=[${cast.joinToString(",")}] ${resolved.acts.size} 幕")
-        director.start(resolved, cast, ::execute, ::durationOf, ::anchorOf, ::positionOf)
+        director.start(resolved, cast, ::execute, ::durationOf, ::anchorOf, ::positionOf, ::activityOf)
         return true
     }
 
@@ -349,6 +357,12 @@ internal class DanceShowController(
             for (p in act.props.orEmpty()) {
                 if (AccessoryCatalog.find(appContext, p) == null) return "$at: 道具 '$p' 不在配饰目录"
             }
+            // activity 幕（P2 道具系统）：活动 id 必须在活动目录
+            if (act.type == ActTypes.ACTIVITY && act.activity != null &&
+                activityCatalog[act.activity] == null
+            ) {
+                return "$at: 活动 '${act.activity}' 不在目录（assets/activities/activities.json）"
+            }
             // fx 幕（P1）：预设必须在特效目录
             if (act.type == ActTypes.FX && act.fx != null &&
                 VfxCatalog.find(appContext, act.fx) == null
@@ -367,6 +381,10 @@ internal class DanceShowController(
     /** 演员当前世界位（导演「已在位」判定与 mark 初值的活查询）。 */
     private fun positionOf(id: String): Pair<Float, Float>? =
         slots[id]?.getWalkState()?.let { it.x to it.z }
+
+    /** activity 幕的活动目录解析（id 大小写不敏感，同 start_activity 白名单口径）。 */
+    private fun activityOf(id: String): com.neethu.orchestrator.activity.ActivityEntry? =
+        activityCatalog[id]
 
     private fun durationOf(performer: String, @Suppress("UNUSED_PARAMETER") clip: String): Float? =
         slots[performer]?.getVrmaAnimationDuration()?.takeIf { it > 0f }
@@ -398,6 +416,7 @@ internal class DanceShowController(
             is DirectorCmd.StopDances -> cast.forEach { id ->
                 slots[id]?.stopVrmaAnimation(cmd.fade)
             }
+            is DirectorCmd.StopDance -> slots[cmd.performer]?.stopVrmaAnimation(cmd.fade)
             is DirectorCmd.GazeAt -> {
                 val target = slots[cmd.target] ?: return
                 slots[cmd.watcher]?.lookAt(target)

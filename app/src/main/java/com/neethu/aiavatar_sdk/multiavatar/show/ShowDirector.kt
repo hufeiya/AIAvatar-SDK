@@ -104,6 +104,14 @@ sealed interface DirectorCmd {
         override val label: String get() = "prop -$accessoryId @ $performer"
     }
 
+    /**
+     * 单人停舞回 idle（P2 道具系统 activity 幕收场用）：[StopDances] 是全员
+     * 齐舞收尾语义，活动幕是单人「做事状态」收场——只停这位表演者的 loop。
+     */
+    data class StopDance(val performer: String, val fade: Float = 0.3f) : DirectorCmd {
+        override val label: String get() = "stop dance $performer(fade=$fade)"
+    }
+
     /** 应援一次性动作（并行发射，不等）。 */
     data class Clap(val performer: String) : DirectorCmd {
         override val label: String get() = "clap $performer"
@@ -182,7 +190,9 @@ class ShowDirector(
      * [out] 在导演协程（Main）内同步调用；[durationOf] 取演员当前 VRMA 时长
      * （PlayDance 落地后查询，独舞超时=1.2×duration+1s 的输入），null 用默认兜底；
      * [anchorOf] 解析 move 幕的锚点名 → 世界坐标（null = 表里没有）；
-     * [positionOf] 取演员当前世界位（走位「已在位」判定与 mark 初值的输入）。
+     * [positionOf] 取演员当前世界位（走位「已在位」判定与 mark 初值的输入）；
+     * [activityOf] 解析 activity 幕的活动 id → 活动目录条目（null = 目录没有，
+     * 开演前校验已拦，这里只兜运行期目录漂移）。
      */
     fun start(
         script: ShowScript,
@@ -191,6 +201,7 @@ class ShowDirector(
         durationOf: (performer: String, clip: String) -> Float? = { _, _ -> null },
         anchorOf: (name: String) -> Pair<Float, Float>? = { null },
         positionOf: (performer: String) -> Pair<Float, Float>? = { null },
+        activityOf: (id: String) -> com.neethu.orchestrator.activity.ActivityEntry? = { null },
     ) {
         job?.cancel()
         generation++
@@ -203,7 +214,7 @@ class ShowDirector(
         marks = cast.associateWith { id -> positionOf(id) ?: (0f to -4f) }
         job = scope.launch {
             try {
-                runScript(script, cast, out, durationOf, anchorOf)
+                runScript(script, cast, out, durationOf, anchorOf, activityOf)
                 if (gen == generation) {
                     _state.value = ShowState.DONE
                     _progress.value = ActProgress.NONE
@@ -267,6 +278,7 @@ class ShowDirector(
         out: (DirectorCmd) -> Unit,
         durationOf: (performer: String, clip: String) -> Float?,
         anchorOf: (name: String) -> Pair<Float, Float>?,
+        activityOf: (id: String) -> com.neethu.orchestrator.activity.ActivityEntry?,
     ) {
         // 幕次工作队列（P2）：节目单打底，点播插幕在幕间插队（当前幕收尾后
         // 即是下一幕）。index/total 只是进度显示，插幕让总数增长。
@@ -286,6 +298,7 @@ class ShowDirector(
                 ActTypes.MOVE -> performMove(act, out, anchorOf)
                 ActTypes.MUSIC -> performMusic(act, script, out)
                 ActTypes.FX -> performFx(act, out)
+                ActTypes.ACTIVITY -> performActivity(act, out, durationOf, activityOf)
             }
             index++
             consumeInsertions(queue)
@@ -351,6 +364,51 @@ class ShowDirector(
         out(DirectorCmd.PlayFx(preset, act.performer, act.bone))
         hold(act.seconds ?: DEFAULT_FX_SECONDS)
         out(DirectorCmd.StopFx(preset))
+    }
+
+    /**
+     * 活动幕（P2 道具系统 §7-P2.4 团播多人活动）：活动配方（动画+道具+VFX）
+     * 走导演确定性调度——开幕给表演者挂上目录道具（PropOn 语义，动画绑定表
+     * 自动出的同款由「已在场跳过」幂等兜住）、播 VFX、起播动画；loop 幕 hold
+     * [ShowAct.seconds]（缺省 [DEFAULT_ACTIVITY_SECONDS]），one-shot 幕等播完
+     * （超时兜底推进，独舞同款纪律）；收幕逆序收净（VFX→道具→停舞）。双人
+     * 喝茶这类同款活动由 per-runtime 道具隔离保证各持各的道具不互抢。
+     *
+     * 与独舞的差异：不做观众席注视/应援/串场词（活动是「做事」不是「表演」，
+     * 串场词用 say 幕自由编排），也不走回队列 mark（对坐是持续状态，走位由
+     * 下一幕的 move 或停演自理）。
+     */
+    private suspend fun performActivity(
+        act: ShowAct,
+        out: (DirectorCmd) -> Unit,
+        durationOf: (performer: String, clip: String) -> Float?,
+        activityOf: (id: String) -> com.neethu.orchestrator.activity.ActivityEntry?,
+    ) {
+        val performer = act.performer ?: return
+        val entry = act.activity?.let(activityOf) ?: run {
+            out(DirectorCmd.Log("activity 跳过: '${act.activity}' 不在活动目录"))
+            return
+        }
+        act.camera?.let { out(DirectorCmd.Camera(it, performer)) }
+        // 骨骼/穿戴件道具随幕挂上；世界摆件（mount:world）依赖场景交互点表,
+        // 团播舞台（home）没有这些锚点,记行跳过（活动本体照演）
+        val propIds = entry.props.filter { !it.isWorld }.map { it.id }
+        propIds.forEach { out(DirectorCmd.PropOn(performer, it)) }
+        val clip = "animations/${entry.animation.removePrefix("animations/")}"
+        entry.vfx?.let { out(DirectorCmd.PlayFx(it, performer)) }
+        out(DirectorCmd.PlayDance(performer, clip, loop = entry.loop))
+        if (entry.loop) {
+            hold(act.seconds ?: DEFAULT_ACTIVITY_SECONDS)
+        } else {
+            val duration = durationOf(performer, clip) ?: DEFAULT_DANCE_SECONDS
+            val timeoutS = 1.2f * duration + 1f
+            if (!awaitVrma(performer, timeoutS)) {
+                out(DirectorCmd.Log("vrma 超时兜底推进: $performer（兜底%.1fs）".format(timeoutS)))
+            }
+        }
+        entry.vfx?.let { out(DirectorCmd.StopFx(it)) }
+        propIds.asReversed().forEach { out(DirectorCmd.PropOff(performer, it)) }
+        if (entry.loop) out(DirectorCmd.StopDance(performer))
     }
 
     /** 独舞：观众席注视+应援 → [line 串场词] → 切机位 → one-shot → 播完/超时 → 走回队列。 */
@@ -504,6 +562,9 @@ class ShowDirector(
 
         /** fx 幕缺省时长（秒；特效播完即收，节目单可用 seconds 覆盖）。 */
         const val DEFAULT_FX_SECONDS = 3f
+
+        /** activity 幕缺省时长（秒；loop 活动的 hold 时长，与 ShowScript 同名常量镜像）。 */
+        const val DEFAULT_ACTIVITY_SECONDS = 12f
 
         /** 串场词收尾兜底（§4.6：TTS 首包 1~2s + 句长余量）。 */
         const val SAY_TIMEOUT_S = 8f
